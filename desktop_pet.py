@@ -119,13 +119,13 @@ LAST_FRAME_HOLD_MS = {
     "peace_sign": 2000,
     "sad": 2000,
     "shocked": 1000,
-    "wistful": 3000
+    "wistful": 3000,
+    "embarrassed": 2000
 }
 FRAME_SUB_LOOPS = {
     # Sub-frame loops for states with an intro (1-based frame numbers matching 1.png, 2.png...):
     # state: (start_frame, end_frame, repeat_count)
     "crying": (3, 4, 4),          # plays frames 1-2 once, loops 3 & 4 four times, then plays frame 5 to end
-    "embarrassed": (3, 3, 5)
 }
 SPECIAL_REPEAT_COUNT = {
     # number of full animation cycles for one-shot specials
@@ -685,6 +685,15 @@ class DesktopPet(QWidget):
         if self._dragging:
             self._end_drag()
         else:
+            if self.state == "angry":
+                # Already mad: keep her mad while clicks keep coming!
+                self._click_times.clear()
+                angry_cycles = max(0, SPECIAL_REPEAT_COUNT.get("angry", 6) - 1)
+                self._repeat_count = max(self._repeat_count, angry_cycles)
+                self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+                self._pause_elapsed = False
+                return
+
             # A plain left-click startles the pet; CLICK_ANGRY_COUNT clicks within
             # CLICK_ANGRY_WINDOW_S seconds make it angry instead.
             now = time.perf_counter()
