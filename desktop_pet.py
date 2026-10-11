@@ -117,11 +117,18 @@ LAST_FRAME_HOLD_MS = {
     # one-shots that freeze on their last frame for a while
     "burnt": 2500,
     "peace_sign": 1000,
-    "crying": 1500,
+    "sad": 2000,
+    "shocked": 1000
+}
+FRAME_SUB_LOOPS = {
+    # Sub-frame loops for states with an intro (1-based frame numbers matching 1.png, 2.png...):
+    # state: (start_frame, end_frame, repeat_count)
+    "crying": (3, 4, 4),          # plays frames 1-2 once, loops 3 & 4 four times, then plays frame 5 to end
 }
 SPECIAL_REPEAT_COUNT = {
     # number of full animation cycles for one-shot specials
-    "singing": 4
+    "singing": 2,
+    "laughing": 4
 }
 AFTER_SPECIAL_REST_MS = 1000        # idle time after a special that outlasted its pause, before walking on
 
@@ -392,6 +399,8 @@ class DesktopPet(QWidget):
         self._loop = True                    # does the current animation repeat?
         self._hold_ticks = 0                 # extra ticks to freeze on the last frame
         self._repeat_count = 0               # extra cycles remaining for repeating specials
+        self._sub_loop_range: tuple[int, int] | None = None  # 0-indexed (start, end) frames for sub-loops
+        self._sub_loop_count = 0             # repeats remaining for the sub-loop
         self._pixmap: QPixmap | None = None
 
         # --- behaviour state ---------------------------------------------------
@@ -478,6 +487,15 @@ class DesktopPet(QWidget):
             self._anim_timer.setInterval(interval)
         self._repeat_count = max(0, SPECIAL_REPEAT_COUNT.get(state, 1) - 1) if not self._loop else 0
         self._hold_ticks = 0 if self._loop else LAST_FRAME_HOLD_MS.get(state, 0) // interval
+        sub_loop = FRAME_SUB_LOOPS.get(state)
+        if sub_loop:
+            start_f, end_f = sub_loop[0], sub_loop[1]
+            rep = sub_loop[2] if len(sub_loop) > 2 else SPECIAL_REPEAT_COUNT.get(state, 4)
+            self._sub_loop_range = (start_f - 1, end_f - 1)
+            self._sub_loop_count = rep if not self._loop else -1
+        else:
+            self._sub_loop_range = None
+            self._sub_loop_count = 0
         self._set_frame(0)
 
     def _set_frame(self, index: int) -> None:
@@ -499,6 +517,20 @@ class DesktopPet(QWidget):
             self._set_frame(self._frame_idx)
 
         count = len(self._bank.frames[self.state])
+        if count == 0:
+            return
+
+        # Handle sub-frame loops (e.g. intro frames played once, then looping frames 3 & 4)
+        if self._sub_loop_range:
+            start_idx, end_idx = self._sub_loop_range
+            if 0 <= start_idx <= end_idx < count:
+                if self._frame_idx == end_idx:
+                    if self._loop or self._sub_loop_count > 0:
+                        if not self._loop:
+                            self._sub_loop_count -= 1
+                        self._set_frame(start_idx)
+                        return
+
         if self._frame_idx + 1 < count:
             self._set_frame(self._frame_idx + 1)
         elif self._loop:
