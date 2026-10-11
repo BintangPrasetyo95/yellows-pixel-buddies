@@ -9,18 +9,30 @@ Dependencies : PyQt5            ->  pip install PyQt5
 Sprites (next to this script)
 -----------------------------
     sprites/<state>/1.png, 2.png, 3.png, ...     transparent PNGs, sorted numerically
-    states: idle, walk_left, walk_right, laughing, shocked, singing, peace_sign, burnt
-    A missing / empty folder is replaced by a generated placeholder animation,
-    so the script always runs.
+
+    original states : idle, walk_left, walk_right, laughing, shocked, singing,
+                      peace_sign, burnt
+        A missing / empty folder is replaced by a generated placeholder animation,
+        so the script always runs.
+    new states      : run_left, run_right                          (movement, looping)
+                      embarrassed, overjoyed, wistful, sad,
+                      crying                                       (random specials)
+                      angry                                        (triggered reaction)
+        A missing / empty folder means the state is never used (no placeholder), so
+        sprites can be added one folder at a time. One INFO line at startup lists
+        which new states were found and which were skipped.
 
 Behaviour
 ---------
-    WALK  (3-8 s, one direction, turns around at the screen edges, never leaves it)
+    WALK  (3-8 s, one direction, turns around at the screen edges, never leaves it;
+           each walk is a faster run instead with RUN_CHANCE)
       -> PAUSE (2-5 s, idle; with some probability one special animation plays)
       -> WALK ...
+    Specials are picked by weight (SPECIAL_WEIGHTS), never the same one twice in a row.
     Very rarely the pause contains "burnt" instead of a normal special animation.
 
     Left-click  : the pet is startled (plays "shocked")
+                  3 clicks within 2 s: the pet gets angry (plays "angry")
     Left-drag   : pick the pet up; when dropped it falls back onto the taskbar
     Right-click : context menu with "Exit"
 """
@@ -63,6 +75,9 @@ FOOT_PADDING = 0
 # True : ignore that folder and use a horizontally mirrored copy of walk_right.
 MIRROR_WALK_RIGHT_FOR_LEFT = False
 
+# Same for running: True = run_left is a horizontally mirrored copy of run_right.
+MIRROR_RUN_RIGHT_FOR_LEFT = False
+
 # True : clicks on fully transparent pixels pass through to whatever is underneath
 #        (taskbar buttons, desktop icons...). Only the visible pet catches clicks.
 # False: the whole SPRITE_SIZE square catches clicks.
@@ -71,21 +86,38 @@ CLICK_THROUGH_TRANSPARENT = True
 PLACEHOLDER_FRAME_COUNT = 10   # frames generated for each state with no sprite files
 
 # --- Timing ------------------------------------------------------------------
-ANIM_INTERVAL_MS = 180            # sprite frame advance   (~10 FPS)
-MOVE_INTERVAL_MS = 22             # movement update        (~30 FPS)
+ANIM_INTERVAL_MS = 180            # sprite frame advance   (~5.5 FPS)
+FRAME_INTERVAL_MS = {
+    # per-state frame advance in ms; overrides ANIM_INTERVAL_MS for that state only
+    "run_left": 120, "run_right": 120,
+    # "idle": 250,
+    # "laughing": 100,
+}
+MOVE_INTERVAL_MS = 22             # movement update        (~45 FPS)
 WALK_MIN_S, WALK_MAX_S = 3.0, 8.0     # one walk lasts a random time in this range
 PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0   # one pause lasts a random time in this range
 WALK_SPEED_PX_S = 60.0            # walking speed, logical px per second
+RUN_SPEED_PX_S = 140.0            # running speed, logical px per second
 GRAVITY_PX_S2 = 2400.0            # fall acceleration after the pet is dropped
 MAX_DT_S = 0.1                    # clamp one movement step (e.g. after the PC wakes from sleep)
 
 # --- Behaviour ---------------------------------------------------------------
 SPECIAL_CHANCE = 0.5              # chance that a pause contains one special animation
 BURNT_CHANCE = 0.03               # RARE: chance per pause that the pet is "burnt" instead
+SPECIAL_WEIGHTS = {
+    # relative odds of each special / looping rest when one is rolled (never the same twice in a row)
+    "laughing": 3, "shocked": 2, "singing": 2, "peace_sign": 3,
+    "embarrassed": 2, "overjoyed": 2, "wistful": 2, "sad": 1,
+    "crying": 1,
+}
+RUN_CHANCE = 0.25                 # chance that a new walk is a run instead
+CLICK_ANGRY_COUNT = 3             # this many left-clicks ...
+CLICK_ANGRY_WINDOW_S = 2.0        # ... within this many seconds make the pet angry
 LAST_FRAME_HOLD_MS = {
     # one-shots that freeze on their last frame for a while
     "burnt": 2500,
-    "peace_sign": 1000
+    "peace_sign": 1000,
+    "crying": 1500,
 }
 SPECIAL_REPEAT_COUNT = {
     # number of full animation cycles for one-shot specials
@@ -94,16 +126,37 @@ SPECIAL_REPEAT_COUNT = {
 AFTER_SPECIAL_REST_MS = 1000        # idle time after a special that outlasted its pause, before walking on
 
 # --- Animation states --------------------------------------------------------
-LOOPING_STATES = ("idle", "walk_left", "walk_right")                 # repeat forever
-SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign")    # one-shot -> idle
+LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right")   # repeat forever
+LOOPING_REST_STATES = ()                  # loops for the whole pause; picked like a special
+SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign",
+                  "embarrassed", "overjoyed", "wistful", "sad",
+                  "crying")                                          # one-shot -> idle
+REACTION_STATES = ("angry",)              # one-shot -> idle; triggered, never random
 BURNT_STATE = "burnt"                                                # one-shot (+hold) -> idle
-ALL_STATES = LOOPING_STATES + SPECIAL_STATES + (BURNT_STATE,)
+ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
+              + (BURNT_STATE,))
+
+# The original states always work (placeholder fallback). Every other ("new") state is only
+# used when its sprites/<state>/ folder holds real PNGs - see SpriteBank.has_real_sprites().
+ORIGINAL_STATES = ("idle", "walk_left", "walk_right", "laughing", "shocked", "singing",
+                   "peace_sign", "burnt")
+NEW_STATES = tuple(s for s in ALL_STATES if s not in ORIGINAL_STATES)
+
+# Signed horizontal speed (logical px per second) of every moving state; negative = leftwards.
+MOVE_VELOCITY_PX_S = {
+    "walk_left": -WALK_SPEED_PX_S, "walk_right": WALK_SPEED_PX_S,
+    "run_left": -RUN_SPEED_PX_S, "run_right": RUN_SPEED_PX_S,
+}
 
 # Body colour of the generated placeholder for each state.
 PLACEHOLDER_COLORS = {
     "idle": "#7FB3D5", "walk_left": "#82E0AA", "walk_right": "#58D68D",
     "laughing": "#F7DC6F", "shocked": "#F1948A", "singing": "#BB8FCE",
     "peace_sign": "#F8C471", "burnt": "#4D5656",
+    "run_left": "#E59866", "run_right": "#CA6F1E",
+    "embarrassed": "#FF9FCB", "overjoyed": "#D4E157", "wistful": "#9FA8DA",
+    "sad": "#4A78B5", "crying": "#00BCD4",
+    "angry": "#E74C3C",
 }
 
 log = logging.getLogger("desktop_pet")
@@ -157,7 +210,8 @@ def make_placeholder_frames(state: str) -> list[QImage]:
     base = QColor(PLACEHOLDER_COLORS.get(state, "#AAB7B8"))
     label_color = QColor("white") if base.lightness() < 110 else QColor("#1B2631")
     # Pupils look the way the pet walks, so the placeholder also shows its direction.
-    pupil_dx = {"walk_left": -0.025, "walk_right": 0.025}.get(state, 0.0) * size
+    pupil_dx = {"walk_left": -0.025, "walk_right": 0.025,
+                "run_left": -0.025, "run_right": 0.025}.get(state, 0.0) * size
 
     frames = []
     for i in range(PLACEHOLDER_FRAME_COUNT):
@@ -227,21 +281,38 @@ class SpriteBank:
 
     def __init__(self, sprites_dir: Path, dpr: float) -> None:
         self._sources: dict[str, list[QImage]] = {}
+        self._real: set[str] = set()   # states backed by real PNGs (not placeholders)
         for state in ALL_STATES:
             if state == "walk_left" and MIRROR_WALK_RIGHT_FOR_LEFT:
                 continue   # derived from walk_right below
-            self._sources[state] = self._load_state(sprites_dir, state)
+            if state == "run_left" and MIRROR_RUN_RIGHT_FOR_LEFT:
+                continue   # derived from run_right below
+            images = self._load_state(sprites_dir, state)
+            if images:
+                self._sources[state] = images
         if MIRROR_WALK_RIGHT_FOR_LEFT:
             self._sources["walk_left"] = [img.mirrored(True, False)   # flip horizontally
                                           for img in self._sources["walk_right"]]
+        if MIRROR_RUN_RIGHT_FOR_LEFT and "run_right" in self._sources:
+            self._sources["run_left"] = [img.mirrored(True, False)    # flip horizontally
+                                         for img in self._sources["run_right"]]
+            self._real.add("run_left")   # real exactly when run_right is
+
+        # One startup line: which new states have sprites and which will never be used.
+        found = [s for s in NEW_STATES if self.has_real_sprites(s)]
+        skipped = [s for s in NEW_STATES if s not in found]
+        log.info("New states found: %s | skipped (no sprites): %s",
+                 ", ".join(found) or "none", ", ".join(skipped) or "none")
 
         self.frames: dict[str, list[Frame]] = {}
         self.dpr = 0.0
         self.rebuild(dpr)
 
-    @staticmethod
-    def _load_state(sprites_dir: Path, state: str) -> list[QImage]:
-        """Read sprites/<state>/*.png; fall back to a generated placeholder."""
+    def _load_state(self, sprites_dir: Path, state: str) -> list[QImage]:
+        """Read sprites/<state>/*.png; original states fall back to a generated placeholder.
+
+        A new state without real PNGs returns [] (no placeholder: it will never be played).
+        """
         images = []
         for path in list_png_files(sprites_dir / state):
             img = QImage(str(path))
@@ -250,11 +321,17 @@ class SpriteBank:
                 continue
             # Premultiplied ARGB is Qt's fastest format for compositing with alpha.
             images.append(img.convertToFormat(QImage.Format_ARGB32_Premultiplied))
-        if not images:
+        if images:
+            self._real.add(state)
+        elif state in ORIGINAL_STATES:
             log.warning("No sprites for '%s' in %s - using a generated placeholder",
                         state, sprites_dir / state)
             images = make_placeholder_frames(state)
         return images
+
+    def has_real_sprites(self, state: str) -> bool:
+        """True if `state` is drawn from real PNGs (not a placeholder, not missing)."""
+        return state in self._real
 
     def rebuild(self, dpr: float) -> None:
         """(Re)render all frames for a display scale factor (1.0, 1.25, 1.5, 2.0 ...)."""
@@ -320,6 +397,7 @@ class DesktopPet(QWidget):
         # --- behaviour state ---------------------------------------------------
         self._phase = Phase.PAUSE
         self._pause_elapsed = False          # pause timer fired while a special still plays
+        self._last_special: str | None = None   # last randomly rolled special (no repeats)
 
         # --- position / physics (floats for smooth sub-pixel movement) ---------
         self._x = 0.0
@@ -332,13 +410,14 @@ class DesktopPet(QWidget):
         self._grab_offset = QPoint()               # cursor position inside the window
         self._dragging = False
         self._menu_open = False
+        self._click_times: list[float] = []        # recent plain left-clicks (for "angry")
 
         # --- timers ------------------------------------------------------------
-        self._anim_timer = QTimer(self)            # ~10 FPS: next sprite frame
+        self._anim_timer = QTimer(self)            # ~5.5 FPS: next sprite frame
         self._anim_timer.setInterval(ANIM_INTERVAL_MS)
         self._anim_timer.timeout.connect(self._advance_frame)
 
-        self._move_timer = QTimer(self)            # ~30 FPS: walking, gravity, edges
+        self._move_timer = QTimer(self)            # ~45 FPS: walking, gravity, edges
         self._move_timer.setInterval(MOVE_INTERVAL_MS)
         self._move_timer.setTimerType(Qt.PreciseTimer)   # avoids Windows' coarse 15 ms ticks
         self._move_timer.timeout.connect(self._tick_movement)
@@ -383,15 +462,22 @@ class DesktopPet(QWidget):
             self.move(target)
 
     # -------------------------------------------------------------- animation
+    def _can_play(self, state: str) -> bool:
+        """Original states always work (placeholder fallback); new ones need real sprites."""
+        return state in ORIGINAL_STATES or self._bank.has_real_sprites(state)
+
     def _play(self, state: str, loop: bool | None = None) -> None:
         """Start playing `state` from its first frame.
 
-        loop=None -> looping for idle / walk_*, one-shot for everything else.
+        loop=None -> looping for idle / walk_* / run_*, one-shot for everything else.
         """
         self.state = state
-        self._loop = (state in LOOPING_STATES) if loop is None else loop
+        self._loop = (state in LOOPING_STATES + LOOPING_REST_STATES) if loop is None else loop
+        interval = FRAME_INTERVAL_MS.get(state, ANIM_INTERVAL_MS)   # this state's frame speed
+        if self._anim_timer.interval() != interval:                 # (setInterval restarts the timer)
+            self._anim_timer.setInterval(interval)
         self._repeat_count = max(0, SPECIAL_REPEAT_COUNT.get(state, 1) - 1) if not self._loop else 0
-        self._hold_ticks = 0 if self._loop else LAST_FRAME_HOLD_MS.get(state, 0) // ANIM_INTERVAL_MS
+        self._hold_ticks = 0 if self._loop else LAST_FRAME_HOLD_MS.get(state, 0) // interval
         self._set_frame(0)
 
     def _set_frame(self, index: int) -> None:
@@ -405,7 +491,7 @@ class DesktopPet(QWidget):
         self.update()
 
     def _advance_frame(self) -> None:
-        """Animation timer (~10 FPS): step to the next frame / finish a one-shot."""
+        """Animation timer (~5.5 FPS): step to the next frame / finish a one-shot."""
         # High DPI: if the display scale changed (settings, another monitor), re-render.
         dpr = self.devicePixelRatioF()
         if abs(dpr - self._bank.dpr) > 0.01:
@@ -437,16 +523,18 @@ class DesktopPet(QWidget):
 
     # --------------------------------------------------------------- behaviour
     def _start_walk(self) -> None:
-        """Walk for 3-8 s in a random direction."""
+        """Walk for 3-8 s in a random direction (a run instead, with RUN_CHANCE)."""
         self._phase = Phase.WALK
         self._pause_elapsed = False
-        self._play(random.choice(("walk_left", "walk_right")))
+        can_run = self._can_play("run_left") and self._can_play("run_right")
+        gait = "run" if can_run and random.random() < RUN_CHANCE else "walk"
+        self._play(f"{gait}_{random.choice(('left', 'right'))}")
         self._brain_timer.start(random_ms(WALK_MIN_S, WALK_MAX_S))
 
     def _start_pause(self, roll_special: bool = True, forced: str | None = None) -> None:
         """Rest for 2-5 s. Optionally open the pause with a special one-shot animation.
 
-        forced       : play exactly this special state (used for clicks).
+        forced       : play exactly this state (used for clicks and the landing).
         roll_special : otherwise roll the dice for a random special / the rare burnt.
         """
         self._phase = Phase.PAUSE
@@ -458,13 +546,21 @@ class DesktopPet(QWidget):
             special = self._roll_special()
         self._play(special if special else "idle")
 
-    @staticmethod
-    def _roll_special() -> str | None:
-        """Pick a special animation for this pause, or None for a plain rest."""
+    def _roll_special(self) -> str | None:
+        """Pick a special animation for this pause, or None for a plain rest.
+
+        Weighted by SPECIAL_WEIGHTS; states without sprites and the previous special
+        are left out.
+        """
         if random.random() < BURNT_CHANCE:        # rare event, checked first
             return BURNT_STATE
         if random.random() < SPECIAL_CHANCE:
-            return random.choice(SPECIAL_STATES)
+            candidates = [s for s in SPECIAL_STATES + LOOPING_REST_STATES
+                          if s != self._last_special and self._can_play(s)]
+            if candidates:
+                weights = [SPECIAL_WEIGHTS.get(s, 1) for s in candidates]
+                self._last_special = random.choices(candidates, weights=weights)[0]
+                return self._last_special
         return None
 
     def _on_brain_timeout(self) -> None:
@@ -480,7 +576,7 @@ class DesktopPet(QWidget):
 
     # ---------------------------------------------------------------- movement
     def _tick_movement(self) -> None:
-        """Movement timer (~30 FPS): walking, turning at edges, gravity."""
+        """Movement timer (~45 FPS): walking / running, turning at edges, gravity."""
         now = time.perf_counter()
         dt = min(now - self._last_tick, MAX_DT_S)   # real elapsed time -> constant speed
         self._last_tick = now
@@ -489,16 +585,16 @@ class DesktopPet(QWidget):
 
         min_x, max_x, _min_y, ground_y = self._bounds()
 
-        # Horizontal: walk, and turn around when an edge of the screen is reached.
-        if self.state in ("walk_left", "walk_right"):
-            direction = -1.0 if self.state == "walk_left" else 1.0
-            self._x += direction * WALK_SPEED_PX_S * dt
+        # Horizontal: walk / run, and turn around when an edge of the screen is reached.
+        velocity = MOVE_VELOCITY_PX_S.get(self.state)   # None while standing
+        if velocity is not None:
+            self._x += velocity * dt
             if self._x <= min_x:
                 self._x = min_x
-                self._play("walk_right")
+                self._turn_around("right")
             elif self._x >= max_x:
                 self._x = max_x
-                self._play("walk_left")
+                self._turn_around("left")
         self._x = min(max(self._x, min_x), max_x)   # never leave the screen (even if it shrank)
 
         # Vertical: fall under gravity when above the ground, otherwise stick to it.
@@ -514,6 +610,11 @@ class DesktopPet(QWidget):
                 self._start_pause(roll_special=False)
 
         self._sync_window_position()
+
+    def _turn_around(self, heading: str) -> None:
+        """The pet hit a screen edge: carry on ("left" / "right"), keeping walk / run mode."""
+        next_state = f"{self.state.rsplit('_', 1)[0]}_{heading}"   # walk_left -> walk_right ...
+        self._play(next_state)
 
     # ------------------------------------------------------------------- mouse
     def mousePressEvent(self, event) -> None:
@@ -548,7 +649,16 @@ class DesktopPet(QWidget):
         if self._dragging:
             self._end_drag()
         else:
-            self._start_pause(forced="shocked")   # a plain left-click startles the pet
+            # A plain left-click startles the pet; CLICK_ANGRY_COUNT clicks within
+            # CLICK_ANGRY_WINDOW_S seconds make it angry instead.
+            now = time.perf_counter()
+            self._click_times = [t for t in self._click_times if now - t <= CLICK_ANGRY_WINDOW_S]
+            self._click_times.append(now)
+            if len(self._click_times) >= CLICK_ANGRY_COUNT and self._can_play("angry"):
+                self._click_times.clear()         # the next outburst needs fresh clicks
+                self._start_pause(forced="angry")
+            else:
+                self._start_pause(forced="shocked")
 
     def _begin_drag(self) -> None:
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""

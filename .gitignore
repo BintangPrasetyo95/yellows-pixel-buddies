@@ -57,3 +57,5 @@ ehthumbs.db
 # Logs and databases
 *.log
 *.sqlite3
+.agents/hooks.json
+.cursor/hooks.json
