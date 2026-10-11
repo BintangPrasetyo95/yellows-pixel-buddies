@@ -16,7 +16,7 @@
   - **Special Events**: Rare `burnt` crisp event during resting pauses.
 - **Interactive Mouse Controls**:
   - **Left-click**: Startles the pet (triggers `shocked` reaction).
-  - **Multi-click (Anger)**: Clicking 3 times within 2 seconds makes the pet angry (`angry` reaction).
+  - **Multi-click (Anger)**: Clicking 3 times within 2 seconds makes the pet angry (`angry` reaction). Continuing to click or spam her keeps her in the angry state; once clicking stops, she finishes her angry animation loop and calms down to `idle`.
   - **Left-click + drag**: Pick up and carry the pet around your screen (pet loops `shocked` while held). Release to watch gravity pull it back to the taskbar.
   - **Right-click**: Opens a context menu with **Exit**.
 - **Transparent & Click-Through**: Fully transparent background. Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
@@ -148,8 +148,9 @@ FRAME_SUB_LOOPS = {
 
 # Number of full animation cycles before returning to idle
 SPECIAL_REPEAT_COUNT = {
-    "singing": 4,
-    "laughing": 4,
+    "singing": 2,
+    "laughing": 6,
+    "angry": 6,
 }
 ```
 

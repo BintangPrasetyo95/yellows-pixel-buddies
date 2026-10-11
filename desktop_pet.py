@@ -116,19 +116,23 @@ CLICK_ANGRY_WINDOW_S = 2.0        # ... within this many seconds make the pet an
 LAST_FRAME_HOLD_MS = {
     # one-shots that freeze on their last frame for a while
     "burnt": 2500,
-    "peace_sign": 1000,
+    "peace_sign": 2000,
     "sad": 2000,
-    "shocked": 1000
+    "shocked": 1000,
+    "wistful": 3000
 }
 FRAME_SUB_LOOPS = {
     # Sub-frame loops for states with an intro (1-based frame numbers matching 1.png, 2.png...):
     # state: (start_frame, end_frame, repeat_count)
     "crying": (3, 4, 4),          # plays frames 1-2 once, loops 3 & 4 four times, then plays frame 5 to end
+    "embarrassed": (3, 3, 5)
 }
 SPECIAL_REPEAT_COUNT = {
     # number of full animation cycles for one-shot specials
     "singing": 2,
-    "laughing": 4
+    "laughing": 6,
+    "angry": 6,
+    "overjoyed": 3
 }
 AFTER_SPECIAL_REST_MS = 1000        # idle time after a special that outlasted its pause, before walking on
 
