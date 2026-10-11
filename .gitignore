@@ -41,7 +41,7 @@ venv.bak/
 
 # IDEs and editors
 .cursor/
-.agent/
+.agents/
 .vscode/
 .idea/
 *.sublime-project

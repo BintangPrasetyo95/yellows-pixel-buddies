@@ -53,7 +53,7 @@ SPRITES_DIR = Path(__file__).resolve().parent / "sprites"   # sprites/<state>/N.
 # Tip: author PNGs at 2x (e.g. 256 px) so they stay crisp on high-DPI screens.
 SPRITE_SIZE = 128
 
-SMOOTH_SCALING = True      # False = nearest-neighbour scaling (better for pixel art)
+SMOOTH_SCALING = False      # False = nearest-neighbour scaling (better for pixel art)
 
 # Transparent pixels *under the feet* inside your PNGs. The window is lowered by this
 # many pixels so the visible feet (not the PNG edge) touch the top of the taskbar.
@@ -71,8 +71,8 @@ CLICK_THROUGH_TRANSPARENT = True
 PLACEHOLDER_FRAME_COUNT = 10   # frames generated for each state with no sprite files
 
 # --- Timing ------------------------------------------------------------------
-ANIM_INTERVAL_MS = 100            # sprite frame advance   (~10 FPS)
-MOVE_INTERVAL_MS = 33             # movement update        (~30 FPS)
+ANIM_INTERVAL_MS = 180            # sprite frame advance   (~10 FPS)
+MOVE_INTERVAL_MS = 22             # movement update        (~30 FPS)
 WALK_MIN_S, WALK_MAX_S = 3.0, 8.0     # one walk lasts a random time in this range
 PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0   # one pause lasts a random time in this range
 WALK_SPEED_PX_S = 60.0            # walking speed, logical px per second
@@ -82,8 +82,16 @@ MAX_DT_S = 0.1                    # clamp one movement step (e.g. after the PC w
 # --- Behaviour ---------------------------------------------------------------
 SPECIAL_CHANCE = 0.5              # chance that a pause contains one special animation
 BURNT_CHANCE = 0.03               # RARE: chance per pause that the pet is "burnt" instead
-LAST_FRAME_HOLD_MS = {"burnt": 2500}   # one-shots that freeze on their last frame for a while
-AFTER_SPECIAL_REST_MS = 600        # idle time after a special that outlasted its pause, before walking on
+LAST_FRAME_HOLD_MS = {
+    # one-shots that freeze on their last frame for a while
+    "burnt": 2500,
+    "peace_sign": 2000
+}
+SPECIAL_REPEAT_COUNT = {
+    # number of full animation cycles for one-shot specials
+    "singing": 4
+}
+AFTER_SPECIAL_REST_MS = 1000        # idle time after a special that outlasted its pause, before walking on
 
 # --- Animation states --------------------------------------------------------
 LOOPING_STATES = ("idle", "walk_left", "walk_right")                 # repeat forever
@@ -306,6 +314,7 @@ class DesktopPet(QWidget):
         self._frame_idx = 0
         self._loop = True                    # does the current animation repeat?
         self._hold_ticks = 0                 # extra ticks to freeze on the last frame
+        self._repeat_count = 0               # extra cycles remaining for repeating specials
         self._pixmap: QPixmap | None = None
 
         # --- behaviour state ---------------------------------------------------
@@ -381,6 +390,7 @@ class DesktopPet(QWidget):
         """
         self.state = state
         self._loop = (state in LOOPING_STATES) if loop is None else loop
+        self._repeat_count = max(0, SPECIAL_REPEAT_COUNT.get(state, 1) - 1) if not self._loop else 0
         self._hold_ticks = 0 if self._loop else LAST_FRAME_HOLD_MS.get(state, 0) // ANIM_INTERVAL_MS
         self._set_frame(0)
 
@@ -408,6 +418,9 @@ class DesktopPet(QWidget):
         elif self._loop:
             if count > 1:
                 self._set_frame(0)               # wrap around
+        elif self._repeat_count > 0:
+            self._repeat_count -= 1
+            self._set_frame(0)                   # repeat another cycle
         elif self._hold_ticks > 0:
             self._hold_ticks -= 1                # freeze on the last frame (e.g. burnt)
         else:
