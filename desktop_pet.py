@@ -85,7 +85,7 @@ BURNT_CHANCE = 0.03               # RARE: chance per pause that the pet is "burn
 LAST_FRAME_HOLD_MS = {
     # one-shots that freeze on their last frame for a while
     "burnt": 2500,
-    "peace_sign": 2000
+    "peace_sign": 1000
 }
 SPECIAL_REPEAT_COUNT = {
     # number of full animation cycles for one-shot specials
