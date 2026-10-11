@@ -177,3 +177,20 @@ CLICK_ANGRY_WINDOW_S = 2.0    # ...within this many seconds to trigger 'angry'
   </a>
   <p>Created by <a href="https://github.com/bintangprasetyo95"><strong>@bintangprasetyo95</strong></a></p>
 </div>
+
+---
+
+## ⚖️ Disclaimer & Fan-Work Notice
+
+- This is a free, non-commercial fan-made companion.
+- Character designs and original sprite art are based on **DELTARUNE © Toby Fox**.
+- All rights to DELTARUNE belong to Toby Fox and the DELTARUNE development team.
+- This project is unofficial and is not affiliated with, endorsed by, or sponsored by Toby Fox or Royal Sciences LLC.
+
+---
+
+## 📄 License
+
+- The Python source code in this repository is licensed under the [MIT License](LICENSE).
+- Sprite artwork and characters belong to their respective copyright holders (**DELTARUNE © Toby Fox**) and are not covered under the MIT License.
+
