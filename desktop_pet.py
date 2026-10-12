@@ -15,17 +15,26 @@ Sprites (next to this script)
         A missing / empty folder is replaced by a generated placeholder animation,
         so the script always runs.
     new states      : run_left, run_right                          (movement, looping)
+                      wistful_walk_left, wistful_walk_right        (slow movement, looping)
                       embarrassed, overjoyed, wistful, sad,
-                      crying                                       (random specials)
+                      crying, tongue, kneeling, behind             (random specials)
                       angry                                        (triggered reaction)
+                      airborne, hanging                            (jump to the cursor, looping)
         A missing / empty folder means the state is never used (no placeholder), so
         sprites can be added one folder at a time. One INFO line at startup lists
-        which new states were found and which were skipped.
+        which new states were found and which were skipped, and whether the jump to
+        the cursor is enabled.
+        The jump needs BOTH airborne/ and hanging/ - with only one of them (or neither)
+        the whole feature stays off and the pet behaves as before.
+          airborne : the art faces LEFT (AIRBORNE_ART_FACES); a mirrored copy is
+                     derived for jumps to the right.
+          hanging  : front-facing (HANGING_ART_FACES = "none"). Every frame must share
+                     one canvas size, with the hands at HAND_ANCHOR - tune that value.
 
 Behaviour
 ---------
     WALK  (3-8 s, one direction, turns around at the screen edges, never leaves it;
-           each walk is a faster run instead with RUN_CHANCE)
+           each walk can be a faster run or a slower wistful walk)
       -> PAUSE (2-5 s, idle; with some probability one special animation plays)
       -> WALK ...
     Specials are picked by weight (SPECIAL_WEIGHTS), never the same one twice in a row.
@@ -33,28 +42,57 @@ Behaviour
 
     Left-click  : the pet is startled (plays "shocked")
                   3 clicks within 2 s: the pet gets angry (plays "angry")
+                  (ignored while she jumps, hangs or falls)
     Left-drag   : pick the pet up; when dropped it falls back onto the taskbar
-    Right-click : context menu with "Exit"
+                  (jump feature on: she shows "peace_sign" when she lands)
+    Right-click : context menu with "Exit". Opening it mid-jump / mid-hang makes her
+                  fall (no reaction). DEBUG_JUMP_MENU adds "Jump to cursor".
+
+    Window Switch Reactions:
+      Polls foreground window changes. Switching to a maximized app startles the pet
+      ("shocked"). If switching from a dark screen to a dominant bright screen ("flashbang"),
+      the pet is "burnt" instead.
+
+    Jump to the cursor   (only with real PNGs in BOTH sprites/airborne and sprites/hanging)
+      Trigger  : only from a plain idle / walk / run / wistful_walk animation, with the cursor
+                 on the work area (not the taskbar, not another monitor), NO mouse button held
+                 anywhere, the cursor at least MIN_JUMP_RISE_PX above her, and the
+                 cooldown over. Then either
+                   - the cursor has been still for STILL_TIME_S: STILL_JUMP_CHANCE is
+                     rolled once per STILL_CHECK_INTERVAL_S, or
+                   - a plain idle pause ends: MOVING_JUMP_CHANCE is rolled once, and on
+                     success she jumps instead of walking.
+      JUMP     : aimed ONCE at take-off with real ballistic physics (launch speed from
+                 the rise, sideways speed from the time to the apex). Cursors that are
+                 too high or too far are missed on purpose. At the apex, hands within
+                 GRAB_RADIUS_PX of the cursor = she grabs on; otherwise she falls and
+                 plays "burnt" when she lands.
+      HANG     : her window follows the cursor (hands on it) and clicks pass straight
+                 through her. She lets go after HANG_MIN_S..HANG_MAX_S, or when the
+                 cursor leaves the work area / goes too low: she falls, "peace_sign".
+                 Shaking the cursor (quick reversals that go nowhere) shakes her off:
+                 she falls and laughs.
+      COOLDOWN : JUMP_COOLDOWN_MIN_S..MAX_S, counted from the landing.
 """
 
 import ctypes
 from ctypes import wintypes
+from collections import deque
+from dataclasses import dataclass
+from enum import Enum, auto
+from functools import lru_cache
 import logging
 import math
+from pathlib import Path
 import random
 import re
 import signal
 import sys
 import time
-from dataclasses import dataclass
-from enum import Enum, auto
-from pathlib import Path
 
 from PyQt5.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QRegion
+from PyQt5.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QRegion
 from PyQt5.QtWidgets import QApplication, QMenu, QWidget
-
-user32 = ctypes.windll.user32
 
 
 # =============================================================================
@@ -106,7 +144,8 @@ PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0   # one pause lasts a random time in this ra
 WALK_SPEED_PX_S = 60.0            # walking speed, logical px per second
 RUN_SPEED_PX_S = 140.0            # running speed, logical px per second
 WISTFUL_WALK_SPEED_PX_S = 30.0    # wistful walk speed, logical px per second (slower than normal walk)
-GRAVITY_PX_S2 = 2400.0            # fall acceleration after the pet is dropped
+GRAVITY_PX_S2 = 2400.0            # fall acceleration after the pet is dropped (drag and drop only;
+                                  # jumps and the falls after them use JUMP_GRAVITY_PX_S2)
 MAX_DT_S = 0.1                    # clamp one movement step (e.g. after the PC wakes from sleep)
 
 # --- Behaviour ---------------------------------------------------------------
@@ -136,8 +175,9 @@ LAST_FRAME_HOLD_MS = {
 }
 FRAME_SUB_LOOPS = {
     # Sub-frame loops for states with an intro (1-based frame numbers matching 1.png, 2.png...):
-    # state: (start_frame, end_frame, repeat_count)
-    "crying": (3, 4, 4),          # plays frames 1-2 once, loops 3 & 4 four times, then plays frame 5 to end
+    # state: (start_frame, end_frame, repeat_count) - repeat_count = EXTRA passes after the first
+    "crying": (3, 4, 4),          # frames 1-2 play once, then frames 3 & 4 play once plus 4 repeats
+                                  # (5 passes in total), then frame 5 plays to the end
 }
 SPECIAL_REPEAT_COUNT = {
     # number of full animation cycles for one-shot specials
@@ -155,7 +195,7 @@ DARK_LUMINANCE_THRESHOLD = 85.0       # average screen luminance <= 85 is "dark"
 LIGHT_LUMINANCE_THRESHOLD = 160.0     # average screen luminance >= 160 is "dominant white/light"
 WINDOW_SWITCH_SETTLE_MS = 120         # ms to wait for the window to composite before sampling
 SWITCH_SHOCK_COOLDOWN_S = 30.0        # cooldown in seconds for window switch shock
-SWITCH_BURNT_COOLDOWN_S = 10.0         # cooldown in seconds for flashbang burnt (half the original 10s shock cooldown)
+SWITCH_BURNT_COOLDOWN_S = 10.0         # cooldown in seconds for flashbang burnt
 
 # --- Animation states --------------------------------------------------------
 LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
@@ -166,8 +206,11 @@ SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign",
                   "crying", "tongue", "kneeling", "behind")           # one-shot -> idle
 REACTION_STATES = ("angry",)              # one-shot -> idle; triggered, never random
 BURNT_STATE = "burnt"                                                # one-shot (+hold) -> idle
+AIRBORNE_STATE = "airborne"               # jump to the cursor: the flight and every fall after it
+HANGING_STATE = "hanging"                 # jump to the cursor: dangling from the cursor
+JUMP_STATES = (AIRBORNE_STATE, HANGING_STATE)    # both loop; the feature needs real PNGs for BOTH
 ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
-              + (BURNT_STATE,))
+              + (BURNT_STATE,) + JUMP_STATES)
 
 # The original states always work (placeholder fallback). Every other ("new") state is only
 # used when its sprites/<state>/ folder holds real PNGs - see SpriteBank.has_real_sprites().
@@ -193,7 +236,78 @@ PLACEHOLDER_COLORS = {
     "angry": "#E74C3C",
     "tongue": "#F1948A", "kneeling": "#F5B041", "behind": "#A569BD",
     "wistful_walk_left": "#9FA8DA", "wistful_walk_right": "#7986CB",
+    "airborne": "#85C1E9", "hanging": "#F5B7B1",
 }
+
+
+# --- Jump to the cursor ------------------------------------------------------
+# The whole feature is OFF unless sprites/airborne/ AND sprites/hanging/ hold real PNGs.
+# Screen y grows DOWNWARDS everywhere in this feature: upward speeds are negative,
+# gravity is positive.
+
+# Art orientation
+AIRBORNE_ART_FACES = "left"       # which way the airborne PNGs look: "left" or "right". A mirrored
+                                  # copy is made for the other direction (like MIRROR_WALK_RIGHT_FOR_LEFT)
+HANGING_ART_FACES = "none"        # "none" = front-facing, never mirrored. "left" / "right" = the art
+                                  # looks that way, and a mirrored copy is used when she jumped the other way
+
+# Where her hands are in EVERY hanging frame, as fractions (x, y) of the SPRITE_SIZE square:
+# (0, 0) = top-left corner, (1, 1) = bottom-right. All hanging frames must share one canvas size.
+HAND_ANCHOR = (0.5, 0.10)
+
+# Trigger (see the module docstring for the full list of gates)
+MIN_JUMP_RISE_PX = 0.5 * SPRITE_SIZE   # she only jumps when her hands must rise at least this far; this
+                                       # also rejects cursors too close to the ground to hang below
+STILL_DEAD_ZONE_PX = 6            # the cursor counts as "not moved" while it stays within this distance
+STILL_TIME_S = 3.0                # ... for this long, and then the still-cursor jump gets rolled
+STILL_JUMP_CHANCE = 0.3           # chance per check while the cursor is still (the main trigger)
+STILL_CHECK_INTERVAL_S = 1.0      # at most one still-cursor roll per this many seconds
+MOVING_JUMP_CHANCE = 0.04         # chance, rolled ONCE each time a plain idle pause ends (cursor moving
+                                  # or not): on success she jumps instead of walking
+JUMP_COOLDOWN_MIN_S, JUMP_COOLDOWN_MAX_S = 20.0, 60.0   # rest between two jumps; starts at the LANDING,
+                                                        # so the time spent hanging does not use it up
+
+# Flight
+JUMP_GRAVITY_PX_S2 = 1400.0       # gravity for jump arcs and for every fall after a jump / hang
+                                  # (GRAVITY_PX_S2 keeps ruling the drag-and-drop fall)
+MAX_JUMP_HEIGHT_PX = 700.0        # the highest rise she can manage ("as high as she can"); higher
+                                  # cursors are missed on purpose
+JUMP_MAX_HSPEED_PX_S = 900.0      # fastest sideways speed in the air; farther cursors are missed
+JUMP_MISS_HSPEED_KEEP = 1.0       # share of sideways speed kept after a miss (1.0 = continue natural parabolic arc; 0 = stop dead and drop)
+JUMP_LEAD_TIME_S = 0.0            # aim this far AHEAD of a moving cursor (0.0 = aim where it is now)
+JUMP_LEAD_SMOOTH_S = 0.10         # the cursor speed used for that lead is averaged over about this long
+JUMP_FACING_DEAD_ZONE_PX = 6.0    # a sideways distance below this keeps the last facing
+GRAB_RADIUS_PX = 0.5 * SPRITE_SIZE   # at the apex her hands must be this close to the cursor to grab it
+
+# Hanging
+HANG_MIN_S, HANG_MAX_S = 3.0, 25.0   # she lets go on her own after a random time in this range
+HANG_FOLLOW_SMOOTH_S = 0.05       # light exponential smoothing of the follow: time constant in s
+                                  # (0 = glued to the cursor)
+
+# Shake-off: the RAW cursor positions of the last SHAKE_WINDOW_S seconds are searched for zig-zags
+SHAKE_WINDOW_S = 0.7              # length of the history that is looked at
+SHAKE_MIN_SWING = 0.3 * SPRITE_SIZE   # px; a direction change only counts after a swing bigger than this
+                                      # (so it is also the dead zone for pointer jitter)
+SHAKE_REVERSALS = 3               # this many reversals on the x OR the y axis ...
+SHAKE_MAX_NET = 0.5 * SPRITE_SIZE # ... while the cursor ends up (px) closer than this to where the history began
+SHAKE_GRACE_S = 0.5               # shakes are ignored this long after she grabbed on
+
+# Landing reactions. They are played through _start_pause(forced=...) when she touches down, so the
+# existing LAST_FRAME_HOLD_MS / SPECIAL_REPEAT_COUNT entries (peace_sign hold, laughing repeats) apply.
+MISS_REACTION = BURNT_STATE       # the jump missed the cursor
+RELEASE_REACTION = "peace_sign"   # she let go of the cursor herself (timeout, cursor left / too low)
+SHAKEN_REACTION = "laughing"      # she was shaken off
+DROP_REACTION = "peace_sign"      # dragged and dropped (only while the jump feature is enabled; None = none)
+DROP_REACTION_MIN_HEIGHT_PX = 0   # ... only when dropped at least this high above the ground (0 = always)
+
+# Debug aids (leave False for normal use). Either flag also switches the log to DEBUG, which
+# prints one line per jump event (launch, apex, grab / miss, release, shake, touchdown).
+DEBUG_DRAW_HAND_ANCHOR = False    # draw a crosshair on HAND_ANCHOR while hanging, to help tuning it
+DEBUG_CROSSHAIR_PX = 8            # arm length of that crosshair
+DEBUG_JUMP_MENU = False           # add "Jump to cursor" to the right-click menu: it skips every trigger
+                                  # gate and the cooldown (the jump feature still needs its sprites)
+DEBUG_JUMP_DELAY_S = 2.0          # ... and aims at the cursor this long AFTER you pick it, so you have
+                                  # time to park the pointer somewhere high first (0 = immediately)
 
 log = logging.getLogger("desktop_pet")
 
@@ -251,6 +365,137 @@ def sample_screen_luminance() -> float:
     return total_lum / 256.0
 
 
+def mirrored_key(state: str) -> str:
+    """Name under which SpriteBank keeps the horizontally mirrored copy of a state's frames."""
+    return f"{state}__mirrored"
+
+
+def count_reversals(values: list[float], min_swing: float) -> int:
+    """Count direction reversals in a 1-D path, ignoring wiggles of `min_swing` or less.
+
+    A reversal is counted when the path turns back by MORE than `min_swing` from the furthest
+    point it reached in its current direction. Tracking that extreme (rather than comparing
+    neighbouring samples) counts a long swing sampled in many small steps once, and lets
+    `min_swing` double as the dead zone that swallows pointer jitter.
+    """
+    if not values:
+        return 0
+    reversals = 0
+    direction = 0              # +1 rising, -1 falling, 0 = has not yet moved `min_swing` from the start
+    extreme = values[0]        # furthest value reached so far in the current direction
+    for value in values[1:]:
+        if direction == 0:
+            if abs(value - extreme) > min_swing:      # the first real movement fixes the direction
+                direction = 1 if value > extreme else -1
+                extreme = value
+        elif direction > 0:
+            if value > extreme:
+                extreme = value
+            elif extreme - value > min_swing:         # turned back far enough: a reversal
+                direction = -1
+                extreme = value
+                reversals += 1
+        else:
+            if value < extreme:
+                extreme = value
+            elif value - extreme > min_swing:
+                direction = 1
+                extreme = value
+                reversals += 1
+    return reversals
+
+
+# --- Windows-only helpers --------------------------------------------------------
+# Every call is guarded by sys.platform and a try/except, and degrades to a harmless
+# "nothing happened" elsewhere (other OS, missing DLL, API failure).
+
+VK_LBUTTON, VK_RBUTTON, VK_MBUTTON = 0x01, 0x02, 0x04   # GetAsyncKeyState virtual-key codes
+GWL_EXSTYLE = -20                                       # SetWindowLongPtr index: extended window style
+WS_EX_LAYERED = 0x00080000                              # per-pixel-alpha window (Qt sets it for us)
+WS_EX_TRANSPARENT = 0x00000020                          # layered + this: the mouse falls straight through
+
+
+@lru_cache(maxsize=1)
+def _user32():
+    """A private handle to user32.dll, or None off Windows / when it cannot be loaded.
+
+    Cached, so the lookup (and a possible warning) happens only once.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        dll = ctypes.WinDLL("user32")
+        dll.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        dll.GetAsyncKeyState.restype = ctypes.c_short      # SHORT: the top bit means "down"
+        return dll
+    except Exception as exc:                               # ctypes / DLL missing, odd Python build ...
+        log.warning("user32.dll is not usable (%s) - mouse-button detection, window monitoring, "
+                    "and click-through while hanging are off", exc)
+        return None
+
+
+def any_mouse_button_down() -> bool:
+    """True while the left, right or middle mouse button is held ANYWHERE on the system.
+
+    QApplication.mouseButtons() only reflects events delivered to this application, so a drag
+    or a text selection in another window would go unnoticed. GetAsyncKeyState reads the
+    physical button state instead (physical, not logical, which is fine because all three
+    buttons are checked). Fails safe to "not held": other OS, no user32, or any error.
+    """
+    dll = _user32()
+    if dll is None:
+        return False
+    try:
+        return any(dll.GetAsyncKeyState(vk) & 0x8000       # top bit = down right now
+                   for vk in (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON))
+    except Exception:
+        return False
+
+
+def set_window_input_transparent(widget: QWidget, enabled: bool) -> bool:
+    """Make the mouse pass straight through `widget` (True) or catch it again (False).
+
+    Toggling WS_EX_TRANSPARENT on a layered window changes only the hit-testing ("treat me as not there"),
+    so the picture and the normal per-frame mask stay exactly as they are.
+
+    Returns True when the request took effect, False if it could not be done.
+    """
+    dll = _user32()
+    if dll is None:
+        return False
+    try:
+        import ctypes
+        get_style = getattr(dll, "GetWindowLongPtrW", None) or dll.GetWindowLongW   # 32-bit Python fallback
+        set_style = getattr(dll, "SetWindowLongPtrW", None) or dll.SetWindowLongW
+        get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        set_style.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+        set_style.restype = ctypes.c_ssize_t
+
+        hwnd = int(widget.winId())
+        style = get_style(hwnd, GWL_EXSTYLE)
+        if style == 0:                  # a Qt tool window always has style bits: 0 = the call failed
+            return False
+        wanted = (style | WS_EX_TRANSPARENT) if enabled else (style & ~WS_EX_TRANSPARENT)
+        if wanted != style:
+            set_style(hwnd, GWL_EXSTYLE, wanted)
+        return (not enabled) or bool(wanted & WS_EX_LAYERED)
+    except Exception as exc:
+        log.warning("Could not change the window's click-through style (%s)", exc)
+        return False
+
+
+def check_jump_config() -> None:
+    """Fail early, with a readable message, on impossible values in the jump settings."""
+    if AIRBORNE_ART_FACES not in ("left", "right"):
+        raise ValueError(f'AIRBORNE_ART_FACES must be "left" or "right", not {AIRBORNE_ART_FACES!r}')
+    if HANGING_ART_FACES not in ("none", "left", "right"):
+        raise ValueError(f'HANGING_ART_FACES must be "none", "left" or "right", not {HANGING_ART_FACES!r}')
+    if len(HAND_ANCHOR) != 2 or not all(0.0 <= f <= 1.0 for f in HAND_ANCHOR):
+        raise ValueError(f"HAND_ANCHOR must be two fractions between 0 and 1, not {HAND_ANCHOR!r}")
+
+
 # =============================================================================
 #  3. SPRITES
 # =============================================================================
@@ -265,7 +510,8 @@ def make_placeholder_frames(state: str) -> list[QImage]:
     label_color = QColor("white") if base.lightness() < 110 else QColor("#1B2631")
     # Pupils look the way the pet walks, so the placeholder also shows its direction.
     pupil_dx = {"walk_left": -0.025, "walk_right": 0.025,
-                "run_left": -0.025, "run_right": 0.025}.get(state, 0.0) * size
+                "run_left": -0.025, "run_right": 0.025,
+                "wistful_walk_left": -0.025, "wistful_walk_right": 0.025}.get(state, 0.0) * size
 
     frames = []
     for i in range(PLACEHOLDER_FRAME_COUNT):
@@ -346,13 +592,14 @@ class SpriteBank:
             images = self._load_state(sprites_dir, state)
             if images:
                 self._sources[state] = images
-        if MIRROR_WALK_RIGHT_FOR_LEFT:
+        if MIRROR_WALK_RIGHT_FOR_LEFT and "walk_right" in self._sources:
             self._sources["walk_left"] = [img.mirrored(True, False)   # flip horizontally
                                           for img in self._sources["walk_right"]]
         if MIRROR_RUN_RIGHT_FOR_LEFT and "run_right" in self._sources:
             self._sources["run_left"] = [img.mirrored(True, False)    # flip horizontally
                                          for img in self._sources["run_right"]]
             self._real.add("run_left")   # real exactly when run_right is
+
         if "wistful" in self._sources:
             # Sourced from sprites/wistful: left-facing by default, right-facing is horizontally mirrored
             w_imgs = self._sources["wistful"]
@@ -362,11 +609,23 @@ class SpriteBank:
                 self._real.add("wistful_walk_left")
                 self._real.add("wistful_walk_right")
 
-        # One startup line: which new states have sprites and which will never be used.
+        # The jump art is authored facing ONE way, so keep a mirrored copy for the other way
+        # (derived like MIRROR_WALK_RIGHT_FOR_LEFT does it). airborne always needs one; hanging
+        # only when HANGING_ART_FACES says it is not front-facing.
+        for state in (AIRBORNE_STATE,) + ((HANGING_STATE,) if HANGING_ART_FACES != "none" else ()):
+            if state in self._sources:
+                self._sources[mirrored_key(state)] = [img.mirrored(True, False)   # flip horizontally
+                                                      for img in self._sources[state]]
+
+        # One startup line: which new states have sprites and which will never be used,
+        # and whether the jump to the cursor can run (it needs BOTH jump states).
         found = [s for s in NEW_STATES if self.has_real_sprites(s)]
         skipped = [s for s in NEW_STATES if s not in found]
-        log.info("New states found: %s | skipped (no sprites): %s",
-                 ", ".join(found) or "none", ", ".join(skipped) or "none")
+        missing_jump = [s for s in JUMP_STATES if not self.has_real_sprites(s)]
+        log.info("New states found: %s | skipped (no sprites): %s | jump to cursor: %s",
+                 ", ".join(found) or "none", ", ".join(skipped) or "none",
+                 "ENABLED" if not missing_jump
+                 else "disabled (needs real PNGs in BOTH folders; missing: " + ", ".join(missing_jump) + ")")
 
         self.frames: dict[str, list[Frame]] = {}
         self.dpr = 0.0
@@ -396,6 +655,15 @@ class SpriteBank:
     def has_real_sprites(self, state: str) -> bool:
         """True if `state` is drawn from real PNGs (not a placeholder, not missing)."""
         return state in self._real
+
+    @property
+    def jump_sprites_ready(self) -> bool:
+        """True when BOTH jump states (airborne, hanging) are drawn from real PNGs.
+
+        Only then does the pet jump at the cursor; with one folder missing the whole
+        feature stays off and she behaves exactly as before.
+        """
+        return all(self.has_real_sprites(s) for s in JUMP_STATES)
 
     def rebuild(self, dpr: float) -> None:
         """(Re)render all frames for a display scale factor (1.0, 1.25, 1.5, 2.0 ...)."""
@@ -429,7 +697,9 @@ class Phase(Enum):
     WALK = auto()    # walking for 3-8 s
     PAUSE = auto()   # resting 2-5 s (maybe with one special animation)
     DRAG = auto()    # being held by the mouse
-    FALL = auto()    # dropped, falling back to the taskbar
+    FALL = auto()    # dropped / let go, falling back to the taskbar
+    JUMP = auto()    # leaping at the cursor: the rise, and the fall after a miss
+    HANG = auto()    # hanging from the cursor (no gravity, no walking)
 
 
 class DesktopPet(QWidget):
@@ -452,6 +722,7 @@ class DesktopPet(QWidget):
 
         # --- animation state ---------------------------------------------------
         self.state = "idle"                  # which sprite folder is being played
+        self._sprite_key = "idle"            # which frame set is drawn: `state`, or its mirrored copy
         self._frame_idx = 0
         self._loop = True                    # does the current animation repeat?
         self._hold_ticks = 0                 # extra ticks to freeze on the last frame
@@ -477,6 +748,31 @@ class DesktopPet(QWidget):
         self._dragging = False
         self._menu_open = False
         self._click_times: list[float] = []        # recent plain left-clicks (for "angry")
+        self._walk_before_menu: str | None = None  # walk / run animation swapped for idle while the menu is open
+
+        # --- jump to the cursor ------------------------------------------------
+        # Screen y grows downwards: an upward speed is NEGATIVE, gravity is positive.
+        self._jump_enabled = bank.jump_sprites_ready   # needs real PNGs in airborne/ AND hanging/
+        self._jump_ready_at = 0.0            # perf_counter() time at which the cooldown is over
+        self._jump_active = False            # a jump sequence is running (the cooldown starts at touchdown)
+        self._gravity = GRAVITY_PX_S2        # gravity of the current JUMP / FALL (drop vs. jump)
+        self._vx = 0.0                       # sideways speed of a jump in px/s (+ = right), set at take-off
+        self._facing = AIRBORNE_ART_FACES    # heading of the last jump ("left" / "right")
+        self._pending_reaction: str | None = None   # played on touchdown; decided when the fall begins
+        self._hang_started_at = 0.0          # perf_counter() time of the grab
+        self._hang_ends_at = 0.0             # ... and when she lets go on her own
+        self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
+        self._input_transparent = False      # True while mouse clicks pass through the window
+        self._warned_no_click_through = False
+        self._debug_jump_at: float | None = None    # when the armed debug-menu jump fires
+
+        # --- cursor tracking (ONE QCursor.pos() sample per movement tick, no extra timer) ---
+        self._cursor = QCursor.pos()         # latest sample
+        self._cursor_vx = 0.0                # smoothed cursor speed in px/s (kept only if JUMP_LEAD_TIME_S > 0)
+        self._cursor_vy = 0.0
+        self._still_anchor = self._cursor    # where the cursor was when it last really moved
+        self._still_since = time.perf_counter()    # ... and since when it has stayed within the dead zone
+        self._next_still_check_at = 0.0      # earliest time of the next still-cursor roll
 
         # --- timers ------------------------------------------------------------
         self._anim_timer = QTimer(self)            # ~5.5 FPS: next sprite frame
@@ -518,10 +814,12 @@ class DesktopPet(QWidget):
         self._move_timer.start()
 
         if REACT_ON_MAXIMIZED_APP:
-            fg = user32.GetForegroundWindow()
-            if fg and fg != int(self.winId()):
-                self._last_foreground_hwnd = fg
-                self._last_luminance = sample_screen_luminance()
+            dll = _user32()
+            if dll is not None:
+                fg = dll.GetForegroundWindow()
+                if fg and fg != int(self.winId()):
+                    self._last_foreground_hwnd = fg
+                    self._last_luminance = sample_screen_luminance()
             self._window_timer.start()
 
         self._start_pause()                        # begin with a rest, then walk
@@ -541,6 +839,10 @@ class DesktopPet(QWidget):
         ground_y = float(area.y() + area.height() - self.height() + FOOT_PADDING)
         return min_x, max_x, min_y, ground_y
 
+    def _work_area(self):
+        """The primary screen minus the taskbar (a QRect, logical px): where the cursor can be grabbed."""
+        return QApplication.primaryScreen().availableGeometry()
+
     def _sync_window_position(self) -> None:
         """Move the real window to the float position (only if it changed)."""
         target = QPoint(round(self._x), round(self._y))
@@ -552,13 +854,17 @@ class DesktopPet(QWidget):
         """Original states always work (placeholder fallback); new ones need real sprites."""
         return state in ORIGINAL_STATES or self._bank.has_real_sprites(state)
 
-    def _play(self, state: str, loop: bool | None = None) -> None:
+    def _play(self, state: str, loop: bool | None = None, mirrored: bool = False) -> None:
         """Start playing `state` from its first frame.
 
-        loop=None -> looping for idle / walk_* / run_*, one-shot for everything else.
+        loop=None -> looping for idle / walk_* / run_* / airborne / hanging, one-shot for
+                     everything else.
+        mirrored  -> draw the horizontally mirrored copy of the art (only the jump art has one).
         """
         self.state = state
-        self._loop = (state in LOOPING_STATES + LOOPING_REST_STATES) if loop is None else loop
+        flipped = mirrored_key(state)
+        self._sprite_key = flipped if mirrored and flipped in self._bank.frames else state
+        self._loop = (state in LOOPING_STATES + LOOPING_REST_STATES + JUMP_STATES) if loop is None else loop
         interval = FRAME_INTERVAL_MS.get(state, ANIM_INTERVAL_MS)   # this state's frame speed
         if self._anim_timer.interval() != interval:                 # (setInterval restarts the timer)
             self._anim_timer.setInterval(interval)
@@ -577,13 +883,26 @@ class DesktopPet(QWidget):
 
     def _set_frame(self, index: int) -> None:
         """Show frame `index` of the current state (and update the click-through mask)."""
-        frames = self._bank.frames[self.state]
+        frames = self._bank.frames[self._sprite_key]
         self._frame_idx = min(index, len(frames) - 1)
         frame = frames[self._frame_idx]
         self._pixmap = frame.pixmap
         if CLICK_THROUGH_TRANSPARENT:
-            self.setMask(frame.mask)   # window shape = visible pixels -> clicks pass through
+            self.setMask(self._mask_for(frame))   # window shape = visible pixels -> clicks pass through
         self.update()
+
+    def _mask_for(self, frame: Frame) -> QRegion:
+        """Window shape for `frame`: its visible pixels.
+
+        With DEBUG_DRAW_HAND_ANCHOR the little box around the crosshair is added while she hangs,
+        otherwise the mask would clip the crosshair whenever the hands are on a transparent pixel.
+        """
+        if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:
+            hand_x, hand_y = self._hand_offset()
+            reach = DEBUG_CROSSHAIR_PX + 2
+            return frame.mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
+                                             2 * reach + 1, 2 * reach + 1))
+        return frame.mask
 
     def _advance_frame(self) -> None:
         """Animation timer (~5.5 FPS): step to the next frame / finish a one-shot."""
@@ -593,7 +912,7 @@ class DesktopPet(QWidget):
             self._bank.rebuild(dpr)
             self._set_frame(self._frame_idx)
 
-        count = len(self._bank.frames[self.state])
+        count = len(self._bank.frames[self._sprite_key])
         if count == 0:
             return
 
@@ -622,8 +941,9 @@ class DesktopPet(QWidget):
             self._finish_one_shot()
 
     def _finish_one_shot(self) -> None:
-        """A special animation ended: resume interrupted activity if any, else return to idle."""
-        if self._interrupted_state is not None:
+        """A special animation ended: resume previous activity or return to idle."""
+        # If interrupted by window switch, resume previous state
+        if self._interrupted_state:
             saved = self._interrupted_state
             self._interrupted_state = None
             self._phase = saved["phase"]
@@ -700,53 +1020,357 @@ class DesktopPet(QWidget):
         if self._phase is Phase.WALK:
             self._start_pause()
         elif self._phase is Phase.PAUSE:
-            if self._loop:                 # plain idle -> walk right away
-                self._start_walk()
+            if self._loop:                 # plain idle -> jump at the cursor (rarely), else walk right away
+                if not self._try_start_jump(self._cursor, MOVING_JUMP_CHANCE):
+                    self._start_walk()
             else:                          # a special is still playing -> let it finish first
                 self._pause_elapsed = True
-        # DRAG / FALL: the timer is stopped in those phases, nothing to do.
+        # DRAG / FALL / JUMP / HANG: the timer is stopped in those phases, nothing to do.
 
     # ---------------------------------------------------------------- movement
     def _tick_movement(self) -> None:
-        """Movement timer (~45 FPS): walking / running, turning at edges, gravity."""
+        """Movement timer (~45 FPS): walking / running, turning at edges, gravity, jump, hang."""
         now = time.perf_counter()
-        dt = min(now - self._last_tick, MAX_DT_S)   # real elapsed time -> constant speed
+        real_dt = now - self._last_tick
+        dt = min(real_dt, MAX_DT_S)                 # real elapsed time -> constant speed
         self._last_tick = now
-        if self._dragging or self._menu_open:       # held by the mouse / menu open: stand still
+        cursor = QCursor.pos()                      # THE cursor sample of this tick (no extra timer)
+        self._track_cursor(cursor, now, real_dt)
+        if self._dragging:                          # held by the mouse: stand still
+            return
+        if self._menu_open and self._phase is not Phase.FALL:
+            # Menu open: she stands still (and shows idle). A fall is the exception: the menu
+            # aborts a jump / hang into a fall, and she must not hang frozen in mid-air.
+            self._rest_while_menu_open()
             return
 
-        min_x, max_x, _min_y, ground_y = self._bounds()
+        bounds = self._bounds()
+        min_x, max_x, _min_y, ground_y = bounds
+
+        if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
+            self._tick_hang(cursor, now, dt, bounds)
+            self._sync_window_position()
+            return
 
         # Horizontal: walk / run, and turn around when an edge of the screen is reached.
-        velocity = MOVE_VELOCITY_PX_S.get(self.state)   # None while standing
-        if velocity is not None:
-            self._x += velocity * dt
-            if self._x <= min_x:
-                self._x = min_x
-                self._turn_around("right")
-            elif self._x >= max_x:
-                self._x = max_x
-                self._turn_around("left")
+        if self._phase is Phase.JUMP:
+            # A jump drifts at the sideways speed fixed at take-off - deliberately NOT looked
+            # up in MOVE_VELOCITY_PX_S by state name. The clamp below acts as the wall.
+            self._x += self._vx * dt
+        else:
+            velocity = MOVE_VELOCITY_PX_S.get(self.state)   # None while standing
+            if velocity is not None:
+                self._x += velocity * dt
+                if self._x <= min_x:
+                    self._x = min_x
+                    self._turn_around("right")
+                elif self._x >= max_x:
+                    self._x = max_x
+                    self._turn_around("left")
         self._x = min(max(self._x, min_x), max_x)   # never leave the screen (even if it shrank)
 
-        # Vertical: fall under gravity when above the ground, otherwise stick to it.
-        if self._y < ground_y - 0.01:
-            self._vy += GRAVITY_PX_S2 * dt
-            self._y = min(self._y + self._vy * dt, ground_y)
+        # Vertical: gravity rules only while falling or jumping (rise AND fall); in every
+        # other phase she simply stands on the ground, which also follows a moving taskbar.
+        if self._phase in (Phase.FALL, Phase.JUMP):
+            self._tick_airborne(cursor, now, dt, bounds)
         else:
-            self._y = ground_y                      # also follows a moving taskbar
-        landed = self._y >= ground_y
-        if landed:
+            self._y = ground_y
             self._vy = 0.0
-            if self._phase is Phase.FALL:           # just landed after being dropped
-                self._start_pause(roll_special=False)
 
         self._sync_window_position()
+
+        # Jump triggers - only ever from a standing WALK / PAUSE - or the armed debug-menu jump.
+        if self._debug_jump_at is not None and now >= self._debug_jump_at:
+            self._fire_debug_jump(cursor)
+        elif self._jump_enabled and self._phase in (Phase.WALK, Phase.PAUSE):
+            self._check_still_trigger(cursor, now)
 
     def _turn_around(self, heading: str) -> None:
         """The pet hit a screen edge: carry on ("left" / "right"), keeping walk / run mode."""
         next_state = f"{self.state.rsplit('_', 1)[0]}_{heading}"   # walk_left -> walk_right ...
         self._play(next_state)
+
+    # ------------------------------------------------- jump: cursor + geometry
+    def _track_cursor(self, cursor: QPoint, now: float, real_dt: float) -> None:
+        """Per-tick bookkeeping of the cursor sample: how long it has been still, how fast it moves.
+
+        Stillness is measured from an ANCHOR (where the cursor last really moved), not between
+        neighbouring samples, so a slow drift cannot creep under the dead zone for ever.
+        """
+        gap = math.hypot(cursor.x() - self._still_anchor.x(), cursor.y() - self._still_anchor.y())
+        if gap >= STILL_DEAD_ZONE_PX:                # it moved: the stillness clock restarts here
+            self._still_anchor = cursor
+            self._still_since = now
+        if JUMP_LEAD_TIME_S > 0.0 and real_dt > 0.0:   # the speed is only needed for the optional lead
+            blend = 1.0 - math.exp(-real_dt / max(JUMP_LEAD_SMOOTH_S, 0.001))
+            self._cursor_vx += ((cursor.x() - self._cursor.x()) / real_dt - self._cursor_vx) * blend
+            self._cursor_vy += ((cursor.y() - self._cursor.y()) / real_dt - self._cursor_vy) * blend
+        self._cursor = cursor
+
+    def _hang_mirrored(self) -> bool:
+        """Is the hanging art drawn mirrored for the current facing? (Never, if it is front-facing.)"""
+        return HANGING_ART_FACES != "none" and self._facing != HANGING_ART_FACES
+
+    def _airborne_mirrored(self) -> bool:
+        """Is the airborne art drawn mirrored? True when the jump heads the other way than the art looks."""
+        return self._facing != AIRBORNE_ART_FACES
+
+    def _hand_offset(self) -> tuple[float, float]:
+        """Where her hands are, in px from the window's top-left corner.
+
+        HAND_ANCHOR describes the hanging art as drawn; when that art is shown mirrored the
+        hands move to the other side of the square together with it.
+        """
+        frac_x, frac_y = HAND_ANCHOR
+        if self._hang_mirrored():
+            frac_x = 1.0 - frac_x
+        return frac_x * SPRITE_SIZE, frac_y * SPRITE_SIZE
+
+    def _required_rise(self, cursor: QPoint) -> float:
+        """How far her window must climb so that the hands reach `cursor` (negative: it is below).
+
+        = her current window y minus the window y that puts the hand anchor on the cursor.
+        A cursor too close to the ground to hang below gives a small or negative rise.
+        """
+        hand_y = self._hand_offset()[1]
+        return self._y - (cursor.y() - hand_y)
+
+    # ------------------------------------------------------ jump: the trigger
+    def _can_jump(self, cursor: QPoint) -> bool:
+        """Every gate of the trigger (the dice are rolled by the caller). Cheap checks come first.
+
+        feature on + cooldown over | phase WALK / PAUSE, plain looping animation, menu closed |
+        cursor on the work area | rise at least MIN_JUMP_RISE_PX | no mouse button held anywhere
+        """
+        if not self._jump_enabled or time.perf_counter() < self._jump_ready_at:
+            return False                             # sprites missing / cooldown still running
+        if self._phase not in (Phase.WALK, Phase.PAUSE) or self._menu_open:
+            return False                             # never in drag / fall / jump / hang, nor with the menu open
+        if self.state not in LOOPING_STATES:
+            return False                             # never in the middle of a one-shot special
+        if not self._work_area().contains(cursor):
+            return False                             # on the taskbar or on another monitor
+        if self._required_rise(cursor) < MIN_JUMP_RISE_PX:
+            return False                             # too low / too close to the ground to hang below
+        return not any_mouse_button_down()           # a held button = a drag or selection somewhere else
+
+    def _try_start_jump(self, cursor: QPoint, chance: float) -> bool:
+        """Both trigger paths end here: all gates must pass, then one roll of `chance`."""
+        if not self._can_jump(cursor) or random.random() >= chance:
+            return False
+        return self._begin_jump(cursor)
+
+    def _check_still_trigger(self, cursor: QPoint, now: float) -> None:
+        """STILL CURSOR (the main path): after STILL_TIME_S of stillness, one roll per check interval."""
+        if now - self._still_since < STILL_TIME_S or now < self._next_still_check_at:
+            return
+        self._next_still_check_at = now + STILL_CHECK_INTERVAL_S
+        self._try_start_jump(cursor, STILL_JUMP_CHANCE)
+
+    # -------------------------------------------------------- jump: the flight
+    def _aim_point(self, cursor: QPoint) -> tuple[float, float]:
+        """Where the hands should end up: the cursor, optionally led ahead by JUMP_LEAD_TIME_S.
+
+        Clamped to the work area, so a lead (or a debug jump) can never aim off the screen.
+        """
+        area = self._work_area()
+        x = cursor.x() + self._cursor_vx * JUMP_LEAD_TIME_S
+        y = cursor.y() + self._cursor_vy * JUMP_LEAD_TIME_S
+        return (min(max(x, area.left()), area.right()),
+                min(max(y, area.top()), area.bottom()))
+
+    def _begin_jump(self, cursor: QPoint) -> bool:
+        """Take off towards the cursor. The arc is worked out ONCE, here; nothing steers her later."""
+        min_x, max_x, _min_y, _ground_y = self._bounds()
+        aim_x, aim_y = self._aim_point(cursor)
+
+        # Heading -> which way the airborne art faces. About-zero distance keeps the last facing.
+        sideways = (aim_x - self._hand_offset()[0]) - self._x
+        if abs(sideways) > JUMP_FACING_DEAD_ZONE_PX:
+            self._facing = "right" if sideways > 0 else "left"
+
+        hand_x, hand_y = self._hand_offset()         # (the hands follow the mirroring of the art)
+        target_x = min(max(aim_x - hand_x, min_x), max_x)   # window position that puts the hands on the aim
+        required_rise = self._y - (aim_y - hand_y)
+        if required_rise < 1.0:                      # nothing to climb (also keeps the sqrt below real)
+            return False
+        rise = min(required_rise, MAX_JUMP_HEIGHT_PX)
+        launch_speed = math.sqrt(2.0 * JUMP_GRAVITY_PX_S2 * rise)
+        time_to_apex = launch_speed / JUMP_GRAVITY_PX_S2
+        drift = (target_x - self._x) / time_to_apex
+
+        self._jump_active = True                     # the cooldown starts when this sequence lands
+        self._phase = Phase.JUMP
+        self._brain_timer.stop()                     # no walk / pause timeout may fire mid-air
+        self._pause_elapsed = False
+        self._gravity = JUMP_GRAVITY_PX_S2
+        self._vy = -launch_speed                     # upward = negative
+        self._vx = max(-JUMP_MAX_HSPEED_PX_S, min(JUMP_MAX_HSPEED_PX_S, drift))
+        self._pending_reaction = None
+        self._shake_trail.clear()
+        self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        log.debug("Jump %s: rise %.0f px (asked %.0f), launch %.0f px/s, apex in %.2f s, "
+                  "drift %.0f px/s (asked %.0f)", self._facing, rise, required_rise, launch_speed,
+                  time_to_apex, self._vx, drift)
+        return True
+
+    def _tick_airborne(self, cursor: QPoint, now: float, dt: float,
+                       bounds: tuple[float, float, float, float]) -> None:
+        """One gravity step of a JUMP (rise, apex, fall after a miss) or of a FALL; ends on touchdown."""
+        _min_x, _max_x, min_y, ground_y = bounds
+        vy_before = self._vy
+        self._y += self._vy * dt + 0.5 * self._gravity * dt * dt
+        self._vy += self._gravity * dt
+
+        if self._y < min_y:                          # the top edge of the work area is a ceiling
+            self._y = min_y
+            self._vy = max(self._vy, 0.0)            # bumped her head: the rise ends here (= apex)
+
+        if self._phase is Phase.JUMP and vy_before < 0.0 <= self._vy:
+            self._resolve_apex(cursor, now)          # the vertical speed just crossed zero
+            if self._phase is Phase.HANG:
+                return
+
+        # Touch-down. NEVER while she is moving upward: a launch starts exactly ON the ground.
+        if self._vy >= 0.0 and self._y >= ground_y:
+            self._y = ground_y
+            self._touch_down()
+
+    def _resolve_apex(self, cursor: QPoint, now: float) -> None:
+        """Top of the arc: grab the cursor if her hands are close enough, otherwise it is a miss."""
+        hand_x, hand_y = self._hand_offset()
+        gap = math.hypot(cursor.x() - (self._x + hand_x), cursor.y() - (self._y + hand_y))
+        if gap <= GRAB_RADIUS_PX and self._can_hang_from(cursor):
+            log.debug("Apex: hands %.0f px from the cursor -> GRAB", gap)
+            self._begin_hang(now)
+        else:
+            log.debug("Apex: hands %.0f px from the cursor -> MISS", gap)
+            self._vx *= JUMP_MISS_HSPEED_KEEP        # (nearly) straight down from here
+            self._pending_reaction = MISS_REACTION   # played on touchdown
+
+    # -------------------------------------------------------- jump: the hang
+    def _can_hang_from(self, cursor: QPoint) -> bool:
+        """The cursor is on the work area and high enough for her to dangle below it."""
+        if not self._work_area().contains(cursor):
+            return False
+        ground_y = self._bounds()[3]
+        return cursor.y() - self._hand_offset()[1] < ground_y
+
+    def _begin_hang(self, now: float) -> None:
+        """She grabbed the cursor: stop falling, become click-through, start the hang timer."""
+        self._phase = Phase.HANG
+        self._vy = 0.0
+        self._vx = 0.0
+        self._hang_started_at = now
+        self._hang_ends_at = now + random.uniform(HANG_MIN_S, HANG_MAX_S)
+        self._shake_trail.clear()                    # only movement made while hanging may shake her off
+        self._set_input_transparent(True)
+        self._play(HANGING_STATE, mirrored=self._hang_mirrored())
+        log.debug("Hang: for %.1f s", self._hang_ends_at - now)
+
+    def _tick_hang(self, cursor: QPoint, now: float, dt: float,
+                   bounds: tuple[float, float, float, float]) -> None:
+        """Hang phase, one tick: look for a shake / the end of the hang, else follow the cursor."""
+        self._shake_trail.append((now, cursor.x(), cursor.y()))
+        while now - self._shake_trail[0][0] > SHAKE_WINDOW_S:
+            self._shake_trail.popleft()
+
+        if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
+            log.debug("Hang ended: shaken off")
+            self._fall_after_jump(SHAKEN_REACTION)
+            return
+        if now >= self._hang_ends_at or not self._can_hang_from(cursor):
+            log.debug("Hang ended: she let go (%s)",
+                      "time is up" if now >= self._hang_ends_at else "cursor left / too low")
+            self._fall_after_jump(RELEASE_REACTION)
+            return
+
+        min_x, max_x, min_y, ground_y = bounds
+        hand_x, hand_y = self._hand_offset()
+        goal_x = min(max(cursor.x() - hand_x, min_x), max_x)
+        goal_y = min(max(cursor.y() - hand_y, min_y), ground_y)
+        follow = 1.0 if HANG_FOLLOW_SMOOTH_S <= 0.0 else 1.0 - math.exp(-dt / HANG_FOLLOW_SMOOTH_S)
+        self._x += (goal_x - self._x) * follow
+        self._y += (goal_y - self._y) * follow
+
+    def _is_shaking(self) -> bool:
+        """The raw cursor path of the last SHAKE_WINDOW_S zig-zags on one axis but goes nowhere."""
+        if len(self._shake_trail) < 2:
+            return False
+        xs = [x for _t, x, _y in self._shake_trail]
+        ys = [y for _t, _x, y in self._shake_trail]
+        if math.hypot(xs[-1] - xs[0], ys[-1] - ys[0]) >= SHAKE_MAX_NET:
+            return False                             # she is being carried somewhere, not shaken
+        reversals = max(count_reversals(xs, SHAKE_MIN_SWING), count_reversals(ys, SHAKE_MIN_SWING))
+        return reversals >= SHAKE_REVERSALS
+
+    # ----------------------------------------------------- jump: ending it
+    def _begin_fall(self, gravity: float, reaction: str | None) -> None:
+        """Common start of every fall (drop, let-go, shake-off, menu abort)."""
+        self._leave_hang()                           # click-through off, shake history gone
+        self._phase = Phase.FALL
+        self._gravity = gravity
+        self._vy = 0.0
+        self._vx = 0.0
+        self._pending_reaction = reaction
+        self._last_tick = time.perf_counter()
+
+    def _fall_after_jump(self, reaction: str | None) -> None:
+        """A jump or hang ended in mid-air: fall with the airborne art, `reaction` on touchdown."""
+        self._begin_fall(JUMP_GRAVITY_PX_S2, reaction)
+        if self.state != AIRBORNE_STATE:             # coming from the hang
+            self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+
+    def _touch_down(self) -> None:
+        """She is back on the ground after a jump, a fall or a drop: play the pending reaction."""
+        reaction, self._pending_reaction = self._pending_reaction, None
+        self._vy = 0.0
+        self._vx = 0.0
+        if self._jump_active:
+            self._jump_active = False
+            cooldown = random.uniform(JUMP_COOLDOWN_MIN_S, JUMP_COOLDOWN_MAX_S)
+            self._jump_ready_at = time.perf_counter() + cooldown
+            log.debug("Touchdown: reaction %s, next jump possible in %.0f s", reaction, cooldown)
+        if reaction is not None and not self._can_play(reaction):
+            reaction = None
+        self._start_pause(roll_special=False, forced=reaction)
+
+    def _leave_hang(self) -> None:
+        """Undo what the hang set up: click-through off, shake history gone."""
+        self._set_input_transparent(False)
+        self._shake_trail.clear()
+
+    def _set_input_transparent(self, enabled: bool) -> None:
+        """Click-through for the whole window while she hangs, so clicks reach what is under the cursor."""
+        if enabled == self._input_transparent:
+            return
+        self._input_transparent = enabled
+        worked = set_window_input_transparent(self, enabled)
+        if enabled and not worked and not self._warned_no_click_through:
+            self._warned_no_click_through = True
+            log.warning("Click-through while hanging is not available here - clicks will hit the pet")
+
+    def _reset_jump_state(self) -> None:
+        """Forget everything about a jump in progress. Used by every cancel path: drag, quit ..."""
+        self._leave_hang()
+        self._pending_reaction = None
+        self._vx = 0.0
+        self._debug_jump_at = None
+
+    # ------------------------------------------------------- jump: debug aid
+    def _schedule_debug_jump(self) -> None:
+        """Debug menu: aim at wherever the cursor is DEBUG_JUMP_DELAY_S from now."""
+        self._debug_jump_at = time.perf_counter() + DEBUG_JUMP_DELAY_S
+        log.info("Debug jump armed: it aims at the cursor in %.1f s - park the pointer high above her",
+                 DEBUG_JUMP_DELAY_S)
+
+    def _fire_debug_jump(self, cursor: QPoint) -> None:
+        """Launch the armed debug jump: no trigger gates, no cooldown, no dice."""
+        self._debug_jump_at = None
+        if self._phase not in (Phase.WALK, Phase.PAUSE) or self._menu_open:
+            log.info("Debug jump skipped: the pet is busy")
+        elif not self._begin_jump(cursor):
+            log.info("Debug jump skipped: the cursor is not above her hands - move it higher")
 
     # ------------------------------------------------------------------- mouse
     def mousePressEvent(self, event) -> None:
@@ -780,6 +1404,10 @@ class DesktopPet(QWidget):
         self._press_global = None
         if self._dragging:
             self._end_drag()
+        elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
+            # A plain click in mid-air changes nothing: it must not turn the pet into a
+            # "shocked" pause and so overwrite the landing reaction that is waiting for her.
+            return
         else:
             if self.state == "angry":
                 # Already mad: keep her mad while clicks keep coming!
@@ -795,11 +1423,12 @@ class DesktopPet(QWidget):
             now = time.perf_counter()
             self._click_times = [t for t in self._click_times if now - t <= CLICK_ANGRY_WINDOW_S]
             self._click_times.append(now)
+
             if len(self._click_times) >= CLICK_ANGRY_COUNT and self._can_play("angry"):
-                self._click_times.clear()         # the next outburst needs fresh clicks
-                self._start_pause(forced="angry")
+                self._click_times.clear()
+                self._start_pause(roll_special=False, forced="angry")
             else:
-                self._start_pause(forced="shocked")
+                self._start_pause(roll_special=False, forced="shocked")
 
     def _begin_drag(self) -> None:
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""
@@ -808,37 +1437,63 @@ class DesktopPet(QWidget):
         self._interrupted_state = None            # drag overrides any pending resume state
         self._brain_timer.stop()
         self._pause_elapsed = False
-        self._vy = 0.0
-        self.setCursor(Qt.ClosedHandCursor)
+        self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
         self._play("shocked", loop=True)          # loop it for as long as it is held
+        self.setCursor(Qt.ClosedHandCursor)
 
     def _end_drag(self) -> None:
-        """The pet was dropped: fall to the taskbar (handled in _tick_movement)."""
+        """Drop the pet: it will fall back to the taskbar under gravity."""
         self._dragging = False
-        self._phase = Phase.FALL
-        self._vy = 0.0
-        self._last_tick = time.perf_counter()
         self.setCursor(Qt.OpenHandCursor)
+        reaction = None
+        if (self._jump_enabled and DROP_REACTION
+                and self._bounds()[3] - self._y >= DROP_REACTION_MIN_HEIGHT_PX):
+            reaction = DROP_REACTION
+        self._begin_fall(GRAVITY_PX_S2, reaction)
 
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
+        if self._phase in (Phase.JUMP, Phase.HANG):
+            # Opening the menu aborts a jump / hang into a plain fall, with no reaction.
+            self._fall_after_jump(None)
         menu = QMenu(self)
+        jump_action = None
+        if DEBUG_JUMP_MENU and self._jump_enabled:
+            jump_action = menu.addAction("Jump to cursor")
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
             chosen = menu.exec_(event.globalPos())
         finally:
             self._menu_open = False
+            self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
+        elif jump_action is not None and chosen is jump_action:
+            self._schedule_debug_jump()
+
+    def _rest_while_menu_open(self) -> None:
+        """The menu is open and she stands still, so show idle instead of a walking animation."""
+        if self.state in MOVE_VELOCITY_PX_S:
+            self._walk_before_menu = self.state
+            self._play("idle")
+
+    def _resume_walk_after_menu(self) -> None:
+        """The menu is closed: bring the walk / run animation back - if she is still on that walk."""
+        walk, self._walk_before_menu = self._walk_before_menu, None
+        if walk is not None and self._phase is Phase.WALK and self.state == "idle":
+            self._play(walk)
 
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
-        if self._dragging or self._menu_open:
+        if self._dragging or self._menu_open or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
             return
 
-        hwnd = user32.GetForegroundWindow()
+        dll = _user32()
+        if dll is None:
+            return
+        hwnd = dll.GetForegroundWindow()
         if not hwnd or hwnd == int(self.winId()):
             return
 
@@ -852,13 +1507,16 @@ class DesktopPet(QWidget):
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
         """Evaluate the newly focused window after it has composited."""
-        if self._dragging or self._menu_open:
+        if self._dragging or self._menu_open or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
+            return
+        dll = _user32()
+        if dll is None:
             return
         # If user already moved to another window, skip
-        if user32.GetForegroundWindow() != target_hwnd:
+        if dll.GetForegroundWindow() != target_hwnd:
             return
 
-        is_maximized = bool(user32.IsZoomed(target_hwnd))
+        is_maximized = bool(dll.IsZoomed(target_hwnd))
         curr_lum = sample_screen_luminance()
         self._last_luminance = curr_lum
 
@@ -911,6 +1569,7 @@ class DesktopPet(QWidget):
             timers.append(self._window_timer)
         for timer in timers:
             timer.stop()
+        self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()
 
@@ -926,7 +1585,18 @@ class DesktopPet(QWidget):
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         if self._pixmap is not None:
             painter.drawPixmap(0, 0, self._pixmap)   # pixmap carries its own device ratio
+        if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:
+            self._paint_hand_crosshair(painter)
         painter.end()
+
+    def _paint_hand_crosshair(self, painter: QPainter) -> None:
+        """Debug aid: mark HAND_ANCHOR (where the hands must be in the hanging art) with a crosshair."""
+        hand_x, hand_y = self._hand_offset()
+        reach = DEBUG_CROSSHAIR_PX
+        for color, width in ((QColor(0, 0, 0), 3), (QColor(255, 0, 255), 1)):
+            painter.setPen(QPen(color, width))
+            painter.drawLine(QPointF(hand_x - reach, hand_y), QPointF(hand_x + reach, hand_y))
+            painter.drawLine(QPointF(hand_x, hand_y - reach), QPointF(hand_x, hand_y + reach))
 
 
 # =============================================================================
@@ -934,17 +1604,20 @@ class DesktopPet(QWidget):
 # =============================================================================
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    level = logging.DEBUG if (DEBUG_JUMP_MENU or DEBUG_DRAW_HAND_ANCHOR) else logging.INFO
+    logging.basicConfig(level=level, format="[%(levelname)s] %(message)s")
     signal.signal(signal.SIGINT, signal.SIG_DFL)   # Ctrl+C in the console quits immediately
 
+    check_jump_config()                            # typos in "left" / "right" fail here, readably
     configure_high_dpi()                           # must happen BEFORE QApplication()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)           # we quit explicitly from the menu
 
-    # Sprites are rendered for the primary screen's scale factor (re-rendered if it changes).
-    bank = SpriteBank(SPRITES_DIR, app.primaryScreen().devicePixelRatio())
+    sprites_dir = SPRITES_DIR
+    bank = SpriteBank(sprites_dir, app.primaryScreen().devicePixelRatio())
     pet = DesktopPet(bank)
     pet.start()
+
     return app.exec_()
 
 
