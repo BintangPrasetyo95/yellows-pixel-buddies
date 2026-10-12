@@ -19,6 +19,7 @@
   - **Multi-click (Anger)**: Clicking 3 times within 2 seconds makes the pet angry (`angry` reaction). Continuing to click or spam her keeps her in the angry state; once clicking stops, she finishes her angry animation loop and calms down to `idle`.
   - **Left-click + drag**: Pick up and carry the pet around your screen (pet loops `shocked` while held). Release to watch gravity pull it back to the taskbar.
   - **Right-click**: Opens a context menu with **Exit**.
+- **System Tray & Hidden Icons Menu**: Automatically lives in your Windows taskbar notification area / "Hidden icons" menu (`^`). Right-click the tray icon to toggle **Start with Windows**, **Bring to Taskbar**, or cleanly **Exit**.
 - **Transparent & Click-Through**: Fully transparent background. Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
 - **High-DPI Ready**: Scales crisply across different monitor scaling factors (100%, 125%, 150%, 200%) using nearest-neighbor sampling for crisp pixel art.
 - **Maximized App & Flashbang Reactions**:
@@ -58,10 +59,54 @@
    pip install PyQt5
    ```
 
-4. Run the desktop pet:
+4. Run Yellow's Pixel Buddies:
    ```bash
-   python desktop_pet.py
+   python yellows_pixel_buddies.py
    ```
+
+### 📦 Building a Standalone Executable (.exe)
+
+You can build Yellow's Pixel Buddies into an independent Windows `.exe` using [PyInstaller](https://pyinstaller.org/) so it can run without installing Python or opening a terminal.
+
+1. **Install PyInstaller**:
+   ```bash
+   pip install pyinstaller
+   ```
+
+2. **Build the executable**:
+
+   - **Option A: Self-contained single file (Sprites bundled inside)**  
+     Produces a single portable executable with all sprites and icon embedded:
+     ```bash
+     python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" --add-data "sprites;sprites" --add-data "app_icon.ico;." yellows_pixel_buddies.py
+     ```
+     The finished `.exe` will be located in the `dist/` directory:
+     ```text
+     dist/Yellows-Pixel-Buddies.exe
+     ```
+
+   - **Option B: Moddable `.exe` (External `sprites/` folder)**  
+     If you want to easily customize or drop new PNGs into `sprites/` without recompiling:
+     ```bash
+     python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" yellows_pixel_buddies.py
+     ```
+     After building, copy the `sprites/` folder and `app_icon.ico` directly into `dist/` next to `Yellows-Pixel-Buddies.exe`:
+     ```text
+     dist/
+     ├── Yellows-Pixel-Buddies.exe
+     ├── app_icon.ico
+     └── sprites/
+     ```
+
+> [!TIP]
+> - **Fast Rebuilds with `.spec`**: Once built, a `Yellows-Pixel-Buddies.spec` file is generated. You can quickly rebuild anytime without typing all flags again:
+>   ```bash
+>   python -m PyInstaller Yellows-Pixel-Buddies.spec
+>   ```
+> - **Command Not Recognized Fix**: If PowerShell gives `The term 'pyinstaller' is not recognized...`, use `python -m PyInstaller` instead of `pyinstaller`. This happens when Python's `Scripts` directory (especially with Microsoft Store Python installations) is not added to your system `PATH`.
+> - `--noconsole` (or `-w`): Runs silently in the background without popping up a black console window.
+> - `--onefile` (or `-F`): Packages Python and PyQt5 runtime into a single executable file.
+> - `--icon "app_icon.ico"`: Sets the custom pixel buddy icon on the executable.
 
 ---
 
@@ -93,14 +138,14 @@ sprites/
 ```
 
 > [!TIP]
-> - **Walk Mirroring**: If you only have right-facing sprites for walking, set `MIRROR_WALK_RIGHT_FOR_LEFT = True` in `desktop_pet.py` to automatically mirror `walk_right`.
+> - **Walk Mirroring**: If you only have right-facing sprites for walking, set `MIRROR_WALK_RIGHT_FOR_LEFT = True` in `yellows_pixel_buddies.py` to automatically mirror `walk_right`.
 > - **Run Mirroring**: Similarly, set `MIRROR_RUN_RIGHT_FOR_LEFT = True` to automatically mirror `run_right` for `run_left`.
 
 ---
 
 ## ⚙️ Configuration & Customization
 
-All tunable settings live at the top of [`desktop_pet.py`](desktop_pet.py) under **`1. CONFIGURATION`**:
+All tunable settings live at the top of [`yellows_pixel_buddies.py`](yellows_pixel_buddies.py) under **`1. CONFIGURATION`**:
 
 ### Pixel Art & Sharpness
 ```python
@@ -191,6 +236,7 @@ SWITCH_BURNT_COOLDOWN_S = 5.0      # Cooldown in seconds for flashbang burnt (ha
 ## 🛑 How to Exit
 
 - **Right-click** on the pet and select **Exit**.
+- **Right-click** the icon in your taskbar's **Hidden icons (`^`)** menu and select **Exit**.
 - Or terminate the process in your terminal with `Ctrl + C`.
 
 ---
