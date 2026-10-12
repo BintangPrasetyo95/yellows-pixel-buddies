@@ -152,6 +152,10 @@ FRAME_INTERVAL_MS = {
     # "idle": 250,
     # "laughing": 100,
 }
+EXPLOSION_SCALE = 3.0             # scale factor for the explosion VFX (6x bigger than the subject)
+EXPLOSION_SIZE = int(SPRITE_SIZE * EXPLOSION_SCALE)  # logical px size of the explosion effect (768 px)
+EXPLOSION_FRAME_INTERVAL_MS = 60  # sprite frame advance for foreground explosion VFX (~16.6 FPS)
+EXPLOSION_BASELINE_RATIO = 75.5 / 100.0  # fraction of sprite height where the explosion meets the ground
 MOVE_INTERVAL_MS = 22             # movement update        (~45 FPS)
 WALK_MIN_S, WALK_MAX_S = 3.0, 8.0     # one walk lasts a random time in this range
 PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0   # one pause lasts a random time in this range
@@ -177,7 +181,7 @@ CLICK_ANGRY_COUNT = 3             # this many left-clicks ...
 CLICK_ANGRY_WINDOW_S = 2.0        # ... within this many seconds make the pet angry
 LAST_FRAME_HOLD_MS = {
     # one-shots that freeze on their last frame for a while
-    "burnt": 2500,
+    "burnt": 3500,
     "peace_sign": 2000,
     "sad": 2000,
     "shocked": 1000,
@@ -223,8 +227,15 @@ BURNT_STATE = "burnt"                                                # one-shot 
 AIRBORNE_STATE = "airborne"               # jump to the cursor: the flight and every fall after it
 HANGING_STATE = "hanging"                 # jump to the cursor: dangling from the cursor
 JUMP_STATES = (AIRBORNE_STATE, HANGING_STATE)    # both loop; the feature needs real PNGs for BOTH
+EFFECT_STATES = ("explosion",)            # one-shot foreground VFX overlays
+EFFECT_SIZES = {
+    "explosion": EXPLOSION_SIZE,
+}
+EFFECT_GROUND_RATIO = {
+    "explosion": EXPLOSION_BASELINE_RATIO,
+}
 ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
-              + (BURNT_STATE,) + JUMP_STATES)
+              + (BURNT_STATE,) + JUMP_STATES + EFFECT_STATES)
 
 # The original states always work (placeholder fallback). Every other ("new") state is only
 # used when its sprites/<state>/ folder holds real PNGs - see SpriteBank.has_real_sprites().
@@ -251,6 +262,7 @@ PLACEHOLDER_COLORS = {
     "tongue": "#F1948A", "kneeling": "#F5B041", "behind": "#A569BD",
     "wistful_walk_left": "#9FA8DA", "wistful_walk_right": "#7986CB",
     "airborne": "#85C1E9", "hanging": "#F5B7B1",
+    "explosion": "#FF5722",
 }
 
 
@@ -288,6 +300,9 @@ MAX_JUMP_HEIGHT_PX = 700.0        # the highest rise she can manage ("as high as
                                   # cursors are missed on purpose
 JUMP_MAX_HSPEED_PX_S = 900.0      # fastest sideways speed in the air; farther cursors are missed
 JUMP_MISS_HSPEED_KEEP = 1.0       # share of sideways speed kept after a miss (1.0 = continue natural parabolic arc; 0 = stop dead and drop)
+JUMP_WALL_BOUNCE_FACTOR = 0.70    # share of sideways speed kept on wall bounce (reverses horizontal direction)
+JUMP_WALL_MIN_BOUNCE_PX_S = 180.0 # minimum horizontal bounce speed away from the wall (px/s)
+JUMP_WALL_V_DAMPING = 0.85        # vertical speed factor on wall impact while rising (simulates wall friction)
 JUMP_LEAD_TIME_S = 0.0            # aim this far AHEAD of a moving cursor (0.0 = aim where it is now)
 JUMP_LEAD_SMOOTH_S = 0.10         # the cursor speed used for that lead is averaged over about this long
 JUMP_FACING_DEAD_ZONE_PX = 6.0    # a sideways distance below this keeps the last facing
@@ -309,9 +324,9 @@ SHAKE_GRACE_S = 0.5               # shakes are ignored this long after she grabb
 # Landing reactions. They are played through _start_pause(forced=...) when she touches down, so the
 # existing LAST_FRAME_HOLD_MS / SPECIAL_REPEAT_COUNT entries (peace_sign hold, laughing repeats) apply.
 MISS_REACTION = BURNT_STATE       # the jump missed the cursor
-RELEASE_REACTION = "peace_sign"   # she let go of the cursor herself (timeout, cursor left / too low)
+RELEASE_REACTION = "tongue"       # she let go of the cursor herself (timeout, cursor left / too low)
 SHAKEN_REACTION = "laughing"      # she was shaken off
-DROP_REACTION = "peace_sign"      # dragged and dropped (only while the jump feature is enabled; None = none)
+DROP_REACTION = "tongue"          # dragged and dropped (only while the jump feature is enabled; None = none)
 DROP_REACTION_MIN_HEIGHT_PX = 0   # ... only when dropped at least this high above the ground (0 = always)
 
 # Debug aids (leave False for normal use). Either flag also switches the log to DEBUG, which
@@ -733,9 +748,10 @@ class SpriteBank:
 
     def rebuild(self, dpr: float) -> None:
         """(Re)render all frames for a display scale factor (1.0, 1.25, 1.5, 2.0 ...)."""
-        physical = max(1, round(SPRITE_SIZE * dpr))   # canvas size in device pixels
-        exact_dpr = physical / SPRITE_SIZE            # makes pixmap logical size == SPRITE_SIZE
         for state, images in self._sources.items():
+            logical_size = EFFECT_SIZES.get(state, SPRITE_SIZE)
+            physical = max(1, round(logical_size * dpr))   # canvas size in device pixels
+            exact_dpr = physical / logical_size            # makes pixmap logical size == logical_size
             built = []
             for img in images:
                 canvas = fit_into_canvas(img, physical)
@@ -744,8 +760,8 @@ class SpriteBank:
 
                 # Window masks are expressed in logical px, so derive the mask from a
                 # logical-size canvas (identical to `canvas` when dpr == 1).
-                logical_canvas = canvas if physical == SPRITE_SIZE \
-                    else fit_into_canvas(img, SPRITE_SIZE)
+                logical_canvas = canvas if physical == logical_size \
+                    else fit_into_canvas(img, logical_size)
                 region = QRegion(QPixmap.fromImage(logical_canvas).mask())  # alpha > 0 pixels
                 if region.isEmpty():                 # an empty mask would mean "no mask"
                     region = QRegion(0, 0, 1, 1)
@@ -766,6 +782,56 @@ class Phase(Enum):
     FALL = auto()    # dropped / let go, falling back to the taskbar
     JUMP = auto()    # leaping at the cursor: the rise, and the fall after a miss
     HANG = auto()    # hanging from the cursor (no gravity, no walking)
+
+
+class VfxOverlay(QWidget):
+    """A frameless, translucent, click-through overlay window for large visual effects."""
+
+    def __init__(self) -> None:
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
+                         | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setFixedSize(EXPLOSION_SIZE, EXPLOSION_SIZE)
+        self._pixmap: QPixmap | None = None
+
+    def show_frame(self, pixmap: QPixmap, bottom_center_x: float, bottom_y: float,
+                   ground_ratio: float = 1.0) -> None:
+        """Position and show a frame centered horizontally above the given bottom anchor."""
+        self._pixmap = pixmap
+        dpr = pixmap.devicePixelRatio() if pixmap.devicePixelRatio() > 0 else 1.0
+        w = round(pixmap.width() / dpr)
+        h = round(pixmap.height() / dpr)
+        if self.width() != w or self.height() != h:
+            self.setFixedSize(w, h)
+        target_x = round(bottom_center_x - w / 2.0)
+        baseline_y = round(h * ground_ratio)
+        target_y = round(bottom_y - baseline_y)
+        target_pos = QPoint(target_x, target_y)
+        if self.pos() != target_pos:
+            self.move(target_pos)
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        set_window_input_transparent(self, True)
+        self.update()
+
+    def dismiss(self) -> None:
+        """Hide and clear the overlay."""
+        self._pixmap = None
+        if self.isVisible():
+            self.hide()
+
+    def paintEvent(self, event) -> None:
+        if self._pixmap is None:
+            return
+        painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.drawPixmap(0, 0, self._pixmap)
+        painter.end()
 
 
 class YellowsPixelBuddies(QWidget):
@@ -799,6 +865,12 @@ class YellowsPixelBuddies(QWidget):
         self._sub_loop_count = 0             # repeats remaining for the sub-loop
         self._pixmap: QPixmap | None = None
 
+        # --- overlay effect state (e.g. explosion in front) -------------------
+        self._overlay_state: str | None = None
+        self._overlay_frame_idx = 0
+        self._overlay_pixmap: QPixmap | None = None
+        self._vfx_overlay = VfxOverlay()
+
         # --- behaviour state ---------------------------------------------------
         self._phase = Phase.PAUSE
         self._pause_elapsed = False          # pause timer fired while a special still plays
@@ -827,6 +899,8 @@ class YellowsPixelBuddies(QWidget):
         self._vx = 0.0                       # sideways speed of a jump in px/s (+ = right), set at take-off
         self._facing = AIRBORNE_ART_FACES    # heading of the last jump ("left" / "right")
         self._pending_reaction: str | None = None   # played on touchdown; decided when the fall begins
+        self._wall_bounced = False           # True if she bounced off a screen wall during this jump
+        self._can_catch_cursor = False       # True during a jump until she catches the cursor
         self._hang_started_at = 0.0          # perf_counter() time of the grab
         self._hang_ends_at = 0.0             # ... and when she lets go on her own
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
@@ -855,6 +929,10 @@ class YellowsPixelBuddies(QWidget):
         self._brain_timer = QTimer(self)           # one-shot: ends the current walk / pause
         self._brain_timer.setSingleShot(True)
         self._brain_timer.timeout.connect(self._on_brain_timeout)
+
+        self._overlay_timer = QTimer(self)         # foreground VFX overlay frame advance (explosion, etc.)
+        self._overlay_timer.setInterval(EXPLOSION_FRAME_INTERVAL_MS)
+        self._overlay_timer.timeout.connect(self._advance_overlay_frame)
 
         # --- window switch monitoring ------------------------------------------
         self._last_foreground_hwnd: int | None = None
@@ -921,6 +999,8 @@ class YellowsPixelBuddies(QWidget):
         target = QPoint(round(self._x), round(self._y))
         if target != self.pos():
             self.move(target)
+        if hasattr(self, "_vfx_overlay") and self._overlay_state is not None and self._overlay_pixmap is not None:
+            self._show_overlay_frame(self._overlay_pixmap)
 
     # -------------------------------------------------------------- animation
     def _can_play(self, state: str) -> bool:
@@ -934,6 +1014,9 @@ class YellowsPixelBuddies(QWidget):
                      everything else.
         mirrored  -> draw the horizontally mirrored copy of the art (only the jump art has one).
         """
+        if state not in (BURNT_STATE, "burnt"):
+            self._stop_overlay()
+
         self.state = state
         flipped = mirrored_key(state)
         self._sprite_key = flipped if mirrored and flipped in self._bank.frames else state
@@ -954,6 +1037,9 @@ class YellowsPixelBuddies(QWidget):
             self._sub_loop_count = 0
         self._set_frame(0)
 
+        if state in (BURNT_STATE, "burnt") and "explosion" in self._bank.frames and self._overlay_state != "explosion":
+            self._start_overlay("explosion")
+
     def _set_frame(self, index: int) -> None:
         """Show frame `index` of the current state (and update the click-through mask)."""
         frames = self._bank.frames[self._sprite_key]
@@ -964,18 +1050,24 @@ class YellowsPixelBuddies(QWidget):
             self.setMask(self._mask_for(frame))   # window shape = visible pixels -> clicks pass through
         self.update()
 
+        # Trigger explosion whenever the burnt sprite shows up
+        if self._sprite_key in (BURNT_STATE, "burnt") and self._overlay_state != "explosion":
+            if "explosion" in self._bank.frames:
+                self._start_overlay("explosion")
+
     def _mask_for(self, frame: Frame) -> QRegion:
         """Window shape for `frame`: its visible pixels.
 
         With DEBUG_DRAW_HAND_ANCHOR the little box around the crosshair is added while she hangs,
         otherwise the mask would clip the crosshair whenever the hands are on a transparent pixel.
         """
+        mask = frame.mask
         if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:
             hand_x, hand_y = self._hand_offset()
             reach = DEBUG_CROSSHAIR_PX + 2
-            return frame.mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
-                                             2 * reach + 1, 2 * reach + 1))
-        return frame.mask
+            return mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
+                                       2 * reach + 1, 2 * reach + 1))
+        return mask
 
     def _advance_frame(self) -> None:
         """Animation timer (~5.5 FPS): step to the next frame / finish a one-shot."""
@@ -984,6 +1076,10 @@ class YellowsPixelBuddies(QWidget):
         if abs(dpr - self._bank.dpr) > 0.01:
             self._bank.rebuild(dpr)
             self._set_frame(self._frame_idx)
+            if self._overlay_state:
+                ov_frames = self._bank.frames.get(self._overlay_state, [])
+                if ov_frames and self._overlay_frame_idx < len(ov_frames):
+                    self._show_overlay_frame(ov_frames[self._overlay_frame_idx].pixmap)
 
         count = len(self._bank.frames[self._sprite_key])
         if count == 0:
@@ -1030,6 +1126,49 @@ class YellowsPixelBuddies(QWidget):
             # (so the return to idle is visible), then _on_brain_timeout starts the walk.
             self._pause_elapsed = False
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+
+    # -------------------------------------------------------- overlay / vfx
+    def _show_overlay_frame(self, pixmap: QPixmap) -> None:
+        """Position and draw the VFX overlay centered above the buddy's feet with matching floor."""
+        center_x = self._x + SPRITE_SIZE / 2.0
+        bottom_y = self._y + SPRITE_SIZE - FOOT_PADDING
+        ground_ratio = EFFECT_GROUND_RATIO.get(self._overlay_state, 1.0)
+        self._vfx_overlay.show_frame(pixmap, center_x, bottom_y, ground_ratio=ground_ratio)
+
+    def _start_overlay(self, effect: str) -> None:
+        """Start playing a one-shot foreground VFX animation."""
+        frames = self._bank.frames.get(effect, [])
+        if not frames:
+            return
+        self._overlay_state = effect
+        self._overlay_frame_idx = 0
+        frame = frames[0]
+        self._overlay_pixmap = frame.pixmap
+        self._overlay_timer.start(EXPLOSION_FRAME_INTERVAL_MS)
+        self._show_overlay_frame(frame.pixmap)
+
+    def _advance_overlay_frame(self) -> None:
+        """Advance the foreground effect or stop when complete."""
+        if not self._overlay_state:
+            return
+        frames = self._bank.frames.get(self._overlay_state, [])
+        if self._overlay_frame_idx + 1 < len(frames):
+            self._overlay_frame_idx += 1
+            frame = frames[self._overlay_frame_idx]
+            self._overlay_pixmap = frame.pixmap
+            self._show_overlay_frame(frame.pixmap)
+        else:
+            self._stop_overlay()
+
+    def _stop_overlay(self) -> None:
+        """Clear overlay and dismiss VFX window."""
+        if self._overlay_state is None and self._overlay_pixmap is None:
+            return
+        self._overlay_timer.stop()
+        self._overlay_state = None
+        self._overlay_pixmap = None
+        if hasattr(self, "_vfx_overlay"):
+            self._vfx_overlay.dismiss()
 
     # --------------------------------------------------------------- behaviour
     def _start_walk(self) -> None:
@@ -1126,10 +1265,16 @@ class YellowsPixelBuddies(QWidget):
             return
 
         # Horizontal: walk / run, and turn around when an edge of the screen is reached.
-        if self._phase is Phase.JUMP:
+        if self._phase in (Phase.JUMP, Phase.FALL):
             # A jump drifts at the sideways speed fixed at take-off - deliberately NOT looked
-            # up in MOVE_VELOCITY_PX_S by state name. The clamp below acts as the wall.
+            # up in MOVE_VELOCITY_PX_S by state name.
             self._x += self._vx * dt
+            if self._x <= min_x and self._vx < 0.0:
+                self._x = min_x
+                self._bounce_from_wall("left")
+            elif self._x >= max_x and self._vx > 0.0:
+                self._x = max_x
+                self._bounce_from_wall("right")
         else:
             velocity = MOVE_VELOCITY_PX_S.get(self.state)   # None while standing
             if velocity is not None:
@@ -1280,6 +1425,8 @@ class YellowsPixelBuddies(QWidget):
         self._vy = -launch_speed                     # upward = negative
         self._vx = max(-JUMP_MAX_HSPEED_PX_S, min(JUMP_MAX_HSPEED_PX_S, drift))
         self._pending_reaction = None
+        self._wall_bounced = False
+        self._can_catch_cursor = True
         self._shake_trail.clear()
         self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
         log.debug("Jump %s: rise %.0f px (asked %.0f), launch %.0f px/s, apex in %.2f s, "
@@ -1299,10 +1446,14 @@ class YellowsPixelBuddies(QWidget):
             self._y = min_y
             self._vy = max(self._vy, 0.0)            # bumped her head: the rise ends here (= apex)
 
+        # Catch the cursor whenever she touches the mouse while airborne (before she has caught it)
+        if self._can_catch_cursor and self._touches_cursor(cursor) and self._can_hang_from(cursor):
+            log.debug("Airborne grab: touched mouse -> GRAB")
+            self._begin_hang(now)
+            return
+
         if self._phase is Phase.JUMP and vy_before < 0.0 <= self._vy:
             self._resolve_apex(cursor, now)          # the vertical speed just crossed zero
-            if self._phase is Phase.HANG:
-                return
 
         # Touch-down. NEVER while she is moving upward: a launch starts exactly ON the ground.
         if self._vy >= 0.0 and self._y >= ground_y:
@@ -1310,18 +1461,59 @@ class YellowsPixelBuddies(QWidget):
             self._touch_down()
 
     def _resolve_apex(self, cursor: QPoint, now: float) -> None:
-        """Top of the arc: grab the cursor if her hands are close enough, otherwise it is a miss."""
-        hand_x, hand_y = self._hand_offset()
-        gap = math.hypot(cursor.x() - (self._x + hand_x), cursor.y() - (self._y + hand_y))
-        if gap <= GRAB_RADIUS_PX and self._can_hang_from(cursor):
-            log.debug("Apex: hands %.0f px from the cursor -> GRAB", gap)
-            self._begin_hang(now)
+        """Top of the arc: reached apex without grab -> continue with miss reaction."""
+        log.debug("Apex: top of arc -> MISS%s",
+                  " (wall bounce)" if self._wall_bounced else "")
+        self._vx *= JUMP_MISS_HSPEED_KEEP        # (nearly) straight down from here
+        self._pending_reaction = MISS_REACTION   # played on touchdown
+
+    def _update_airborne_facing(self) -> None:
+        """Update sprite mirroring and mask to match the current heading while airborne."""
+        flipped = mirrored_key(AIRBORNE_STATE)
+        self._sprite_key = flipped if self._airborne_mirrored() and flipped in self._bank.frames else AIRBORNE_STATE
+        if self._sprite_key in self._bank.frames:
+            frames = self._bank.frames[self._sprite_key]
+            if frames:
+                self._frame_idx = min(self._frame_idx, len(frames) - 1)
+                frame = frames[self._frame_idx]
+                self._pixmap = frame.pixmap
+                if CLICK_THROUGH_TRANSPARENT:
+                    self.setMask(self._mask_for(frame))
+                self.update()
+
+    def _bounce_from_wall(self, side: str) -> None:
+        """Bounce off a screen border during a jump or fall."""
+        self._wall_bounced = True
+        self._pending_reaction = MISS_REACTION   # hitting a wall guarantees a miss reaction on touchdown
+
+        bounce_speed = min(JUMP_MAX_HSPEED_PX_S,
+                           max(abs(self._vx) * JUMP_WALL_BOUNCE_FACTOR, JUMP_WALL_MIN_BOUNCE_PX_S))
+
+        if side == "left":
+            self._vx = bounce_speed
+            self._facing = "right"
         else:
-            log.debug("Apex: hands %.0f px from the cursor -> MISS", gap)
-            self._vx *= JUMP_MISS_HSPEED_KEEP        # (nearly) straight down from here
-            self._pending_reaction = MISS_REACTION   # played on touchdown
+            self._vx = -bounce_speed
+            self._facing = "left"
+
+        if self._vy < 0.0:
+            self._vy *= JUMP_WALL_V_DAMPING
+
+        self._update_airborne_facing()
+        log.debug("Wall bounce: %s wall, bounced %s with vx=%.0f px/s",
+                  side, self._facing, self._vx)
 
     # -------------------------------------------------------- jump: the hang
+    def _touches_cursor(self, cursor: QPoint) -> bool:
+        """True if the cursor touches the pet's sprite or is within reach of her hands."""
+        hand_x, hand_y = self._hand_offset()
+        gap_hands = math.hypot(cursor.x() - (self._x + hand_x), cursor.y() - (self._y + hand_y))
+        if gap_hands <= GRAB_RADIUS_PX:
+            return True
+        margin = 4.0
+        return (self._x - margin <= cursor.x() <= self._x + SPRITE_SIZE + margin
+                and self._y - margin <= cursor.y() <= self._y + SPRITE_SIZE + margin)
+
     def _can_hang_from(self, cursor: QPoint) -> bool:
         """The cursor is on the work area and high enough for her to dangle below it."""
         if not self._work_area().contains(cursor):
@@ -1334,6 +1526,9 @@ class YellowsPixelBuddies(QWidget):
         self._phase = Phase.HANG
         self._vy = 0.0
         self._vx = 0.0
+        self._pending_reaction = None
+        self._wall_bounced = False
+        self._can_catch_cursor = False
         self._hang_started_at = now
         self._hang_ends_at = now + random.uniform(HANG_MIN_S, HANG_MAX_S)
         self._shake_trail.clear()                    # only movement made while hanging may shake her off
@@ -1386,6 +1581,7 @@ class YellowsPixelBuddies(QWidget):
         self._vy = 0.0
         self._vx = 0.0
         self._pending_reaction = reaction
+        self._can_catch_cursor = False
         self._last_tick = time.perf_counter()
 
     def _fall_after_jump(self, reaction: str | None) -> None:
@@ -1399,6 +1595,7 @@ class YellowsPixelBuddies(QWidget):
         reaction, self._pending_reaction = self._pending_reaction, None
         self._vy = 0.0
         self._vx = 0.0
+        self._can_catch_cursor = False
         if self._jump_active:
             self._jump_active = False
             cooldown = random.uniform(JUMP_COOLDOWN_MIN_S, JUMP_COOLDOWN_MAX_S)
@@ -1425,9 +1622,12 @@ class YellowsPixelBuddies(QWidget):
 
     def _reset_jump_state(self) -> None:
         """Forget everything about a jump in progress. Used by every cancel path: drag, quit ..."""
+        self._stop_overlay()
         self._leave_hang()
         self._pending_reaction = None
         self._vx = 0.0
+        self._wall_bounced = False
+        self._can_catch_cursor = False
         self._debug_jump_at = None
 
     # ------------------------------------------------------- jump: debug aid
@@ -1701,11 +1901,14 @@ class YellowsPixelBuddies(QWidget):
         """Stop everything and leave the application."""
         if hasattr(self, "_tray_icon") and self._tray_icon is not None:
             self._tray_icon.hide()
-        timers = [self._anim_timer, self._move_timer, self._brain_timer]
+        timers = [self._anim_timer, self._move_timer, self._brain_timer, self._overlay_timer]
         if hasattr(self, "_window_timer"):
             timers.append(self._window_timer)
         for timer in timers:
             timer.stop()
+        self._stop_overlay()
+        if hasattr(self, "_vfx_overlay"):
+            self._vfx_overlay.close()
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()
