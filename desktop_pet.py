@@ -116,7 +116,7 @@ SPECIAL_WEIGHTS = {
     # relative odds of each special / looping rest when one is rolled (never the same twice in a row)
     "laughing": 3, "shocked": 2, "singing": 2, "peace_sign": 3,
     "embarrassed": 2, "overjoyed": 2, "wistful": 2, "sad": 1,
-    "crying": 1, "tongue": 2, "kneeling": 2,
+    "crying": 1, "tongue": 2, "kneeling": 2, "behind": 2,
 }
 RUN_CHANCE = 0.25                 # chance that a new walk is a run instead
 WISTFUL_WALK_CHANCE = 0.25        # chance that a new walk is a slower wistful walk
@@ -130,8 +130,9 @@ LAST_FRAME_HOLD_MS = {
     "shocked": 1000,
     "wistful": 3000,
     "embarrassed": 2000,
-    "tongue": 1500,               # hold tongue pose for 1000 ms
-    "kneeling": 15000,            # hold kneeling pose for 10000 ms (10 s)
+    "tongue": 1500,               # hold tongue pose
+    "kneeling": 15000,            # hold kneeling pose
+    "behind": 5000,               # hold looking behind pose for 5000 ms (5 s)
 }
 FRAME_SUB_LOOPS = {
     # Sub-frame loops for states with an intro (1-based frame numbers matching 1.png, 2.png...):
@@ -162,7 +163,7 @@ LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
 LOOPING_REST_STATES = ()                  # loops for the whole pause; picked like a special
 SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign",
                   "embarrassed", "overjoyed", "wistful", "sad",
-                  "crying", "tongue", "kneeling")                    # one-shot -> idle
+                  "crying", "tongue", "kneeling", "behind")           # one-shot -> idle
 REACTION_STATES = ("angry",)              # one-shot -> idle; triggered, never random
 BURNT_STATE = "burnt"                                                # one-shot (+hold) -> idle
 ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
@@ -190,7 +191,7 @@ PLACEHOLDER_COLORS = {
     "embarrassed": "#FF9FCB", "overjoyed": "#D4E157", "wistful": "#9FA8DA",
     "sad": "#4A78B5", "crying": "#00BCD4",
     "angry": "#E74C3C",
-    "tongue": "#F1948A", "kneeling": "#F5B041",
+    "tongue": "#F1948A", "kneeling": "#F5B041", "behind": "#A569BD",
     "wistful_walk_left": "#9FA8DA", "wistful_walk_right": "#7986CB",
 }
 
