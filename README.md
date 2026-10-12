@@ -11,8 +11,8 @@
 
 - **Taskbar Companion**: Automatically detects the Windows taskbar, walks back and forth, and occasionally sprints (`run_left`, `run_right`). Automatically turns around at screen edges and follows resized or moved taskbars.
 - **Rich Emotion & Animation States**:
-  - **Movement**: `walk_left`, `walk_right`, `run_left`, `run_right`.
-  - **Idle & Specials**: `idle`, `laughing`, `singing`, `peace_sign`, `embarrassed`, `overjoyed`, `wistful`, `sad`, `crying`.
+  - **Movement**: `walk_left`, `walk_right`, `run_left`, `run_right`, `wistful_walk_left`, `wistful_walk_right`.
+  - **Idle & Specials**: `idle`, `laughing`, `singing`, `peace_sign`, `embarrassed`, `overjoyed`, `wistful`, `sad`, `crying`, `tongue`, `kneeling`.
   - **Special Events**: Rare `burnt` crisp event during resting pauses.
 - **Interactive Mouse Controls**:
   - **Left-click**: Startles the pet (triggers `shocked` reaction).
@@ -21,6 +21,10 @@
   - **Right-click**: Opens a context menu with **Exit**.
 - **Transparent & Click-Through**: Fully transparent background. Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
 - **High-DPI Ready**: Scales crisply across different monitor scaling factors (100%, 125%, 150%, 200%) using nearest-neighbor sampling for crisp pixel art.
+- **Maximized App & Flashbang Reactions**:
+  - Switching to any maximized app startles the pet (`shocked`, 30s cooldown).
+  - Switching from a dark app into a dominant white/light maximized app crisps her like a flashbang (`burnt`, no cooldown).
+  - Automatically pauses whatever she was doing (walking, running, or resting), plays the reaction, and immediately resumes her prior activity once finished.
 - **Modular & Extensible Sprites**:
   - Original core states feature built-in procedural animated placeholders if sprite folders are missing.
   - New emotion states are loaded dynamically whenever PNG files are placed in their folders, with status logged cleanly on startup.
@@ -131,7 +135,7 @@ BURNT_CHANCE = 0.03                   # 3% chance a rest triggers the rare 'burn
 SPECIAL_WEIGHTS = {
     "laughing": 3, "shocked": 2, "singing": 2, "peace_sign": 3,
     "embarrassed": 2, "overjoyed": 2, "wistful": 2, "sad": 1,
-    "crying": 1,
+    "crying": 1, "tongue": 2, "kneeling": 2,
 }
 
 # Milliseconds to freeze on the final frame of pose animations
@@ -139,6 +143,8 @@ LAST_FRAME_HOLD_MS = {
     "burnt": 2500,
     "peace_sign": 1000,
     "sad": 2000,
+    "tongue": 1000,     # Hold tongue for 1000 ms
+    "kneeling": 10000,  # Hold kneeling for 10000 ms (10 s)
 }
 
 # Sub-frame loops for states with an intro (1-based frame numbers: 1.png -> 1)
@@ -158,6 +164,16 @@ SPECIAL_REPEAT_COUNT = {
 ```python
 CLICK_ANGRY_COUNT = 3         # Number of left-clicks needed...
 CLICK_ANGRY_WINDOW_S = 2.0    # ...within this many seconds to trigger 'angry'
+```
+
+### Window Switch & Flashbang Reactions
+```python
+REACT_ON_MAXIMIZED_APP = True      # React when switching to a maximized app
+REACT_POLL_INTERVAL_MS = 200       # Check active window every 200 ms
+DARK_LUMINANCE_THRESHOLD = 85.0    # Screen brightness <= 85 is "dark"
+LIGHT_LUMINANCE_THRESHOLD = 160.0  # Screen brightness >= 160 is "dominant white/light"
+WINDOW_SWITCH_SETTLE_MS = 120      # Wait 120 ms for window to composite before sampling
+SWITCH_SHOCK_COOLDOWN_S = 30.0     # Cooldown in seconds for shock (burnt has NO cooldown)
 ```
 
 ---

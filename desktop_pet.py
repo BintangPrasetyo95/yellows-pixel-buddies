@@ -37,6 +37,8 @@ Behaviour
     Right-click : context menu with "Exit"
 """
 
+import ctypes
+from ctypes import wintypes
 import logging
 import math
 import random
@@ -51,6 +53,8 @@ from pathlib import Path
 from PyQt5.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
 from PyQt5.QtGui import QColor, QFont, QImage, QPainter, QPen, QPixmap, QRegion
 from PyQt5.QtWidgets import QApplication, QMenu, QWidget
+
+user32 = ctypes.windll.user32
 
 
 # =============================================================================
@@ -87,9 +91,12 @@ PLACEHOLDER_FRAME_COUNT = 10   # frames generated for each state with no sprite 
 
 # --- Timing ------------------------------------------------------------------
 ANIM_INTERVAL_MS = 180            # sprite frame advance   (~5.5 FPS)
+WISTFUL_FRAME_INTERVAL_MS = 500   # sprite frame advance for wistful walk (slow, lingering steps)
 FRAME_INTERVAL_MS = {
     # per-state frame advance in ms; overrides ANIM_INTERVAL_MS for that state only
     "run_left": 120, "run_right": 120,
+    "wistful_walk_left": WISTFUL_FRAME_INTERVAL_MS,
+    "wistful_walk_right": WISTFUL_FRAME_INTERVAL_MS,
     # "idle": 250,
     # "laughing": 100,
 }
@@ -98,6 +105,7 @@ WALK_MIN_S, WALK_MAX_S = 3.0, 8.0     # one walk lasts a random time in this ran
 PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0   # one pause lasts a random time in this range
 WALK_SPEED_PX_S = 60.0            # walking speed, logical px per second
 RUN_SPEED_PX_S = 140.0            # running speed, logical px per second
+WISTFUL_WALK_SPEED_PX_S = 30.0    # wistful walk speed, logical px per second (slower than normal walk)
 GRAVITY_PX_S2 = 2400.0            # fall acceleration after the pet is dropped
 MAX_DT_S = 0.1                    # clamp one movement step (e.g. after the PC wakes from sleep)
 
@@ -108,9 +116,10 @@ SPECIAL_WEIGHTS = {
     # relative odds of each special / looping rest when one is rolled (never the same twice in a row)
     "laughing": 3, "shocked": 2, "singing": 2, "peace_sign": 3,
     "embarrassed": 2, "overjoyed": 2, "wistful": 2, "sad": 1,
-    "crying": 1,
+    "crying": 1, "tongue": 2, "kneeling": 2,
 }
 RUN_CHANCE = 0.25                 # chance that a new walk is a run instead
+WISTFUL_WALK_CHANCE = 0.25        # chance that a new walk is a slower wistful walk
 CLICK_ANGRY_COUNT = 3             # this many left-clicks ...
 CLICK_ANGRY_WINDOW_S = 2.0        # ... within this many seconds make the pet angry
 LAST_FRAME_HOLD_MS = {
@@ -120,7 +129,9 @@ LAST_FRAME_HOLD_MS = {
     "sad": 2000,
     "shocked": 1000,
     "wistful": 3000,
-    "embarrassed": 2000
+    "embarrassed": 2000,
+    "tongue": 1000,               # hold tongue pose for 1000 ms
+    "kneeling": 10000,            # hold kneeling pose for 10000 ms (10 s)
 }
 FRAME_SUB_LOOPS = {
     # Sub-frame loops for states with an intro (1-based frame numbers matching 1.png, 2.png...):
@@ -136,12 +147,21 @@ SPECIAL_REPEAT_COUNT = {
 }
 AFTER_SPECIAL_REST_MS = 1000        # idle time after a special that outlasted its pause, before walking on
 
+# --- Window Switch Reactions ------------------------------------------------
+REACT_ON_MAXIMIZED_APP = True         # react when switching to a maximized app
+REACT_POLL_INTERVAL_MS = 200          # check active window every 200 ms
+DARK_LUMINANCE_THRESHOLD = 85.0       # average screen luminance <= 85 is "dark"
+LIGHT_LUMINANCE_THRESHOLD = 160.0     # average screen luminance >= 160 is "dominant white/light"
+WINDOW_SWITCH_SETTLE_MS = 120         # ms to wait for the window to composite before sampling
+SWITCH_SHOCK_COOLDOWN_S = 30.0        # cooldown in seconds for window switch shock (burnt has NO cooldown)
+
 # --- Animation states --------------------------------------------------------
-LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right")   # repeat forever
+LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
+                  "wistful_walk_left", "wistful_walk_right")   # repeat forever
 LOOPING_REST_STATES = ()                  # loops for the whole pause; picked like a special
 SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign",
                   "embarrassed", "overjoyed", "wistful", "sad",
-                  "crying")                                          # one-shot -> idle
+                  "crying", "tongue", "kneeling")                    # one-shot -> idle
 REACTION_STATES = ("angry",)              # one-shot -> idle; triggered, never random
 BURNT_STATE = "burnt"                                                # one-shot (+hold) -> idle
 ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
@@ -157,6 +177,7 @@ NEW_STATES = tuple(s for s in ALL_STATES if s not in ORIGINAL_STATES)
 MOVE_VELOCITY_PX_S = {
     "walk_left": -WALK_SPEED_PX_S, "walk_right": WALK_SPEED_PX_S,
     "run_left": -RUN_SPEED_PX_S, "run_right": RUN_SPEED_PX_S,
+    "wistful_walk_left": -WISTFUL_WALK_SPEED_PX_S, "wistful_walk_right": WISTFUL_WALK_SPEED_PX_S,
 }
 
 # Body colour of the generated placeholder for each state.
@@ -168,6 +189,8 @@ PLACEHOLDER_COLORS = {
     "embarrassed": "#FF9FCB", "overjoyed": "#D4E157", "wistful": "#9FA8DA",
     "sad": "#4A78B5", "crying": "#00BCD4",
     "angry": "#E74C3C",
+    "tongue": "#F1948A", "kneeling": "#F5B041",
+    "wistful_walk_left": "#9FA8DA", "wistful_walk_right": "#7986CB",
 }
 
 log = logging.getLogger("desktop_pet")
@@ -206,6 +229,24 @@ def configure_high_dpi() -> None:
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     except AttributeError:
         pass   # older PyQt5: integer scaling only, still works
+
+
+def sample_screen_luminance() -> float:
+    """Take a downscaled screen capture and return average perceived luminance (0-255)."""
+    screen = QApplication.primaryScreen()
+    if not screen:
+        return 128.0
+    pix = screen.grabWindow(0)
+    if pix.isNull():
+        return 128.0
+    # Downscale to 16x16 using fast transformation for quick sampling (<15ms)
+    small = pix.scaled(16, 16, Qt.IgnoreAspectRatio, Qt.FastTransformation).toImage()
+    total_lum = 0.0
+    for y in range(16):
+        for x in range(16):
+            c = small.pixelColor(x, y)
+            total_lum += 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+    return total_lum / 256.0
 
 
 # =============================================================================
@@ -298,6 +339,8 @@ class SpriteBank:
                 continue   # derived from walk_right below
             if state == "run_left" and MIRROR_RUN_RIGHT_FOR_LEFT:
                 continue   # derived from run_right below
+            if state in ("wistful_walk_left", "wistful_walk_right"):
+                continue   # derived from wistful below
             images = self._load_state(sprites_dir, state)
             if images:
                 self._sources[state] = images
@@ -308,6 +351,14 @@ class SpriteBank:
             self._sources["run_left"] = [img.mirrored(True, False)    # flip horizontally
                                          for img in self._sources["run_right"]]
             self._real.add("run_left")   # real exactly when run_right is
+        if "wistful" in self._sources:
+            # Sourced from sprites/wistful: left-facing by default, right-facing is horizontally mirrored
+            w_imgs = self._sources["wistful"]
+            self._sources["wistful_walk_left"] = [img.copy() for img in w_imgs]
+            self._sources["wistful_walk_right"] = [img.mirrored(True, False) for img in w_imgs]
+            if self.has_real_sprites("wistful"):
+                self._real.add("wistful_walk_left")
+                self._real.add("wistful_walk_right")
 
         # One startup line: which new states have sprites and which will never be used.
         found = [s for s in NEW_STATES if self.has_real_sprites(s)]
@@ -439,6 +490,17 @@ class DesktopPet(QWidget):
         self._brain_timer.setSingleShot(True)
         self._brain_timer.timeout.connect(self._on_brain_timeout)
 
+        # --- window switch monitoring ------------------------------------------
+        self._last_foreground_hwnd: int | None = None
+        self._last_luminance: float = 128.0
+        self._last_switch_shock_time: float = -9999.0   # allows immediate shock on first switch
+        self._interrupted_state: dict | None = None     # saves activity to resume after reaction
+
+        if REACT_ON_MAXIMIZED_APP:
+            self._window_timer = QTimer(self)
+            self._window_timer.setInterval(REACT_POLL_INTERVAL_MS)
+            self._window_timer.timeout.connect(self._check_foreground_window)
+
     # ------------------------------------------------------------------ start
     def start(self) -> None:
         """Place the pet on the taskbar, show it and start all timers."""
@@ -451,6 +513,14 @@ class DesktopPet(QWidget):
         self._last_tick = time.perf_counter()
         self._anim_timer.start()
         self._move_timer.start()
+
+        if REACT_ON_MAXIMIZED_APP:
+            fg = user32.GetForegroundWindow()
+            if fg and fg != int(self.winId()):
+                self._last_foreground_hwnd = fg
+                self._last_luminance = sample_screen_luminance()
+            self._window_timer.start()
+
         self._start_pause()                        # begin with a rest, then walk
 
     # --------------------------------------------------------------- geometry
@@ -549,7 +619,15 @@ class DesktopPet(QWidget):
             self._finish_one_shot()
 
     def _finish_one_shot(self) -> None:
-        """A special animation ended: always return to idle."""
+        """A special animation ended: resume interrupted activity if any, else return to idle."""
+        if self._interrupted_state is not None:
+            saved = self._interrupted_state
+            self._interrupted_state = None
+            self._phase = saved["phase"]
+            self._play(saved["state"], loop=saved["loop"])
+            self._brain_timer.start(saved["rem_ms"])
+            return
+
         self._play("idle")
         if self._phase is Phase.PAUSE and self._pause_elapsed:
             # The pause ran out while the special was still playing: rest briefly in idle
@@ -559,11 +637,26 @@ class DesktopPet(QWidget):
 
     # --------------------------------------------------------------- behaviour
     def _start_walk(self) -> None:
-        """Walk for 3-8 s in a random direction (a run instead, with RUN_CHANCE)."""
+        """Walk for 3-8 s in a random direction (run or wistful walk by chance)."""
         self._phase = Phase.WALK
         self._pause_elapsed = False
         can_run = self._can_play("run_left") and self._can_play("run_right")
-        gait = "run" if can_run and random.random() < RUN_CHANCE else "walk"
+        can_wistful = self._can_play("wistful_walk_left") and self._can_play("wistful_walk_right")
+
+        choices = ["walk"]
+        weights = [1.0]
+        if can_run:
+            choices.append("run")
+            weights.append(RUN_CHANCE)
+            weights[0] -= RUN_CHANCE
+        if can_wistful:
+            choices.append("wistful_walk")
+            weights.append(WISTFUL_WALK_CHANCE)
+            weights[0] -= WISTFUL_WALK_CHANCE
+
+        weights[0] = max(0.1, weights[0])
+        gait = random.choices(choices, weights=weights)[0]
+
         self._play(f"{gait}_{random.choice(('left', 'right'))}")
         self._brain_timer.start(random_ms(WALK_MIN_S, WALK_MAX_S))
 
@@ -694,8 +787,8 @@ class DesktopPet(QWidget):
                 self._pause_elapsed = False
                 return
 
-            # A plain left-click startles the pet; CLICK_ANGRY_COUNT clicks within
-            # CLICK_ANGRY_WINDOW_S seconds make it angry instead.
+            # Direct mouse click overrides any background resume state
+            self._interrupted_state = None
             now = time.perf_counter()
             self._click_times = [t for t in self._click_times if now - t <= CLICK_ANGRY_WINDOW_S]
             self._click_times.append(now)
@@ -709,6 +802,7 @@ class DesktopPet(QWidget):
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""
         self._dragging = True
         self._phase = Phase.DRAG
+        self._interrupted_state = None            # drag overrides any pending resume state
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._vy = 0.0
@@ -735,9 +829,78 @@ class DesktopPet(QWidget):
         if chosen is exit_action:
             self._quit()
 
+    # ------------------------------------------------------- window reactions
+    def _check_foreground_window(self) -> None:
+        """Poll foreground window to detect switches to maximized apps."""
+        if self._dragging or self._menu_open:
+            return
+
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd or hwnd == int(self.winId()):
+            return
+
+        if hwnd != self._last_foreground_hwnd:
+            self._last_foreground_hwnd = hwnd
+            prev_lum = self._last_luminance
+
+            # Give DWM time to finish drawing the new window before sampling luminance
+            QTimer.singleShot(WINDOW_SWITCH_SETTLE_MS,
+                              lambda h=hwnd, pl=prev_lum: self._handle_window_switch(h, pl))
+
+    def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
+        """Evaluate the newly focused window after it has composited."""
+        if self._dragging or self._menu_open:
+            return
+        # If user already moved to another window, skip
+        if user32.GetForegroundWindow() != target_hwnd:
+            return
+
+        is_maximized = bool(user32.IsZoomed(target_hwnd))
+        curr_lum = sample_screen_luminance()
+        self._last_luminance = curr_lum
+
+        if not is_maximized:
+            return
+
+        # Do not interrupt anger if clicks are currently spamming
+        if self.state == "angry" and self._repeat_count > 0:
+            return
+
+        # Flashbang check: switched from dark to dominant white/light (NO cooldown)
+        if prev_lum <= DARK_LUMINANCE_THRESHOLD and curr_lum >= LIGHT_LUMINANCE_THRESHOLD:
+            log.info("Flashbang! Switched from dark (%.1f) to bright maximized app (%.1f) -> burnt",
+                     prev_lum, curr_lum)
+            self._interrupt_with_reaction("burnt")
+        else:
+            now = time.perf_counter()
+            if now - self._last_switch_shock_time < SWITCH_SHOCK_COOLDOWN_S:
+                log.info("Switched to maximized app, but shocked is on cooldown (%.1fs remaining)",
+                         SWITCH_SHOCK_COOLDOWN_S - (now - self._last_switch_shock_time))
+                return
+            self._last_switch_shock_time = now
+            log.info("Switched to maximized app -> shocked")
+            self._interrupt_with_reaction("shocked")
+
+    def _interrupt_with_reaction(self, reaction: str) -> None:
+        """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
+        if self._interrupted_state is None:
+            rem_ms = max(500, self._brain_timer.remainingTime()) if self._brain_timer.isActive() else 2500
+            self._interrupted_state = {
+                "phase": self._phase,
+                "state": self.state,
+                "rem_ms": rem_ms,
+                "loop": self._loop,
+            }
+        self._brain_timer.stop()
+        self._pause_elapsed = False
+        self._play(reaction)
+
     def _quit(self) -> None:
         """Stop everything and leave the application."""
-        for timer in (self._anim_timer, self._move_timer, self._brain_timer):
+        timers = [self._anim_timer, self._move_timer, self._brain_timer]
+        if hasattr(self, "_window_timer"):
+            timers.append(self._window_timer)
+        for timer in timers:
             timer.stop()
         self.hide()
         QApplication.quit()
