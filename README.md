@@ -12,7 +12,7 @@
 - **Taskbar Companion**: Automatically detects the Windows taskbar, walks back and forth, and occasionally sprints (`run_left`, `run_right`). Automatically turns around at screen edges and follows resized or moved taskbars.
 - **Rich Emotion & Animation States**:
   - **Movement**: `walk_left`, `walk_right`, `run_left`, `run_right`, `wistful_walk_left`, `wistful_walk_right`.
-  - **Idle & Specials**: `idle`, `laughing`, `singing`, `peace_sign`, `embarrassed`, `overjoyed`, `wistful`, `sad`, `crying`, `tongue`, `kneeling`.
+  - **Idle & Specials**: `idle`, `laughing`, `singing`, `peace_sign`, `embarrassed`, `overjoyed`, `wistful`, `sad`, `crying`, `tongue`, `kneeling`, `behind`.
   - **Special Events**: Rare `burnt` crisp event during resting pauses.
 - **Interactive Mouse Controls**:
   - **Left-click**: Startles the pet (triggers `shocked` reaction).
@@ -77,6 +77,7 @@ sprites/
 ├── run_left/      # Fast running left
 ├── run_right/     # Fast running right
 ├── angry/         # Triggered by rapid left-clicks (3 clicks within 2s)
+├── behind/        # Looking behind (held for 5s)
 ├── crying/        # Tearful sadness (intro in frames 1-2, loops frames 3 & 4, outro frame 5)
 ├── embarrassed/   # Blushing shy reaction
 ├── kneeling/      # Kneeling resting pose (held for 10s)
@@ -142,7 +143,7 @@ BURNT_CHANCE = 0.03                   # 3% chance a rest triggers the rare 'burn
 SPECIAL_WEIGHTS = {
     "laughing": 3, "shocked": 2, "singing": 2, "peace_sign": 3,
     "embarrassed": 2, "overjoyed": 2, "wistful": 2, "sad": 1,
-    "crying": 1, "tongue": 2, "kneeling": 2,
+    "crying": 1, "tongue": 2, "kneeling": 2, "behind": 2,
 }
 
 # Milliseconds to freeze on the final frame of pose animations
@@ -152,6 +153,7 @@ LAST_FRAME_HOLD_MS = {
     "sad": 2000,
     "tongue": 1000,     # Hold tongue for 1000 ms
     "kneeling": 10000,  # Hold kneeling for 10000 ms (10 s)
+    "behind": 5000,     # Hold looking behind for 5000 ms (5 s)
 }
 
 # Sub-frame loops for states with an intro (1-based frame numbers: 1.png -> 1)
