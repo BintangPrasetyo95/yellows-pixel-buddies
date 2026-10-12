@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-desktop_pet.py - a Shimeji-style desktop pet that walks along the Windows taskbar.
+yellows_pixel_buddies.py - Yellow's Pixel Buddies, an animated desktop pet companion that walks along the Windows taskbar.
 
 Platform     : Windows 10 / 11
 Python       : 3.10+
@@ -86,21 +86,35 @@ import math
 from pathlib import Path
 import random
 import re
+import shutil
 import signal
 import sys
 import time
+import winreg
 
 from PyQt5.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
-from PyQt5.QtGui import QColor, QCursor, QFont, QImage, QPainter, QPen, QPixmap, QRegion
-from PyQt5.QtWidgets import QApplication, QMenu, QWidget
+from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QPixmap, QRegion
+from PyQt5.QtWidgets import QAction, QApplication, QMenu, QSystemTrayIcon, QWidget
 
 
 # =============================================================================
 #  1. CONFIGURATION - every tunable value lives here
 # =============================================================================
 
-# --- Sprites -----------------------------------------------------------------
-SPRITES_DIR = Path(__file__).resolve().parent / "sprites"   # sprites/<state>/N.png
+# --- Paths & Sprites ---------------------------------------------------------
+if getattr(sys, "frozen", False):
+    # Running inside a PyInstaller .exe bundle
+    _exe_dir = Path(sys.executable).resolve().parent
+    if (_exe_dir / "sprites").exists():
+        SPRITES_DIR = _exe_dir / "sprites"
+    else:
+        SPRITES_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "sprites"
+    _base_dir = Path(getattr(sys, "_MEIPASS", _exe_dir))
+else:
+    SPRITES_DIR = Path(__file__).resolve().parent / "sprites"   # sprites/<state>/N.png
+    _base_dir = Path(__file__).resolve().parent
+
+ICON_PATH = _base_dir / "app_icon.ico"
 
 # On-screen size in *logical* pixels. The window is exactly SPRITE_SIZE x SPRITE_SIZE.
 # PNGs of any size are scaled to fit (aspect ratio kept, anchored bottom-centre).
@@ -309,12 +323,64 @@ DEBUG_JUMP_MENU = False           # add "Jump to cursor" to the right-click menu
 DEBUG_JUMP_DELAY_S = 2.0          # ... and aims at the cursor this long AFTER you pick it, so you have
                                   # time to park the pointer somewhere high first (0 = immediately)
 
-log = logging.getLogger("desktop_pet")
+# --- Windows Startup ---------------------------------------------------------
+STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+STARTUP_APP_NAME = "YellowsPixelBuddies"
+
+log = logging.getLogger("yellows_pixel_buddies")
 
 
 # =============================================================================
 #  2. SMALL HELPERS
 # =============================================================================
+
+def is_run_at_startup_enabled() -> bool:
+    """Check if the application is set to run at Windows logon in HKCU\\...\\Run."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, STARTUP_APP_NAME)
+            return bool(val)
+    except FileNotFoundError:
+        return False
+    except OSError as err:
+        log.debug("Error reading startup registry key: %s", err)
+        return False
+
+
+def get_startup_command() -> str:
+    """Format the appropriate command string to launch the app on Windows startup."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    script_path = Path(__file__).resolve()
+    exe_path = Path(sys.executable)
+    pythonw_candidate = exe_path.with_name("pythonw.exe")
+    if pythonw_candidate.exists():
+        python_bin = str(pythonw_candidate)
+    else:
+        pw = shutil.which("pythonw")
+        python_bin = pw if pw else sys.executable
+    return f'"{python_bin}" "{script_path}"'
+
+
+def set_run_at_startup(enable: bool) -> bool:
+    """Add or remove the app from Windows startup (HKCU\\...\\Run)."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            if enable:
+                cmd = get_startup_command()
+                winreg.SetValueEx(key, STARTUP_APP_NAME, 0, winreg.REG_SZ, cmd)
+                log.info("Enabled Run at Startup: %s", cmd)
+            else:
+                try:
+                    winreg.DeleteValue(key, STARTUP_APP_NAME)
+                    log.info("Disabled Run at Startup")
+                except FileNotFoundError:
+                    pass
+        return True
+    except OSError as err:
+        log.warning("Failed to update Run at Startup registry entry: %s", err)
+        return False
+
 
 def natural_sort_key(path: Path) -> list:
     """Sort key giving numeric order: 1, 2, ..., 9, 10 (a plain sort gives 1, 10, 2)."""
@@ -702,7 +768,7 @@ class Phase(Enum):
     HANG = auto()    # hanging from the cursor (no gravity, no walking)
 
 
-class DesktopPet(QWidget):
+class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
     def __init__(self, bank: SpriteBank) -> None:
@@ -716,7 +782,9 @@ class DesktopPet(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)   # don't grab focus when shown
         self.setFixedSize(SPRITE_SIZE, SPRITE_SIZE)            # window == one sprite
         self.setCursor(Qt.OpenHandCursor)
-        self.setWindowTitle("Desktop Pet")
+        self.setWindowTitle("Yellow's Pixel Buddies")
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
 
         self._bank = bank
 
@@ -799,6 +867,11 @@ class DesktopPet(QWidget):
             self._window_timer = QTimer(self)
             self._window_timer.setInterval(REACT_POLL_INTERVAL_MS)
             self._window_timer.timeout.connect(self._check_foreground_window)
+
+        # --- system tray icon (hidden icons menu on taskbar) ------------------
+        self._tray_icon: QSystemTrayIcon | None = None
+        self._startup_action: QAction | None = None
+        self._init_tray_icon()
 
     # ------------------------------------------------------------------ start
     def start(self) -> None:
@@ -1562,8 +1635,72 @@ class DesktopPet(QWidget):
         self._pause_elapsed = False
         self._play(reaction)
 
+    # -------------------------------------------------------- system tray icon
+    def _init_tray_icon(self) -> None:
+        """Create an icon in the Windows taskbar notification area / hidden icons menu."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        self._tray_icon = QSystemTrayIcon(self)
+        if ICON_PATH.exists():
+            self._tray_icon.setIcon(QIcon(str(ICON_PATH)))
+        else:
+            self._tray_icon.setIcon(self.windowIcon())
+        self._tray_icon.setToolTip("Yellow's Pixel Buddies")
+
+        tray_menu = QMenu()
+        title_action = tray_menu.addAction("Yellow's Pixel Buddies 🐾")
+        title_action.setEnabled(False)
+        tray_menu.addSeparator()
+
+        self._startup_action = tray_menu.addAction("Start with Windows")
+        self._startup_action.setCheckable(True)
+        self._startup_action.setChecked(is_run_at_startup_enabled())
+        self._startup_action.toggled.connect(self._toggle_run_at_startup)
+
+        tray_menu.addSeparator()
+        reset_action = tray_menu.addAction("Bring to Taskbar")
+        reset_action.triggered.connect(self._reset_to_taskbar)
+
+        tray_menu.addSeparator()
+        exit_action = tray_menu.addAction("Exit")
+        exit_action.triggered.connect(self._quit)
+
+        tray_menu.aboutToShow.connect(self._sync_startup_action_state)
+
+        self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.show()
+
+    def _sync_startup_action_state(self) -> None:
+        """Sync checkmark with actual registry state right before displaying the menu."""
+        if self._startup_action is not None:
+            self._startup_action.blockSignals(True)
+            self._startup_action.setChecked(is_run_at_startup_enabled())
+            self._startup_action.blockSignals(False)
+
+    def _toggle_run_at_startup(self, checked: bool) -> None:
+        """Callback when user toggles 'Start with Windows'."""
+        ok = set_run_at_startup(checked)
+        if not ok and self._startup_action is not None:
+            self._startup_action.blockSignals(True)
+            self._startup_action.setChecked(not checked)
+            self._startup_action.blockSignals(False)
+
+    def _reset_to_taskbar(self) -> None:
+        """Emergency reset: place the pet safely back on the primary taskbar."""
+        self._reset_jump_state()
+        min_x, max_x, _min_y, ground_y = self._bounds()
+        self._x = float((min_x + max_x) // 2)
+        self._y = float(ground_y)
+        self._sync_window_position()
+        self.show()
+        self.raise_()
+        self._start_pause(roll_special=False)
+
     def _quit(self) -> None:
         """Stop everything and leave the application."""
+        if hasattr(self, "_tray_icon") and self._tray_icon is not None:
+            self._tray_icon.hide()
         timers = [self._anim_timer, self._move_timer, self._brain_timer]
         if hasattr(self, "_window_timer"):
             timers.append(self._window_timer)
@@ -1599,6 +1736,9 @@ class DesktopPet(QWidget):
             painter.drawLine(QPointF(hand_x, hand_y - reach), QPointF(hand_x, hand_y + reach))
 
 
+DesktopPet = YellowsPixelBuddies  # backward compatibility alias
+
+
 # =============================================================================
 #  5. ENTRY POINT
 # =============================================================================
@@ -1612,11 +1752,13 @@ def main() -> int:
     configure_high_dpi()                           # must happen BEFORE QApplication()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)           # we quit explicitly from the menu
+    if ICON_PATH.exists():
+        app.setWindowIcon(QIcon(str(ICON_PATH)))
 
     sprites_dir = SPRITES_DIR
     bank = SpriteBank(sprites_dir, app.primaryScreen().devicePixelRatio())
-    pet = DesktopPet(bank)
-    pet.start()
+    buddy = YellowsPixelBuddies(bank)
+    buddy.start()
 
     return app.exec_()
 
