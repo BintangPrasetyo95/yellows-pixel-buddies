@@ -79,14 +79,16 @@ sprites/
 ├── angry/         # Triggered by rapid left-clicks (3 clicks within 2s)
 ├── crying/        # Tearful sadness (intro in frames 1-2, loops frames 3 & 4, outro frame 5)
 ├── embarrassed/   # Blushing shy reaction
+├── kneeling/      # Kneeling resting pose (held for 10s)
 ├── laughing/      # Joyful laughter
 ├── overjoyed/     # Delighted bouncing celebration
 ├── peace_sign/    # Poses and holds peace sign
 ├── sad/           # Dejected expression
-├── shocked/       # Played on left-click or while dragged
+├── shocked/       # Played on left-click, while dragged, or on maximized app switch
 ├── singing/       # Multi-cycle singing melody
-├── wistful/       # Pensive / dreaming expression
-└── burnt/         # Rare special event (sooty crisp)
+├── tongue/        # Sticking tongue out (held for 1s)
+├── wistful/       # Pensive expression and slow wistful walk
+└── burnt/         # Rare special event or flashbang reaction (sooty crisp)
 ```
 
 > [!TIP]
@@ -110,13 +112,17 @@ CLICK_THROUGH_TRANSPARENT = True   # Only visible pixels catch mouse clicks
 ### Animation & Movement Speed
 ```python
 ANIM_INTERVAL_MS = 180             # Base frame duration in ms (~5.5 FPS)
+WISTFUL_FRAME_INTERVAL_MS = 500    # Slow wistful walk frame duration (~2.0 FPS)
 FRAME_INTERVAL_MS = {              # Per-state frame interval overrides
     "run_left": 120,
     "run_right": 120,
+    "wistful_walk_left": WISTFUL_FRAME_INTERVAL_MS,
+    "wistful_walk_right": WISTFUL_FRAME_INTERVAL_MS,
 }
 MOVE_INTERVAL_MS = 22              # Movement update rate (~45 FPS)
 WALK_SPEED_PX_S = 60.0             # Walking speed (pixels/sec)
 RUN_SPEED_PX_S = 140.0             # Running speed (pixels/sec)
+WISTFUL_WALK_SPEED_PX_S = 30.0     # Slow wistful walk speed (pixels/sec)
 GRAVITY_PX_S2 = 2400.0             # Fall acceleration after drop
 ```
 
@@ -125,6 +131,7 @@ GRAVITY_PX_S2 = 2400.0             # Fall acceleration after drop
 WALK_MIN_S, WALK_MAX_S = 3.0, 8.0     # Duration range for walking/running
 PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0   # Duration range for idle rests
 RUN_CHANCE = 0.25                     # 25% chance that a walk becomes a run
+WISTFUL_WALK_CHANCE = 0.25            # 25% chance that a walk becomes a slow wistful stroll
 SPECIAL_CHANCE = 0.5                  # 50% chance a rest triggers a special animation
 BURNT_CHANCE = 0.03                   # 3% chance a rest triggers the rare 'burnt' event
 ```
@@ -173,7 +180,8 @@ REACT_POLL_INTERVAL_MS = 200       # Check active window every 200 ms
 DARK_LUMINANCE_THRESHOLD = 85.0    # Screen brightness <= 85 is "dark"
 LIGHT_LUMINANCE_THRESHOLD = 160.0  # Screen brightness >= 160 is "dominant white/light"
 WINDOW_SWITCH_SETTLE_MS = 120      # Wait 120 ms for window to composite before sampling
-SWITCH_SHOCK_COOLDOWN_S = 30.0     # Cooldown in seconds for shock (burnt has NO cooldown)
+SWITCH_SHOCK_COOLDOWN_S = 30.0     # Cooldown in seconds for shock
+SWITCH_BURNT_COOLDOWN_S = 5.0      # Cooldown in seconds for flashbang burnt (half of original 10s shock cooldown)
 ```
 
 ---

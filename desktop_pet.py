@@ -130,8 +130,8 @@ LAST_FRAME_HOLD_MS = {
     "shocked": 1000,
     "wistful": 3000,
     "embarrassed": 2000,
-    "tongue": 1000,               # hold tongue pose for 1000 ms
-    "kneeling": 10000,            # hold kneeling pose for 10000 ms (10 s)
+    "tongue": 1500,               # hold tongue pose for 1000 ms
+    "kneeling": 15000,            # hold kneeling pose for 10000 ms (10 s)
 }
 FRAME_SUB_LOOPS = {
     # Sub-frame loops for states with an intro (1-based frame numbers matching 1.png, 2.png...):
@@ -153,7 +153,8 @@ REACT_POLL_INTERVAL_MS = 200          # check active window every 200 ms
 DARK_LUMINANCE_THRESHOLD = 85.0       # average screen luminance <= 85 is "dark"
 LIGHT_LUMINANCE_THRESHOLD = 160.0     # average screen luminance >= 160 is "dominant white/light"
 WINDOW_SWITCH_SETTLE_MS = 120         # ms to wait for the window to composite before sampling
-SWITCH_SHOCK_COOLDOWN_S = 30.0        # cooldown in seconds for window switch shock (burnt has NO cooldown)
+SWITCH_SHOCK_COOLDOWN_S = 30.0        # cooldown in seconds for window switch shock
+SWITCH_BURNT_COOLDOWN_S = 10.0         # cooldown in seconds for flashbang burnt (half the original 10s shock cooldown)
 
 # --- Animation states --------------------------------------------------------
 LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
@@ -494,6 +495,7 @@ class DesktopPet(QWidget):
         self._last_foreground_hwnd: int | None = None
         self._last_luminance: float = 128.0
         self._last_switch_shock_time: float = -9999.0   # allows immediate shock on first switch
+        self._last_switch_burnt_time: float = -9999.0   # allows immediate burnt on first switch
         self._interrupted_state: dict | None = None     # saves activity to resume after reaction
 
         if REACT_ON_MAXIMIZED_APP:
@@ -866,8 +868,14 @@ class DesktopPet(QWidget):
         if self.state == "angry" and self._repeat_count > 0:
             return
 
-        # Flashbang check: switched from dark to dominant white/light (NO cooldown)
+        # Flashbang check: switched from dark to dominant white/light
         if prev_lum <= DARK_LUMINANCE_THRESHOLD and curr_lum >= LIGHT_LUMINANCE_THRESHOLD:
+            now = time.perf_counter()
+            if now - self._last_switch_burnt_time < SWITCH_BURNT_COOLDOWN_S:
+                log.info("Flashbang detected, but burnt is on cooldown (%.1fs remaining)",
+                         SWITCH_BURNT_COOLDOWN_S - (now - self._last_switch_burnt_time))
+                return
+            self._last_switch_burnt_time = now
             log.info("Flashbang! Switched from dark (%.1f) to bright maximized app (%.1f) -> burnt",
                      prev_lum, curr_lum)
             self._interrupt_with_reaction("burnt")
