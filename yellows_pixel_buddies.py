@@ -92,8 +92,8 @@ import sys
 import time
 import winreg
 
-from PyQt5.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
-from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QPixmap, QRegion
+from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
+from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QPixmap, QRegion, QTransform
 from PyQt5.QtWidgets import QAction, QApplication, QMenu, QSystemTrayIcon, QWidget
 
 
@@ -144,11 +144,20 @@ PLACEHOLDER_FRAME_COUNT = 10   # frames generated for each state with no sprite 
 # --- Timing ------------------------------------------------------------------
 ANIM_INTERVAL_MS = 180            # sprite frame advance   (~5.5 FPS)
 WISTFUL_FRAME_INTERVAL_MS = 500   # sprite frame advance for wistful walk (slow, lingering steps)
+AIRBORNE_FRAME_INTERVAL_MS = ANIM_INTERVAL_MS // 3  # 60 ms (~16.7 FPS, 3x faster than default 180ms)
+THROW_BASE_INTERVAL_MS = 75            # initial windup speed for throw animation (~13.3 FPS)
+THROW_FAST_INTERVAL_MS = round(THROW_BASE_INTERVAL_MS / 2.5)  # 30 ms (2.5x faster, ~33.3 FPS)
+THROW_FRAME_11_HOLD_TICKS = 4          # pause at frame 11 (~300ms hold on first throw)
+THROW_RISE_PX = 64.0                   # px she floats smoothly upwards during first throw frames 1-5
 FRAME_INTERVAL_MS = {
     # per-state frame advance in ms; overrides ANIM_INTERVAL_MS for that state only
     "run_left": 120, "run_right": 120,
     "wistful_walk_left": WISTFUL_FRAME_INTERVAL_MS,
     "wistful_walk_right": WISTFUL_FRAME_INTERVAL_MS,
+    "airborne": AIRBORNE_FRAME_INTERVAL_MS,
+    "airborne__mirrored": AIRBORNE_FRAME_INTERVAL_MS,
+    "throw": THROW_BASE_INTERVAL_MS,
+    "throw__mirrored": THROW_BASE_INTERVAL_MS,
     # "idle": 250,
     # "laughing": 100,
 }
@@ -215,6 +224,37 @@ WINDOW_SWITCH_SETTLE_MS = 120         # ms to wait for the window to composite b
 SWITCH_SHOCK_COOLDOWN_S = 30.0        # cooldown in seconds for window switch shock
 SWITCH_BURNT_COOLDOWN_S = 10.0         # cooldown in seconds for flashbang burnt
 
+# --- Bomb & Laser Attack -----------------------------------------------------
+HANG_BOMB_DELAY_S = 2.0           # seconds hanging from cursor before bomb throw triggers
+HANG_BOMB_CHANCE = 1.0            # chance (0.0 to 1.0) to throw bombs after delay (1.0 = 100% for test)
+BOMB_COUNT = 4                    # number of bombs thrown in series
+BOMB_SIZE = 80                     # logical px: cat bomb (clean 4x pixel scale, slightly bigger)
+SPARK_SIZE = 60                    # logical px: sparks animation at rope tip
+LASER_SIZE = 70                    # logical px: laser beam cross
+THROW_SIZE = (SPRITE_SIZE, round(SPRITE_SIZE * 91.0 / 44.0))  # (128, 265): natural scale matching idle/hanging
+BOMB_GRAVITY_PX_S2 = 1300.0       # downward gravity for thrown bombs after first bounce
+BOMB_FIRST_FALL_GRAVITY_PX_S2 = 4500.0  # heavy downward gravity on the initial fast throw
+BOMB_INITIAL_VY_MIN = 2400.0       # fast initial downward velocity range (fast throw)
+BOMB_INITIAL_VY_MAX = 3000.0
+BOMB_BOUNCE_VY_MIN = 680.0        # upward velocity on first ground bounce (bounces much higher)
+BOMB_BOUNCE_VY_MAX = 920.0
+BOMB_FUSE_MIN_S = 1.6             # fuse timer after first bounce (allows far bounce arcs across screen)
+BOMB_FUSE_MAX_S = 2.4
+SPARK_FRAME_INTERVAL_MS = 40      # fast sparks animation speed (~25 FPS)
+LASER_FRAME_INTERVAL_MS = 55      # laser animation speed (~18 FPS)
+LASER_EXTEND_SPEED_PX_S = 6000.0  # speed at which laser beam extends outwards
+BOMB_PHYSICS_INTERVAL_MS = 16     # physics & overlay tick interval (~60 FPS)
+BOMB_LAUGH_EXTRA_S = 1.3          # seconds to laugh after the last bomb explodes (1+ sec)
+
+# Relative rope tip anchor (x_frac, y_frac) for each of the 5 bomb frames:
+BOMB_ROPE_TIPS = [
+    (14.5 / 20.0, 2.0 / 20.0),   # frame 1
+    (12.5 / 20.0, 2.0 / 20.0),   # frame 2
+    (12.5 / 20.0, 2.0 / 20.0),   # frame 3
+    (10.5 / 20.0, 3.0 / 20.0),   # frame 4
+    (7.5 / 20.0, 4.0 / 20.0),    # frame 5
+]
+
 # --- Animation states --------------------------------------------------------
 LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
                   "wistful_walk_left", "wistful_walk_right")   # repeat forever
@@ -227,15 +267,23 @@ BURNT_STATE = "burnt"                                                # one-shot 
 AIRBORNE_STATE = "airborne"               # jump to the cursor: the flight and every fall after it
 HANGING_STATE = "hanging"                 # jump to the cursor: dangling from the cursor
 JUMP_STATES = (AIRBORNE_STATE, HANGING_STATE)    # both loop; the feature needs real PNGs for BOTH
-EFFECT_STATES = ("explosion",)            # one-shot foreground VFX overlays
+THROW_STATE = "throw"                     # one-shot bomb throw animation
+EFFECT_STATES = ("explosion", "bomb", "sparks", "laser_mid", "laser_extend")  # foreground VFX & projectiles
 EFFECT_SIZES = {
     "explosion": EXPLOSION_SIZE,
+    "throw": THROW_SIZE,
+    "throw__mirrored": THROW_SIZE,
+    "bomb": BOMB_SIZE,
+    "sparks": SPARK_SIZE,
+    "laser_mid": LASER_SIZE,
+    "laser_extend": LASER_SIZE,
+    "laser_extend_horiz": LASER_SIZE,
 }
 EFFECT_GROUND_RATIO = {
     "explosion": EXPLOSION_BASELINE_RATIO,
 }
 ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
-              + (BURNT_STATE,) + JUMP_STATES + EFFECT_STATES)
+              + (BURNT_STATE, THROW_STATE) + JUMP_STATES + EFFECT_STATES)
 
 # The original states always work (placeholder fallback). Every other ("new") state is only
 # used when its sprites/<state>/ folder holds real PNGs - see SpriteBank.has_real_sprites().
@@ -263,6 +311,8 @@ PLACEHOLDER_COLORS = {
     "wistful_walk_left": "#9FA8DA", "wistful_walk_right": "#7986CB",
     "airborne": "#85C1E9", "hanging": "#F5B7B1",
     "explosion": "#FF5722",
+    "throw": "#E74C3C", "bomb": "#34495E", "sparks": "#E67E22",
+    "laser_mid": "#F4D03F", "laser_extend": "#F4D03F",
 }
 
 
@@ -333,7 +383,7 @@ DROP_REACTION_MIN_HEIGHT_PX = 0   # ... only when dropped at least this high abo
 # prints one line per jump event (launch, apex, grab / miss, release, shake, touchdown).
 DEBUG_DRAW_HAND_ANCHOR = False    # draw a crosshair on HAND_ANCHOR while hanging, to help tuning it
 DEBUG_CROSSHAIR_PX = 8            # arm length of that crosshair
-DEBUG_JUMP_MENU = False           # add "Jump to cursor" to the right-click menu: it skips every trigger
+DEBUG_JUMP_MENU = True            # add "Jump to cursor" to the right-click menu: it skips every trigger
                                   # gate and the cooldown (the jump feature still needs its sprites)
 DEBUG_JUMP_DELAY_S = 2.0          # ... and aims at the cursor this long AFTER you pick it, so you have
                                   # time to park the pointer somewhere high first (0 = immediately)
@@ -634,18 +684,21 @@ def make_placeholder_frames(state: str) -> list[QImage]:
     return frames
 
 
-def fit_into_canvas(src: QImage, canvas_px: int) -> QImage:
-    """Scale `src` to fit a square transparent canvas, anchored bottom-centre.
+def fit_into_canvas(src: QImage, canvas_w: int, canvas_h: int | None = None) -> QImage:
+    """Scale `src` to fit a transparent canvas, anchored bottom-centre.
 
+    If canvas_h is None, the canvas is square (canvas_w x canvas_w).
     Anchoring at the bottom keeps the feet on the ground even when the sprites
     of different states have different sizes.
     """
+    if canvas_h is None:
+        canvas_h = canvas_w
     mode = Qt.SmoothTransformation if SMOOTH_SCALING else Qt.FastTransformation
-    scaled = src.scaled(canvas_px, canvas_px, Qt.KeepAspectRatio, mode)
-    canvas = QImage(canvas_px, canvas_px, QImage.Format_ARGB32_Premultiplied)
+    scaled = src.scaled(canvas_w, canvas_h, Qt.KeepAspectRatio, mode)
+    canvas = QImage(canvas_w, canvas_h, QImage.Format_ARGB32_Premultiplied)
     canvas.fill(Qt.transparent)
     painter = QPainter(canvas)
-    painter.drawImage((canvas_px - scaled.width()) // 2, canvas_px - scaled.height(), scaled)
+    painter.drawImage((canvas_w - scaled.width()) // 2, canvas_h - scaled.height(), scaled)
     painter.end()
     return canvas
 
@@ -693,10 +746,17 @@ class SpriteBank:
         # The jump art is authored facing ONE way, so keep a mirrored copy for the other way
         # (derived like MIRROR_WALK_RIGHT_FOR_LEFT does it). airborne always needs one; hanging
         # only when HANGING_ART_FACES says it is not front-facing.
-        for state in (AIRBORNE_STATE,) + ((HANGING_STATE,) if HANGING_ART_FACES != "none" else ()):
+        for state in (AIRBORNE_STATE, THROW_STATE) + ((HANGING_STATE,) if HANGING_ART_FACES != "none" else ()):
             if state in self._sources:
                 self._sources[mirrored_key(state)] = [img.mirrored(True, False)   # flip horizontally
                                                       for img in self._sources[state]]
+
+        # Pre-rotate horizontal laser beam segments (rotated 90 degrees)
+        if "laser_extend" in self._sources:
+            self._sources["laser_extend_horiz"] = [img.transformed(QTransform().rotate(90))
+                                                   for img in self._sources["laser_extend"]]
+            if self.has_real_sprites("laser_extend"):
+                self._real.add("laser_extend_horiz")
 
         # One startup line: which new states have sprites and which will never be used,
         # and whether the jump to the cursor can run (it needs BOTH jump states).
@@ -749,19 +809,25 @@ class SpriteBank:
     def rebuild(self, dpr: float) -> None:
         """(Re)render all frames for a display scale factor (1.0, 1.25, 1.5, 2.0 ...)."""
         for state, images in self._sources.items():
-            logical_size = EFFECT_SIZES.get(state, SPRITE_SIZE)
-            physical = max(1, round(logical_size * dpr))   # canvas size in device pixels
-            exact_dpr = physical / logical_size            # makes pixmap logical size == logical_size
+            size_spec = EFFECT_SIZES.get(state, SPRITE_SIZE)
+            if isinstance(size_spec, (tuple, list)):
+                log_w, log_h = int(size_spec[0]), int(size_spec[1])
+            else:
+                log_w, log_h = int(size_spec), int(size_spec)
+
+            phys_w = max(1, round(log_w * dpr))
+            phys_h = max(1, round(log_h * dpr))
+            exact_dpr = phys_h / log_h
             built = []
             for img in images:
-                canvas = fit_into_canvas(img, physical)
+                canvas = fit_into_canvas(img, phys_w, phys_h)
                 pixmap = QPixmap.fromImage(canvas)
                 pixmap.setDevicePixelRatio(exact_dpr)
 
                 # Window masks are expressed in logical px, so derive the mask from a
                 # logical-size canvas (identical to `canvas` when dpr == 1).
-                logical_canvas = canvas if physical == logical_size \
-                    else fit_into_canvas(img, logical_size)
+                logical_canvas = canvas if (phys_w == log_w and phys_h == log_h) \
+                    else fit_into_canvas(img, log_w, log_h)
                 region = QRegion(QPixmap.fromImage(logical_canvas).mask())  # alpha > 0 pixels
                 if region.isEmpty():                 # an empty mask would mean "no mask"
                     region = QRegion(0, 0, 1, 1)
@@ -782,6 +848,7 @@ class Phase(Enum):
     FALL = auto()    # dropped / let go, falling back to the taskbar
     JUMP = auto()    # leaping at the cursor: the rise, and the fall after a miss
     HANG = auto()    # hanging from the cursor (no gravity, no walking)
+    THROW = auto()   # bomb barrage floating mid-air (stops hanging from cursor)
 
 
 class VfxOverlay(QWidget):
@@ -834,6 +901,344 @@ class VfxOverlay(QWidget):
         painter.end()
 
 
+@dataclass
+class Bomb:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    size: float
+    target_mode: str = "random"  # "beneath", "near", or "random"
+    has_bounced: bool = False
+    is_ignited: bool = False
+    fuse_duration: float = 0.0
+    fuse_time: float = 0.0
+    bomb_frame_idx: int = 0
+    spark_frame_idx: int = 0
+    spark_timer: float = 0.0
+    exploded: bool = False
+
+
+@dataclass
+class LaserCross:
+    cx: float
+    cy: float
+    extend_length: float = 0.0
+    frame_idx: int = 0
+    frame_timer: float = 0.0
+    finished: bool = False
+    hit_detected: bool = False
+
+
+class BombLaserOverlay(QWidget):
+    """Full-screen, click-through overlay managing falling bombs, sparks, and laser beams."""
+
+    def __init__(self, bank: SpriteBank) -> None:
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
+                         | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._bank = bank
+        self._bombs: list[Bomb] = []
+        self._lasers: list[LaserCross] = []
+        self._ground_y: float = 0.0
+        self._last_bomb_exploded_at: float = 0.0
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(BOMB_PHYSICS_INTERVAL_MS)
+        self._timer.timeout.connect(self._tick)
+        self._last_time = time.perf_counter()
+
+    @property
+    def last_bomb_exploded_at(self) -> float:
+        return self._last_bomb_exploded_at
+
+    def has_active_bombs(self) -> bool:
+        """True if any unexploded bombs are currently bouncing or falling."""
+        return any(not b.exploded for b in self._bombs)
+
+    def has_active_lasers(self) -> bool:
+        """True if any laser crosses are currently extending/visible."""
+        return any(not l.finished for l in self._lasers)
+
+    def reset_state(self) -> None:
+        """Reset bombs, lasers, and explosion tracking for a new attack."""
+        self._bombs.clear()
+        self._lasers.clear()
+        self._last_bomb_exploded_at = 0.0
+
+    def spawn_bombs(self, origin_x: float, origin_y: float, ground_y: float,
+                    screen_rect: QRect, facing_left: bool = True) -> None:
+        """Spawn 4 bombs thrown downwards with fanning velocities."""
+        self._ground_y = ground_y
+        if self.geometry() != screen_rect:
+            self.setGeometry(screen_rect)
+
+        # 4 spread velocities fanning out below
+        base_vx = [-220.0, -75.0, 75.0, 220.0]
+        if not facing_left:
+            base_vx.reverse()
+
+        for i in range(BOMB_COUNT):
+            vx = base_vx[i] + random.uniform(-20.0, 20.0)
+            vy = random.uniform(BOMB_INITIAL_VY_MIN, BOMB_INITIAL_VY_MAX)
+            bx = origin_x + (i - 1.5) * 14.0 - BOMB_SIZE / 2.0
+            by = origin_y + random.uniform(-5.0, 5.0)
+            self._bombs.append(Bomb(
+                x=bx, y=by, vx=vx, vy=vy, size=float(BOMB_SIZE)
+            ))
+
+    def spawn_single_bomb(self, bx: float, by: float, vx: float, vy: float,
+                          ground_y: float, screen_rect: QRect,
+                          target_mode: str = "random") -> None:
+        """Spawn a single bomb into the overlay simulation."""
+        self._ground_y = ground_y
+        if self.geometry() != screen_rect:
+            self.setGeometry(screen_rect)
+
+        self._bombs.append(Bomb(
+            x=bx - BOMB_SIZE / 2.0,
+            y=by,
+            vx=vx,
+            vy=vy,
+            size=float(BOMB_SIZE),
+            target_mode=target_mode,
+        ))
+
+        self._last_time = time.perf_counter()
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        set_window_input_transparent(self, True)
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
+    def _tick(self) -> None:
+        now = time.perf_counter()
+        dt = max(0.001, min(0.05, now - self._last_time))
+        self._last_time = now
+
+        screen_left = float(self.x())
+        screen_right = float(self.x() + self.width())
+
+        spark_frames = self._bank.frames.get("sparks", [])
+        bomb_frames = self._bank.frames.get("bomb", [])
+        laser_mid_frames = self._bank.frames.get("laser_mid", [])
+
+        spark_interval_s = SPARK_FRAME_INTERVAL_MS / 1000.0
+        laser_interval_s = LASER_FRAME_INTERVAL_MS / 1000.0
+
+        # Update bombs
+        for b in self._bombs:
+            gravity = BOMB_GRAVITY_PX_S2 if b.has_bounced else BOMB_FIRST_FALL_GRAVITY_PX_S2
+            b.vy += gravity * dt
+            b.x += b.vx * dt
+            b.y += b.vy * dt
+
+            # Ground collision
+            if b.y + b.size >= self._ground_y:
+                b.y = self._ground_y - b.size
+                if not b.has_bounced:
+                    b.has_bounced = True
+                    b.is_ignited = True
+                    cursor_x = float(QCursor.pos().x())
+                    center_x = b.x + b.size / 2.0
+                    min_x = screen_left + b.size / 2.0
+                    max_x = screen_right - b.size / 2.0
+
+                    if b.target_mode == "beneath":
+                        # Exactly 0.75s fuse - player has 0.75s to move the cursor before detonation
+                        b.fuse_duration = 0.75
+                        b.fuse_time = 0.75
+                        target_x = max(min_x, min(max_x, cursor_x))
+                        dx = target_x - center_x
+                        b.vx = max(-1000.0, min(1000.0, dx / 0.75))
+                        # Gentle upward bounce that reaches apex and lands back near ground at ~0.75s
+                        # (flight time = 2 * vy / g = 2 * 490 / 1300 = 0.754s)
+                        b.vy = -490.0
+                    elif b.target_mode == "near":
+                        b.fuse_duration = random.uniform(1.3, 1.7)
+                        b.fuse_time = b.fuse_duration
+                        offset = random.choice([-1.0, 1.0]) * random.uniform(160.0, 240.0)
+                        target_x = max(min_x, min(max_x, cursor_x + offset))
+                        dx = target_x - center_x
+                        b.vx = max(-1000.0, min(1000.0, dx / b.fuse_duration))
+                        b.vy = -random.uniform(BOMB_BOUNCE_VY_MIN, BOMB_BOUNCE_VY_MAX)
+                    else:  # "random"
+                        b.fuse_duration = random.uniform(BOMB_FUSE_MIN_S, BOMB_FUSE_MAX_S)
+                        b.fuse_time = b.fuse_duration
+                        b.vy = -random.uniform(BOMB_BOUNCE_VY_MIN, BOMB_BOUNCE_VY_MAX)
+                        direction = 1.0 if b.vx >= 0.0 else -1.0
+                        speed = max(abs(b.vx) * 1.35, random.uniform(380.0, 620.0))
+                        b.vx = direction * speed + random.uniform(-40.0, 40.0)
+                else:
+                    b.vy = -abs(b.vy) * random.uniform(0.65, 0.78)
+                    b.vx *= 0.92
+                    if abs(b.vy) < 40.0:
+                        b.vy = 0.0
+
+            # Screen edge bounces (elastic ricochet)
+            if b.x < screen_left:
+                b.x = screen_left
+                b.vx = abs(b.vx) * 0.85
+            elif b.x + b.size > screen_right:
+                b.x = screen_right - b.size
+                b.vx = -abs(b.vx) * 0.85
+
+            # Fuse and sparks
+            if b.is_ignited:
+                b.fuse_time -= dt
+                if b.fuse_time <= 0.0:
+                    b.exploded = True
+                    self._last_bomb_exploded_at = now
+                    # Detonate into cross laser
+                    self._lasers.append(LaserCross(
+                        cx=b.x + b.size / 2.0,
+                        cy=b.y + b.size / 2.0,
+                    ))
+                    continue
+
+                # Progress bomb frames (0 to 4)
+                if bomb_frames:
+                    progress = max(0.0, min(1.0, 1.0 - (b.fuse_time / b.fuse_duration)))
+                    b.bomb_frame_idx = min(len(bomb_frames) - 1, int(progress * len(bomb_frames)))
+
+                # Fast sparks loop
+                if spark_frames:
+                    b.spark_timer += dt
+                    if b.spark_timer >= spark_interval_s:
+                        b.spark_timer = 0.0
+                        b.spark_frame_idx = (b.spark_frame_idx + 1) % len(spark_frames)
+
+        # Remove exploded bombs
+        self._bombs = [b for b in self._bombs if not b.exploded]
+
+        # Update lasers
+        cursor_pos = QCursor.pos()
+        for laser in self._lasers:
+            laser.extend_length += LASER_EXTEND_SPEED_PX_S * dt
+            laser.frame_timer += dt
+            if laser.frame_timer >= laser_interval_s:
+                laser.frame_timer = 0.0
+                laser.frame_idx += 1
+                if laser.frame_idx >= len(laser_mid_frames):
+                    laser.finished = True
+
+            # Laser hit detection on mouse cursor
+            if not laser.hit_detected:
+                half = LASER_SIZE / 2.0
+                hit_vert = abs(cursor_pos.x() - laser.cx) <= half
+                hit_horiz = abs(cursor_pos.y() - laser.cy) <= half
+                if hit_vert or hit_horiz:
+                    laser.hit_detected = True
+                    log.info("Cursor hit by laser cross beam! (laser cx=%.1f, cy=%.1f, cursor=%d, %d)",
+                             laser.cx, laser.cy, cursor_pos.x(), cursor_pos.y())
+
+        # Remove finished lasers
+        self._lasers = [l for l in self._lasers if not l.finished]
+
+        # Auto-hide when done
+        if not self._bombs and not self._lasers:
+            self._timer.stop()
+            self.hide()
+
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+
+        screen_offset_x = self.x()
+        screen_offset_y = self.y()
+        win_w = self.width()
+        win_h = self.height()
+
+        mid_frames = self._bank.frames.get("laser_mid", [])
+        ext_v_frames = self._bank.frames.get("laser_extend", [])
+        ext_h_frames = self._bank.frames.get("laser_extend_horiz", ext_v_frames)
+
+        # Draw Lasers
+        tile = float(LASER_SIZE)
+        half = tile / 2.0
+
+        for laser in self._lasers:
+            f_idx = laser.frame_idx
+            if f_idx >= len(mid_frames):
+                continue
+            mid_pix = mid_frames[f_idx].pixmap
+            ext_v_pix = ext_v_frames[min(f_idx, len(ext_v_frames) - 1)].pixmap
+            ext_h_pix = ext_h_frames[min(f_idx, len(ext_h_frames) - 1)].pixmap
+
+            lx = laser.cx - screen_offset_x
+            ly = laser.cy - screen_offset_y
+            extend = laser.extend_length
+
+            # Horizontal Left
+            max_reach_l = min(lx - half, extend)
+            if max_reach_l > 0:
+                cur_x = lx - half - tile
+                min_x = lx - half - max_reach_l
+                while cur_x >= min_x - tile + 1 and cur_x >= -tile:
+                    painter.drawPixmap(QPointF(cur_x, ly - half), ext_h_pix)
+                    cur_x -= tile
+
+            # Horizontal Right
+            max_reach_r = min(win_w - (lx + half), extend)
+            if max_reach_r > 0:
+                cur_x = lx + half
+                max_x = lx + half + max_reach_r
+                while cur_x <= max_x and cur_x <= win_w:
+                    painter.drawPixmap(QPointF(cur_x, ly - half), ext_h_pix)
+                    cur_x += tile
+
+            # Vertical Up
+            max_reach_u = min(ly - half, extend)
+            if max_reach_u > 0:
+                cur_y = ly - half - tile
+                min_y = ly - half - max_reach_u
+                while cur_y >= min_y - tile + 1 and cur_y >= -tile:
+                    painter.drawPixmap(QPointF(lx - half, cur_y), ext_v_pix)
+                    cur_y -= tile
+
+            # Vertical Down
+            max_reach_d = min(win_h - (ly + half), extend)
+            if max_reach_d > 0:
+                cur_y = ly + half
+                max_y = ly + half + max_reach_d
+                while cur_y <= max_y and cur_y <= win_h:
+                    painter.drawPixmap(QPointF(lx - half, cur_y), ext_v_pix)
+                    cur_y += tile
+
+            # Center tile
+            painter.drawPixmap(QPointF(lx - half, ly - half), mid_pix)
+
+        # Draw Bombs
+        bomb_frames = self._bank.frames.get("bomb", [])
+        spark_frames = self._bank.frames.get("sparks", [])
+
+        for b in self._bombs:
+            bx = b.x - screen_offset_x
+            by = b.y - screen_offset_y
+
+            if bomb_frames:
+                b_pix = bomb_frames[min(b.bomb_frame_idx, len(bomb_frames) - 1)].pixmap
+                painter.drawPixmap(QPointF(bx, by), b_pix)
+
+            # Sparks at burning rope tip
+            if b.is_ignited and spark_frames:
+                s_pix = spark_frames[min(b.spark_frame_idx, len(spark_frames) - 1)].pixmap
+                tip_frac_x, tip_frac_y = BOMB_ROPE_TIPS[min(b.bomb_frame_idx, len(BOMB_ROPE_TIPS) - 1)]
+                tip_x = bx + tip_frac_x * b.size
+                tip_y = by + tip_frac_y * b.size
+                painter.drawPixmap(QPointF(tip_x - SPARK_SIZE / 2.0, tip_y - SPARK_SIZE / 2.0), s_pix)
+
+        painter.end()
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
@@ -870,6 +1275,7 @@ class YellowsPixelBuddies(QWidget):
         self._overlay_frame_idx = 0
         self._overlay_pixmap: QPixmap | None = None
         self._vfx_overlay = VfxOverlay()
+        self._bomb_overlay = BombLaserOverlay(bank)
 
         # --- behaviour state ---------------------------------------------------
         self._phase = Phase.PAUSE
@@ -903,6 +1309,16 @@ class YellowsPixelBuddies(QWidget):
         self._can_catch_cursor = False       # True during a jump until she catches the cursor
         self._hang_started_at = 0.0          # perf_counter() time of the grab
         self._hang_ends_at = 0.0             # ... and when she lets go on her own
+        self._hang_bomb_thrown = False       # whether bomb throw sequence has triggered for this hang
+        self._hang_bomb_count_remaining = 0  # serial bombs remaining to throw
+        self._hang_bomb_index = 0            # index of current bomb in the series (0..BOMB_COUNT-1)
+        self._throw_pause_ticks = 0          # pause ticks remaining on frame 11
+        self._bombs_spawned_for_current_throw = False
+        self._throw_started_at = 0.0         # perf_counter() time when throw sequence started
+        self._throw_start_y = 0.0            # starting y before upward float
+        self._throw_rise_px = 0.0            # upward distance to float during frames 1-5
+        self._post_throw_laugh = False       # True while post-bomb victory laugh lasts
+        self._bomb_target_plan: list[str] = ["random", "random", "near", "beneath"]
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -1017,6 +1433,13 @@ class YellowsPixelBuddies(QWidget):
         if state not in (BURNT_STATE, "burnt"):
             self._stop_overlay()
 
+        old_hand_x, old_hand_y = (0.0, 0.0)
+        should_adjust = (hasattr(self, "_phase")
+                         and (self._phase in (Phase.HANG, Phase.THROW)
+                              or (self._phase is Phase.FALL and self.state == THROW_STATE)))
+        if should_adjust:
+            old_hand_x, old_hand_y = self._hand_offset()
+
         self.state = state
         flipped = mirrored_key(state)
         self._sprite_key = flipped if mirrored and flipped in self._bank.frames else state
@@ -1037,6 +1460,12 @@ class YellowsPixelBuddies(QWidget):
             self._sub_loop_count = 0
         self._set_frame(0)
 
+        if should_adjust:
+            new_hand_x, new_hand_y = self._hand_offset()
+            self._x += (old_hand_x - new_hand_x)
+            self._y += (old_hand_y - new_hand_y)
+            self._sync_window_position()
+
         if state in (BURNT_STATE, "burnt") and "explosion" in self._bank.frames and self._overlay_state != "explosion":
             self._start_overlay("explosion")
 
@@ -1046,6 +1475,11 @@ class YellowsPixelBuddies(QWidget):
         self._frame_idx = min(index, len(frames) - 1)
         frame = frames[self._frame_idx]
         self._pixmap = frame.pixmap
+        dpr = frame.pixmap.devicePixelRatio() if frame.pixmap.devicePixelRatio() > 0 else 1.0
+        target_w = round(frame.pixmap.width() / dpr)
+        target_h = round(frame.pixmap.height() / dpr)
+        if self.width() != target_w or self.height() != target_h:
+            self.setFixedSize(target_w, target_h)
         if CLICK_THROUGH_TRANSPARENT:
             self.setMask(self._mask_for(frame))   # window shape = visible pixels -> clicks pass through
         self.update()
@@ -1096,11 +1530,53 @@ class YellowsPixelBuddies(QWidget):
                         self._set_frame(start_idx)
                         return
 
+        # Custom frame progression and looping for THROW_STATE
+        if self.state == THROW_STATE:
+            # 1. On first throw, pause briefly at frame 11 (0-indexed: 10)
+            if self._frame_idx == 10 and self._throw_pause_ticks > 0:
+                self._throw_pause_ticks -= 1
+                return
+
+            if self._frame_idx + 1 < count:
+                next_idx = self._frame_idx + 1
+                self._set_frame(next_idx)
+
+                # 2. Starting from frame 12 (0-indexed: 11), speed accelerates 2.5x
+                if next_idx >= 11:
+                    if self._anim_timer.interval() != THROW_FAST_INTERVAL_MS:
+                        self._anim_timer.setInterval(THROW_FAST_INTERVAL_MS)
+
+                # 3. Release bomb at frame 12 (0-indexed: 11)
+                if next_idx >= 11 and not self._bombs_spawned_for_current_throw:
+                    self._bombs_spawned_for_current_throw = True
+                    self._spawn_single_bomb(self._hang_bomb_index)
+                    self._hang_bomb_index += 1
+                    self._hang_bomb_count_remaining -= 1
+                return
+
+            # Reached frame 14 (0-indexed: 13, which is count - 1)
+            # 4. Loop back to frame 4 (0-indexed: 3) until the last throw
+            if self._hang_bomb_count_remaining > 0:
+                self._bombs_spawned_for_current_throw = False
+                self._set_frame(3)  # frame 4 is 0-indexed 3
+                return
+
+            # All 4 throws completed!
+            self._finish_throw_sequence()
+            return
+
         if self._frame_idx + 1 < count:
             self._set_frame(self._frame_idx + 1)
         elif self._loop:
             if count > 1:
                 self._set_frame(0)               # wrap around
+        elif self._post_throw_laugh and self.state == "laughing":
+            now = time.perf_counter()
+            if not self._can_end_post_throw_laugh(now):
+                self._set_frame(0)               # keep laughing while bombs/lasers active + extra 1+ s
+            else:
+                self._post_throw_laugh = False
+                self._finish_one_shot()
         elif self._repeat_count > 0:
             self._repeat_count -= 1
             self._set_frame(0)                   # repeat another cycle
@@ -1108,6 +1584,38 @@ class YellowsPixelBuddies(QWidget):
             self._hold_ticks -= 1                # freeze on the last frame (e.g. burnt)
         else:
             self._finish_one_shot()
+
+    def _finish_throw_sequence(self) -> None:
+        """Finished 4-bomb barrage floating mid-air: fall laughing down to the ground."""
+        self._anim_timer.setInterval(FRAME_INTERVAL_MS.get("laughing", ANIM_INTERVAL_MS))
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
+        self._bombs_spawned_for_current_throw = False
+        self._begin_fall(JUMP_GRAVITY_PX_S2, reaction="laughing")
+        self._post_throw_laugh = True
+        self._play("laughing", loop=True)
+        log.debug("Finished throw barrage: falling laughing from mid-air to ground")
+
+    def _can_end_post_throw_laugh(self, now: float) -> bool:
+        """Check if post-throw victory laugh can end.
+
+        Must laugh until all bombs have exploded, all lasers have cleared, and at least
+        BOMB_LAUGH_EXTRA_S has elapsed since the last bomb explosion.
+        """
+        if self._throw_started_at > 0.0 and (now - self._throw_started_at) > 20.0:
+            return True  # failsafe timeout
+        if self._hang_bomb_count_remaining > 0:
+            return False
+        if self._bomb_overlay.has_active_bombs():
+            return False
+        if self._bomb_overlay.has_active_lasers():
+            return False
+        last_exploded = self._bomb_overlay.last_bomb_exploded_at
+        if last_exploded <= 0.0:
+            return False
+        return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
 
     def _finish_one_shot(self) -> None:
         """A special animation ended: resume previous activity or return to idle."""
@@ -1118,6 +1626,10 @@ class YellowsPixelBuddies(QWidget):
             self._phase = saved["phase"]
             self._play(saved["state"], loop=saved["loop"])
             self._brain_timer.start(saved["rem_ms"])
+            return
+
+        if self._phase is Phase.HANG:
+            self._play(HANGING_STATE, mirrored=self._hang_mirrored())
             return
 
         self._play("idle")
@@ -1264,6 +1776,17 @@ class YellowsPixelBuddies(QWidget):
             self._sync_window_position()
             return
 
+        if self._phase is Phase.THROW:              # stops hanging from cursor, floats mid-air
+            # First throw frames 1-5: float smoothly upwards
+            if self._throw_rise_px > 0.0:
+                rise_dur_s = 5 * (THROW_BASE_INTERVAL_MS / 1000.0)
+                elapsed = max(0.0, now - self._throw_started_at)
+                t = min(1.0, elapsed / rise_dur_s)
+                smooth_t = t * t * (3.0 - 2.0 * t)  # smoothstep S-curve
+                self._y = self._throw_start_y - smooth_t * self._throw_rise_px
+            self._sync_window_position()
+            return
+
         # Horizontal: walk / run, and turn around when an edge of the screen is reached.
         if self._phase in (Phase.JUMP, Phase.FALL):
             # A jump drifts at the sideways speed fixed at take-off - deliberately NOT looked
@@ -1329,6 +1852,10 @@ class YellowsPixelBuddies(QWidget):
         """Is the hanging art drawn mirrored for the current facing? (Never, if it is front-facing.)"""
         return HANGING_ART_FACES != "none" and self._facing != HANGING_ART_FACES
 
+    def _throw_mirrored(self) -> bool:
+        """Throw art faces left by default; mirror if pet faces right."""
+        return self._facing == "right"
+
     def _airborne_mirrored(self) -> bool:
         """Is the airborne art drawn mirrored? True when the jump heads the other way than the art looks."""
         return self._facing != AIRBORNE_ART_FACES
@@ -1338,7 +1865,12 @@ class YellowsPixelBuddies(QWidget):
 
         HAND_ANCHOR describes the hanging art as drawn; when that art is shown mirrored the
         hands move to the other side of the square together with it.
+        During THROW_STATE, anchor matches the hanging head position at (0.5 * width, 95.5)
+        to prevent vertical jumps or jitter.
         """
+        if self.state == THROW_STATE:
+            frac_x = 0.5
+            return frac_x * self.width(), 95.5
         frac_x, frac_y = HAND_ANCHOR
         if self._hang_mirrored():
             frac_x = 1.0 - frac_x
@@ -1469,6 +2001,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _update_airborne_facing(self) -> None:
         """Update sprite mirroring and mask to match the current heading while airborne."""
+        if self.state != AIRBORNE_STATE:
+            return
         flipped = mirrored_key(AIRBORNE_STATE)
         self._sprite_key = flipped if self._airborne_mirrored() and flipped in self._bank.frames else AIRBORNE_STATE
         if self._sprite_key in self._bank.frames:
@@ -1518,8 +2052,10 @@ class YellowsPixelBuddies(QWidget):
         """The cursor is on the work area and high enough for her to dangle below it."""
         if not self._work_area().contains(cursor):
             return False
-        ground_y = self._bounds()[3]
-        return cursor.y() - self._hand_offset()[1] < ground_y
+        area = self._work_area()
+        normal_ground_y = float(area.y() + area.height() - SPRITE_SIZE + FOOT_PADDING)
+        normal_hand_y = HAND_ANCHOR[1] * SPRITE_SIZE
+        return cursor.y() - normal_hand_y < normal_ground_y
 
     def _begin_hang(self, now: float) -> None:
         """She grabbed the cursor: stop falling, become click-through, start the hang timer."""
@@ -1531,6 +2067,10 @@ class YellowsPixelBuddies(QWidget):
         self._can_catch_cursor = False
         self._hang_started_at = now
         self._hang_ends_at = now + random.uniform(HANG_MIN_S, HANG_MAX_S)
+        self._hang_bomb_thrown = False
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._bombs_spawned_for_current_throw = False
         self._shake_trail.clear()                    # only movement made while hanging may shake her off
         self._set_input_transparent(True)
         self._play(HANGING_STATE, mirrored=self._hang_mirrored())
@@ -1553,6 +2093,13 @@ class YellowsPixelBuddies(QWidget):
             self._fall_after_jump(RELEASE_REACTION)
             return
 
+        # Check for serial bomb throw attack trigger after hanging for HANG_BOMB_DELAY_S
+        if not self._hang_bomb_thrown and (now - self._hang_started_at >= HANG_BOMB_DELAY_S):
+            self._hang_bomb_thrown = True
+            if random.random() < HANG_BOMB_CHANCE and self._can_play(THROW_STATE):
+                self._start_hang_bomb_throw(now)
+                return
+
         min_x, max_x, min_y, ground_y = bounds
         hand_x, hand_y = self._hand_offset()
         goal_x = min(max(cursor.x() - hand_x, min_x), max_x)
@@ -1560,6 +2107,76 @@ class YellowsPixelBuddies(QWidget):
         follow = 1.0 if HANG_FOLLOW_SMOOTH_S <= 0.0 else 1.0 - math.exp(-dt / HANG_FOLLOW_SMOOTH_S)
         self._x += (goal_x - self._x) * follow
         self._y += (goal_y - self._y) * follow
+
+    def _start_hang_bomb_throw(self, now: float) -> None:
+        """Start serial bomb throw sequence: detach from cursor and float mid-air."""
+        self._leave_hang()
+        self._phase = Phase.THROW
+        self._post_throw_laugh = False
+        self._bomb_overlay.reset_state()
+        pair = ["near", "beneath"]
+        random.shuffle(pair)
+        self._bomb_target_plan = ["random", "random"] + pair
+        self._hang_bomb_count_remaining = BOMB_COUNT
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = THROW_FRAME_11_HOLD_TICKS
+        self._bombs_spawned_for_current_throw = False
+        self._throw_started_at = now
+        self._play(THROW_STATE, loop=False, mirrored=self._throw_mirrored())
+        self._anim_timer.setInterval(THROW_BASE_INTERVAL_MS)
+        self._throw_start_y = self._y
+        min_y = self._bounds()[2]
+        self._throw_rise_px = max(0.0, min(THROW_RISE_PX, self._throw_start_y - min_y))
+        log.debug("Detached from cursor: floating mid-air for serial bomb throw (rising %.1fpx)",
+                  self._throw_rise_px)
+
+    def _spawn_single_bomb(self, bomb_idx: int) -> None:
+        """Spawn one of the serial bombs below the pet targeting the taskbar floor.
+
+        Bomb 0 & 1: Random spread across the screen.
+        Bomb 2: Cast towards near the cursor.
+        Bomb 3 (last bomb): Cast directly beneath the cursor with 0.75s fuse.
+        """
+        origin_x = self._x + self.width() / 2.0
+        origin_y = self._y + self.height() * 0.82
+        area = self._work_area()
+        ground_y = float(area.y() + area.height())
+        screen = self.screen() or QApplication.primaryScreen()
+        screen_rect = screen.geometry()
+        facing_left = not self._throw_mirrored()
+
+        # Calculate fast fall time from pet to ground
+        dy = max(10.0, ground_y - origin_y)
+        vy = random.uniform(BOMB_INITIAL_VY_MIN, BOMB_INITIAL_VY_MAX)
+        g = BOMB_FIRST_FALL_GRAVITY_PX_S2
+        t_fall = max(0.04, (-vy + math.sqrt(vy * vy + 2.0 * g * dy)) / g)
+
+        cursor_x = float(QCursor.pos().x())
+        min_target_x = float(screen_rect.left() + BOMB_SIZE / 2.0)
+        max_target_x = float(screen_rect.right() - BOMB_SIZE / 2.0)
+
+        target_mode = self._bomb_target_plan[bomb_idx % len(self._bomb_target_plan)]
+
+        if target_mode == "beneath":
+            # Aimed directly beneath the cursor (0.75s fuse on bounce)!
+            target_ground_x = max(min_target_x, min(max_target_x, cursor_x))
+            vx = (target_ground_x - origin_x) / t_fall
+        elif target_mode == "near":
+            # Aimed near the cursor!
+            offset = random.choice([-1.0, 1.0]) * random.uniform(160.0, 240.0)
+            target_ground_x = max(min_target_x, min(max_target_x, cursor_x + offset))
+            vx = (target_ground_x - origin_x) / t_fall
+        else:
+            # Random spread!
+            spread_vx = [-440.0, 440.0]
+            base_vx = spread_vx[bomb_idx % len(spread_vx)]
+            if not facing_left:
+                base_vx = -base_vx
+            vx = base_vx + random.uniform(-40.0, 40.0)
+
+        self._bomb_overlay.spawn_single_bomb(origin_x, origin_y, vx, vy, ground_y, screen_rect, target_mode=target_mode)
+        log.debug("Spawned serial bomb %d/%d (%s) below pet at (%.1f, %.1f) vx=%.1f vy=%.1f (fall ~%.2fs)",
+                  bomb_idx + 1, BOMB_COUNT, target_mode, origin_x, origin_y, vx, vy, t_fall)
 
     def _is_shaking(self) -> bool:
         """The raw cursor path of the last SHAKE_WINDOW_S zig-zags on one axis but goes nowhere."""
@@ -1609,6 +2226,11 @@ class YellowsPixelBuddies(QWidget):
         """Undo what the hang set up: click-through off, shake history gone."""
         self._set_input_transparent(False)
         self._shake_trail.clear()
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
+        self._bombs_spawned_for_current_throw = False
 
     def _set_input_transparent(self, enabled: bool) -> None:
         """Click-through for the whole window while she hangs, so clicks reach what is under the cursor."""
@@ -1624,11 +2246,19 @@ class YellowsPixelBuddies(QWidget):
         """Forget everything about a jump in progress. Used by every cancel path: drag, quit ..."""
         self._stop_overlay()
         self._leave_hang()
+        self._anim_timer.setInterval(ANIM_INTERVAL_MS)
         self._pending_reaction = None
         self._vx = 0.0
         self._wall_bounced = False
         self._can_catch_cursor = False
         self._debug_jump_at = None
+        self._hang_bomb_thrown = False
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
+        self._bombs_spawned_for_current_throw = False
+        self._post_throw_laugh = False
 
     # ------------------------------------------------------- jump: debug aid
     def _schedule_debug_jump(self) -> None:
@@ -1677,9 +2307,9 @@ class YellowsPixelBuddies(QWidget):
         self._press_global = None
         if self._dragging:
             self._end_drag()
-        elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
-            # A plain click in mid-air changes nothing: it must not turn the pet into a
-            # "shocked" pause and so overwrite the landing reaction that is waiting for her.
+        elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
+            # A plain click in mid-air or during post-throw victory laugh changes nothing: it must not
+            # turn the pet into a "shocked" pause and so overwrite the victory laugh / landing reaction.
             return
         else:
             if self.state == "angry":
@@ -1726,8 +2356,9 @@ class YellowsPixelBuddies(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
-        if self._phase in (Phase.JUMP, Phase.HANG):
-            # Opening the menu aborts a jump / hang into a plain fall, with no reaction.
+        self._post_throw_laugh = False
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
+            # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
         menu = QMenu(self)
         jump_action = None
@@ -1760,7 +2391,9 @@ class YellowsPixelBuddies(QWidget):
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
-        if self._dragging or self._menu_open or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
+        if (self._dragging or self._menu_open
+                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW)
+                or self._post_throw_laugh):
             return
 
         dll = _user32()
@@ -1780,7 +2413,9 @@ class YellowsPixelBuddies(QWidget):
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
         """Evaluate the newly focused window after it has composited."""
-        if self._dragging or self._menu_open or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
+        if (self._dragging or self._menu_open
+                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW)
+                or self._post_throw_laugh):
             return
         dll = _user32()
         if dll is None:
@@ -1909,6 +2544,8 @@ class YellowsPixelBuddies(QWidget):
         self._stop_overlay()
         if hasattr(self, "_vfx_overlay"):
             self._vfx_overlay.close()
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay.close()
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()

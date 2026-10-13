@@ -59,3 +59,8 @@ ehthumbs.db
 *.sqlite3
 .agents/hooks.json
 .cursor/hooks.json
+
+prev.py
+preview.png
+
+/sprites/sheet.png
