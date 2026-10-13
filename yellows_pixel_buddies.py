@@ -233,9 +233,9 @@ SPARK_SIZE = 60                    # logical px: sparks animation at rope tip
 LASER_SIZE = 70                    # logical px: laser beam cross
 THROW_SIZE = (SPRITE_SIZE, round(SPRITE_SIZE * 91.0 / 44.0))  # (128, 265): natural scale matching idle/hanging
 BOMB_GRAVITY_PX_S2 = 1300.0       # downward gravity for thrown bombs after first bounce
-BOMB_FIRST_FALL_GRAVITY_PX_S2 = 3200.0  # heavy downward gravity on the initial fast throw
-BOMB_INITIAL_VY_MIN = 1600.0       # fast initial downward velocity range (fast throw)
-BOMB_INITIAL_VY_MAX = 2100.0
+BOMB_FIRST_FALL_GRAVITY_PX_S2 = 4500.0  # heavy downward gravity on the initial fast throw
+BOMB_INITIAL_VY_MIN = 2400.0       # fast initial downward velocity range (fast throw)
+BOMB_INITIAL_VY_MAX = 3000.0
 BOMB_BOUNCE_VY_MIN = 680.0        # upward velocity on first ground bounce (bounces much higher)
 BOMB_BOUNCE_VY_MAX = 920.0
 BOMB_FUSE_MIN_S = 1.6             # fuse timer after first bounce (allows far bounce arcs across screen)
@@ -908,6 +908,7 @@ class Bomb:
     vx: float
     vy: float
     size: float
+    target_mode: str = "random"  # "beneath", "near", or "random"
     has_bounced: bool = False
     is_ignited: bool = False
     fuse_duration: float = 0.0
@@ -926,6 +927,7 @@ class LaserCross:
     frame_idx: int = 0
     frame_timer: float = 0.0
     finished: bool = False
+    hit_detected: bool = False
 
 
 class BombLaserOverlay(QWidget):
@@ -988,7 +990,8 @@ class BombLaserOverlay(QWidget):
             ))
 
     def spawn_single_bomb(self, bx: float, by: float, vx: float, vy: float,
-                          ground_y: float, screen_rect: QRect) -> None:
+                          ground_y: float, screen_rect: QRect,
+                          target_mode: str = "random") -> None:
         """Spawn a single bomb into the overlay simulation."""
         self._ground_y = ground_y
         if self.geometry() != screen_rect:
@@ -999,7 +1002,8 @@ class BombLaserOverlay(QWidget):
             y=by,
             vx=vx,
             vy=vy,
-            size=float(BOMB_SIZE)
+            size=float(BOMB_SIZE),
+            target_mode=target_mode,
         ))
 
         self._last_time = time.perf_counter()
@@ -1039,13 +1043,36 @@ class BombLaserOverlay(QWidget):
                 if not b.has_bounced:
                     b.has_bounced = True
                     b.is_ignited = True
-                    b.fuse_duration = random.uniform(BOMB_FUSE_MIN_S, BOMB_FUSE_MAX_S)
-                    b.fuse_time = b.fuse_duration
-                    b.vy = -random.uniform(BOMB_BOUNCE_VY_MIN, BOMB_BOUNCE_VY_MAX)
-                    # Propel far in its horizontal direction of travel
-                    direction = 1.0 if b.vx >= 0.0 else -1.0
-                    speed = max(abs(b.vx) * 1.35, random.uniform(380.0, 620.0))
-                    b.vx = direction * speed + random.uniform(-40.0, 40.0)
+                    cursor_x = float(QCursor.pos().x())
+                    center_x = b.x + b.size / 2.0
+                    min_x = screen_left + b.size / 2.0
+                    max_x = screen_right - b.size / 2.0
+
+                    if b.target_mode == "beneath":
+                        # Exactly 0.75s fuse - player has 0.75s to move the cursor before detonation
+                        b.fuse_duration = 0.75
+                        b.fuse_time = 0.75
+                        target_x = max(min_x, min(max_x, cursor_x))
+                        dx = target_x - center_x
+                        b.vx = max(-1000.0, min(1000.0, dx / 0.75))
+                        # Gentle upward bounce that reaches apex and lands back near ground at ~0.75s
+                        # (flight time = 2 * vy / g = 2 * 490 / 1300 = 0.754s)
+                        b.vy = -490.0
+                    elif b.target_mode == "near":
+                        b.fuse_duration = random.uniform(1.3, 1.7)
+                        b.fuse_time = b.fuse_duration
+                        offset = random.choice([-1.0, 1.0]) * random.uniform(160.0, 240.0)
+                        target_x = max(min_x, min(max_x, cursor_x + offset))
+                        dx = target_x - center_x
+                        b.vx = max(-1000.0, min(1000.0, dx / b.fuse_duration))
+                        b.vy = -random.uniform(BOMB_BOUNCE_VY_MIN, BOMB_BOUNCE_VY_MAX)
+                    else:  # "random"
+                        b.fuse_duration = random.uniform(BOMB_FUSE_MIN_S, BOMB_FUSE_MAX_S)
+                        b.fuse_time = b.fuse_duration
+                        b.vy = -random.uniform(BOMB_BOUNCE_VY_MIN, BOMB_BOUNCE_VY_MAX)
+                        direction = 1.0 if b.vx >= 0.0 else -1.0
+                        speed = max(abs(b.vx) * 1.35, random.uniform(380.0, 620.0))
+                        b.vx = direction * speed + random.uniform(-40.0, 40.0)
                 else:
                     b.vy = -abs(b.vy) * random.uniform(0.65, 0.78)
                     b.vx *= 0.92
@@ -1089,6 +1116,7 @@ class BombLaserOverlay(QWidget):
         self._bombs = [b for b in self._bombs if not b.exploded]
 
         # Update lasers
+        cursor_pos = QCursor.pos()
         for laser in self._lasers:
             laser.extend_length += LASER_EXTEND_SPEED_PX_S * dt
             laser.frame_timer += dt
@@ -1097,6 +1125,16 @@ class BombLaserOverlay(QWidget):
                 laser.frame_idx += 1
                 if laser.frame_idx >= len(laser_mid_frames):
                     laser.finished = True
+
+            # Laser hit detection on mouse cursor
+            if not laser.hit_detected:
+                half = LASER_SIZE / 2.0
+                hit_vert = abs(cursor_pos.x() - laser.cx) <= half
+                hit_horiz = abs(cursor_pos.y() - laser.cy) <= half
+                if hit_vert or hit_horiz:
+                    laser.hit_detected = True
+                    log.info("Cursor hit by laser cross beam! (laser cx=%.1f, cy=%.1f, cursor=%d, %d)",
+                             laser.cx, laser.cy, cursor_pos.x(), cursor_pos.y())
 
         # Remove finished lasers
         self._lasers = [l for l in self._lasers if not l.finished]
@@ -1280,6 +1318,7 @@ class YellowsPixelBuddies(QWidget):
         self._throw_start_y = 0.0            # starting y before upward float
         self._throw_rise_px = 0.0            # upward distance to float during frames 1-5
         self._post_throw_laugh = False       # True while post-bomb victory laugh lasts
+        self._bomb_target_plan: list[str] = ["random", "random", "near", "beneath"]
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -2075,6 +2114,9 @@ class YellowsPixelBuddies(QWidget):
         self._phase = Phase.THROW
         self._post_throw_laugh = False
         self._bomb_overlay.reset_state()
+        pair = ["near", "beneath"]
+        random.shuffle(pair)
+        self._bomb_target_plan = ["random", "random"] + pair
         self._hang_bomb_count_remaining = BOMB_COUNT
         self._hang_bomb_index = 0
         self._throw_pause_ticks = THROW_FRAME_11_HOLD_TICKS
@@ -2089,7 +2131,12 @@ class YellowsPixelBuddies(QWidget):
                   self._throw_rise_px)
 
     def _spawn_single_bomb(self, bomb_idx: int) -> None:
-        """Spawn one of the serial bombs below the pet targeting the taskbar floor."""
+        """Spawn one of the serial bombs below the pet targeting the taskbar floor.
+
+        Bomb 0 & 1: Random spread across the screen.
+        Bomb 2: Cast towards near the cursor.
+        Bomb 3 (last bomb): Cast directly beneath the cursor with 0.75s fuse.
+        """
         origin_x = self._x + self.width() / 2.0
         origin_y = self._y + self.height() * 0.82
         area = self._work_area()
@@ -2097,15 +2144,39 @@ class YellowsPixelBuddies(QWidget):
         screen = self.screen() or QApplication.primaryScreen()
         screen_rect = screen.geometry()
         facing_left = not self._throw_mirrored()
-        spread_vx = [-360.0, -140.0, 140.0, 360.0]
-        base_vx = spread_vx[bomb_idx % len(spread_vx)]
-        if not facing_left:
-            base_vx = -base_vx
-        vx = base_vx + random.uniform(-30.0, 30.0)
+
+        # Calculate fast fall time from pet to ground
+        dy = max(10.0, ground_y - origin_y)
         vy = random.uniform(BOMB_INITIAL_VY_MIN, BOMB_INITIAL_VY_MAX)
-        self._bomb_overlay.spawn_single_bomb(origin_x, origin_y, vx, vy, ground_y, screen_rect)
-        log.debug("Spawned serial bomb %d/%d below pet at (%.1f, %.1f) vx=%.1f vy=%.1f",
-                  bomb_idx + 1, BOMB_COUNT, origin_x, origin_y, vx, vy)
+        g = BOMB_FIRST_FALL_GRAVITY_PX_S2
+        t_fall = max(0.04, (-vy + math.sqrt(vy * vy + 2.0 * g * dy)) / g)
+
+        cursor_x = float(QCursor.pos().x())
+        min_target_x = float(screen_rect.left() + BOMB_SIZE / 2.0)
+        max_target_x = float(screen_rect.right() - BOMB_SIZE / 2.0)
+
+        target_mode = self._bomb_target_plan[bomb_idx % len(self._bomb_target_plan)]
+
+        if target_mode == "beneath":
+            # Aimed directly beneath the cursor (0.75s fuse on bounce)!
+            target_ground_x = max(min_target_x, min(max_target_x, cursor_x))
+            vx = (target_ground_x - origin_x) / t_fall
+        elif target_mode == "near":
+            # Aimed near the cursor!
+            offset = random.choice([-1.0, 1.0]) * random.uniform(160.0, 240.0)
+            target_ground_x = max(min_target_x, min(max_target_x, cursor_x + offset))
+            vx = (target_ground_x - origin_x) / t_fall
+        else:
+            # Random spread!
+            spread_vx = [-440.0, 440.0]
+            base_vx = spread_vx[bomb_idx % len(spread_vx)]
+            if not facing_left:
+                base_vx = -base_vx
+            vx = base_vx + random.uniform(-40.0, 40.0)
+
+        self._bomb_overlay.spawn_single_bomb(origin_x, origin_y, vx, vy, ground_y, screen_rect, target_mode=target_mode)
+        log.debug("Spawned serial bomb %d/%d (%s) below pet at (%.1f, %.1f) vx=%.1f vy=%.1f (fall ~%.2fs)",
+                  bomb_idx + 1, BOMB_COUNT, target_mode, origin_x, origin_y, vx, vy, t_fall)
 
     def _is_shaking(self) -> bool:
         """The raw cursor path of the last SHAKE_WINDOW_S zig-zags on one axis but goes nowhere."""
