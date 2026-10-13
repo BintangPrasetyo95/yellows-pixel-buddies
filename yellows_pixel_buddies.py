@@ -226,7 +226,9 @@ SWITCH_BURNT_COOLDOWN_S = 10.0         # cooldown in seconds for flashbang burnt
 
 # --- Bomb & Laser Attack -----------------------------------------------------
 HANG_BOMB_DELAY_S = 2.0           # seconds hanging from cursor before bomb throw triggers
-HANG_BOMB_CHANCE = 1.0            # chance (0.0 to 1.0) to throw bombs after delay (1.0 = 100% for test)
+HANG_BOMB_CHANCE = 0.2            # chance (2/10, ~20%) to throw bombs after delay while hanging
+HANG_BOMB_ENABLED = True          # default enabled state for bomb attack mode
+HANG_BOMB_FORCE_100 = False       # sub-switch: force 100% chance for bombs every time (when bomb mode active)
 BOMB_COUNT = 4                    # number of bombs thrown in series
 BOMB_SIZE = 80                     # logical px: cat bomb (clean 4x pixel scale, slightly bigger)
 SPARK_SIZE = 60                    # logical px: sparks animation at rope tip
@@ -1319,6 +1321,8 @@ class YellowsPixelBuddies(QWidget):
         self._throw_rise_px = 0.0            # upward distance to float during frames 1-5
         self._post_throw_laugh = False       # True while post-bomb victory laugh lasts
         self._bomb_target_plan: list[str] = ["random", "random", "near", "beneath"]
+        self._bomb_attack_enabled: bool = HANG_BOMB_ENABLED
+        self._bomb_force_100: bool = HANG_BOMB_FORCE_100
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -1365,6 +1369,8 @@ class YellowsPixelBuddies(QWidget):
         # --- system tray icon (hidden icons menu on taskbar) ------------------
         self._tray_icon: QSystemTrayIcon | None = None
         self._startup_action: QAction | None = None
+        self._bomb_action: QAction | None = None
+        self._bomb_force_action: QAction | None = None
         self._init_tray_icon()
 
     # ------------------------------------------------------------------ start
@@ -2094,9 +2100,12 @@ class YellowsPixelBuddies(QWidget):
             return
 
         # Check for serial bomb throw attack trigger after hanging for HANG_BOMB_DELAY_S
-        if not self._hang_bomb_thrown and (now - self._hang_started_at >= HANG_BOMB_DELAY_S):
+        if (self._bomb_attack_enabled
+                and not self._hang_bomb_thrown
+                and (now - self._hang_started_at >= HANG_BOMB_DELAY_S)):
             self._hang_bomb_thrown = True
-            if random.random() < HANG_BOMB_CHANCE and self._can_play(THROW_STATE):
+            chance = 1.0 if self._bomb_force_100 else HANG_BOMB_CHANCE
+            if random.random() < chance and self._can_play(THROW_STATE):
                 self._start_hang_bomb_throw(now)
                 return
 
@@ -2364,6 +2373,17 @@ class YellowsPixelBuddies(QWidget):
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
+        bomb_action = menu.addAction("Bomb Attack Mode")
+        bomb_action.setCheckable(True)
+        bomb_action.setChecked(self._bomb_attack_enabled)
+        bomb_action.toggled.connect(self._toggle_bomb_attack)
+
+        bomb_force_action = menu.addAction("  ↳ 100% Bomb Chance")
+        bomb_force_action.setCheckable(True)
+        bomb_force_action.setChecked(self._bomb_force_100)
+        bomb_force_action.setEnabled(self._bomb_attack_enabled)
+        bomb_force_action.toggled.connect(self._toggle_bomb_force_100)
+        bomb_action.toggled.connect(bomb_force_action.setEnabled)
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -2493,6 +2513,17 @@ class YellowsPixelBuddies(QWidget):
         self._startup_action.setChecked(is_run_at_startup_enabled())
         self._startup_action.toggled.connect(self._toggle_run_at_startup)
 
+        self._bomb_action = tray_menu.addAction("Bomb Attack Mode")
+        self._bomb_action.setCheckable(True)
+        self._bomb_action.setChecked(self._bomb_attack_enabled)
+        self._bomb_action.toggled.connect(self._toggle_bomb_attack)
+
+        self._bomb_force_action = tray_menu.addAction("  ↳ 100% Bomb Chance")
+        self._bomb_force_action.setCheckable(True)
+        self._bomb_force_action.setChecked(self._bomb_force_100)
+        self._bomb_force_action.setEnabled(self._bomb_attack_enabled)
+        self._bomb_force_action.toggled.connect(self._toggle_bomb_force_100)
+
         tray_menu.addSeparator()
         reset_action = tray_menu.addAction("Bring to Taskbar")
         reset_action.triggered.connect(self._reset_to_taskbar)
@@ -2512,6 +2543,35 @@ class YellowsPixelBuddies(QWidget):
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
             self._startup_action.blockSignals(False)
+        if self._bomb_action is not None:
+            self._bomb_action.blockSignals(True)
+            self._bomb_action.setChecked(self._bomb_attack_enabled)
+            self._bomb_action.blockSignals(False)
+        if self._bomb_force_action is not None:
+            self._bomb_force_action.blockSignals(True)
+            self._bomb_force_action.setChecked(self._bomb_force_100)
+            self._bomb_force_action.setEnabled(self._bomb_attack_enabled)
+            self._bomb_force_action.blockSignals(False)
+
+    def _toggle_bomb_attack(self, checked: bool) -> None:
+        """Enable or disable the bomb attack mode (2/10 chance while hanging when enabled)."""
+        self._bomb_attack_enabled = checked
+        if self._bomb_action is not None:
+            self._bomb_action.blockSignals(True)
+            self._bomb_action.setChecked(checked)
+            self._bomb_action.blockSignals(False)
+        if self._bomb_force_action is not None:
+            self._bomb_force_action.setEnabled(checked)
+        log.info("Bomb attack mode: %s", "ENABLED" if checked else "DISABLED")
+
+    def _toggle_bomb_force_100(self, checked: bool) -> None:
+        """Enable or disable 100% bomb attack chance every time while hanging."""
+        self._bomb_force_100 = checked
+        if self._bomb_force_action is not None:
+            self._bomb_force_action.blockSignals(True)
+            self._bomb_force_action.setChecked(checked)
+            self._bomb_force_action.blockSignals(False)
+        log.info("Bomb attack 100%% force chance: %s", "ENABLED" if checked else "DISABLED")
 
     def _toggle_run_at_startup(self, checked: bool) -> None:
         """Callback when user toggles 'Start with Windows'."""
