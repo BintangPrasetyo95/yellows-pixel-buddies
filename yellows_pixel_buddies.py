@@ -144,12 +144,20 @@ PLACEHOLDER_FRAME_COUNT = 10   # frames generated for each state with no sprite 
 # --- Timing ------------------------------------------------------------------
 ANIM_INTERVAL_MS = 180            # sprite frame advance   (~5.5 FPS)
 WISTFUL_FRAME_INTERVAL_MS = 500   # sprite frame advance for wistful walk (slow, lingering steps)
+AIRBORNE_FRAME_INTERVAL_MS = ANIM_INTERVAL_MS // 3  # 60 ms (~16.7 FPS, 3x faster than default 180ms)
+THROW_BASE_INTERVAL_MS = 75            # initial windup speed for throw animation (~13.3 FPS)
+THROW_FAST_INTERVAL_MS = round(THROW_BASE_INTERVAL_MS / 2.5)  # 30 ms (2.5x faster, ~33.3 FPS)
+THROW_FRAME_11_HOLD_TICKS = 4          # pause at frame 11 (~300ms hold on first throw)
+THROW_RISE_PX = 64.0                   # px she floats smoothly upwards during first throw frames 1-5
 FRAME_INTERVAL_MS = {
     # per-state frame advance in ms; overrides ANIM_INTERVAL_MS for that state only
     "run_left": 120, "run_right": 120,
     "wistful_walk_left": WISTFUL_FRAME_INTERVAL_MS,
     "wistful_walk_right": WISTFUL_FRAME_INTERVAL_MS,
-    "throw": 65,
+    "airborne": AIRBORNE_FRAME_INTERVAL_MS,
+    "airborne__mirrored": AIRBORNE_FRAME_INTERVAL_MS,
+    "throw": THROW_BASE_INTERVAL_MS,
+    "throw__mirrored": THROW_BASE_INTERVAL_MS,
     # "idle": 250,
     # "laughing": 100,
 }
@@ -220,21 +228,23 @@ SWITCH_BURNT_COOLDOWN_S = 10.0         # cooldown in seconds for flashbang burnt
 HANG_BOMB_DELAY_S = 2.0           # seconds hanging from cursor before bomb throw triggers
 HANG_BOMB_CHANCE = 1.0            # chance (0.0 to 1.0) to throw bombs after delay (1.0 = 100% for test)
 BOMB_COUNT = 4                    # number of bombs thrown in series
-BOMB_SIZE = 58                     # logical px: cat bomb
-SPARK_SIZE = 47                    # logical px: sparks animation at rope tip
+BOMB_SIZE = 80                     # logical px: cat bomb (clean 4x pixel scale, slightly bigger)
+SPARK_SIZE = 60                    # logical px: sparks animation at rope tip
 LASER_SIZE = 70                    # logical px: laser beam cross
 THROW_SIZE = (SPRITE_SIZE, round(SPRITE_SIZE * 91.0 / 44.0))  # (128, 265): natural scale matching idle/hanging
-BOMB_GRAVITY_PX_S2 = 1300.0       # downward gravity for thrown bombs
-BOMB_INITIAL_VY_MIN = 260.0       # initial downward velocity range
-BOMB_INITIAL_VY_MAX = 420.0
-BOMB_BOUNCE_VY_MIN = 380.0        # upward velocity on first ground bounce
-BOMB_BOUNCE_VY_MAX = 560.0
-BOMB_FUSE_MIN_S = 1.2             # fuse timer after first bounce
-BOMB_FUSE_MAX_S = 1.8
+BOMB_GRAVITY_PX_S2 = 1300.0       # downward gravity for thrown bombs after first bounce
+BOMB_FIRST_FALL_GRAVITY_PX_S2 = 3200.0  # heavy downward gravity on the initial fast throw
+BOMB_INITIAL_VY_MIN = 1600.0       # fast initial downward velocity range (fast throw)
+BOMB_INITIAL_VY_MAX = 2100.0
+BOMB_BOUNCE_VY_MIN = 680.0        # upward velocity on first ground bounce (bounces much higher)
+BOMB_BOUNCE_VY_MAX = 920.0
+BOMB_FUSE_MIN_S = 1.6             # fuse timer after first bounce (allows far bounce arcs across screen)
+BOMB_FUSE_MAX_S = 2.4
 SPARK_FRAME_INTERVAL_MS = 40      # fast sparks animation speed (~25 FPS)
 LASER_FRAME_INTERVAL_MS = 55      # laser animation speed (~18 FPS)
 LASER_EXTEND_SPEED_PX_S = 6000.0  # speed at which laser beam extends outwards
 BOMB_PHYSICS_INTERVAL_MS = 16     # physics & overlay tick interval (~60 FPS)
+BOMB_LAUGH_EXTRA_S = 1.3          # seconds to laugh after the last bomb explodes (1+ sec)
 
 # Relative rope tip anchor (x_frac, y_frac) for each of the 5 bomb frames:
 BOMB_ROPE_TIPS = [
@@ -838,6 +848,7 @@ class Phase(Enum):
     FALL = auto()    # dropped / let go, falling back to the taskbar
     JUMP = auto()    # leaping at the cursor: the rise, and the fall after a miss
     HANG = auto()    # hanging from the cursor (no gravity, no walking)
+    THROW = auto()   # bomb barrage floating mid-air (stops hanging from cursor)
 
 
 class VfxOverlay(QWidget):
@@ -930,11 +941,30 @@ class BombLaserOverlay(QWidget):
         self._bombs: list[Bomb] = []
         self._lasers: list[LaserCross] = []
         self._ground_y: float = 0.0
+        self._last_bomb_exploded_at: float = 0.0
 
         self._timer = QTimer(self)
         self._timer.setInterval(BOMB_PHYSICS_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
         self._last_time = time.perf_counter()
+
+    @property
+    def last_bomb_exploded_at(self) -> float:
+        return self._last_bomb_exploded_at
+
+    def has_active_bombs(self) -> bool:
+        """True if any unexploded bombs are currently bouncing or falling."""
+        return any(not b.exploded for b in self._bombs)
+
+    def has_active_lasers(self) -> bool:
+        """True if any laser crosses are currently extending/visible."""
+        return any(not l.finished for l in self._lasers)
+
+    def reset_state(self) -> None:
+        """Reset bombs, lasers, and explosion tracking for a new attack."""
+        self._bombs.clear()
+        self._lasers.clear()
+        self._last_bomb_exploded_at = 0.0
 
     def spawn_bombs(self, origin_x: float, origin_y: float, ground_y: float,
                     screen_rect: QRect, facing_left: bool = True) -> None:
@@ -998,7 +1028,8 @@ class BombLaserOverlay(QWidget):
 
         # Update bombs
         for b in self._bombs:
-            b.vy += BOMB_GRAVITY_PX_S2 * dt
+            gravity = BOMB_GRAVITY_PX_S2 if b.has_bounced else BOMB_FIRST_FALL_GRAVITY_PX_S2
+            b.vy += gravity * dt
             b.x += b.vx * dt
             b.y += b.vy * dt
 
@@ -1011,26 +1042,30 @@ class BombLaserOverlay(QWidget):
                     b.fuse_duration = random.uniform(BOMB_FUSE_MIN_S, BOMB_FUSE_MAX_S)
                     b.fuse_time = b.fuse_duration
                     b.vy = -random.uniform(BOMB_BOUNCE_VY_MIN, BOMB_BOUNCE_VY_MAX)
-                    b.vx = b.vx * random.uniform(0.6, 0.85) + random.uniform(-100.0, 100.0)
+                    # Propel far in its horizontal direction of travel
+                    direction = 1.0 if b.vx >= 0.0 else -1.0
+                    speed = max(abs(b.vx) * 1.35, random.uniform(380.0, 620.0))
+                    b.vx = direction * speed + random.uniform(-40.0, 40.0)
                 else:
-                    b.vy = -abs(b.vy) * random.uniform(0.45, 0.60)
-                    b.vx *= 0.85
-                    if abs(b.vy) < 50.0:
+                    b.vy = -abs(b.vy) * random.uniform(0.65, 0.78)
+                    b.vx *= 0.92
+                    if abs(b.vy) < 40.0:
                         b.vy = 0.0
 
-            # Screen edge bounces
+            # Screen edge bounces (elastic ricochet)
             if b.x < screen_left:
                 b.x = screen_left
-                b.vx = abs(b.vx) * 0.75
+                b.vx = abs(b.vx) * 0.85
             elif b.x + b.size > screen_right:
                 b.x = screen_right - b.size
-                b.vx = -abs(b.vx) * 0.75
+                b.vx = -abs(b.vx) * 0.85
 
             # Fuse and sparks
             if b.is_ignited:
                 b.fuse_time -= dt
                 if b.fuse_time <= 0.0:
                     b.exploded = True
+                    self._last_bomb_exploded_at = now
                     # Detonate into cross laser
                     self._lasers.append(LaserCross(
                         cx=b.x + b.size / 2.0,
@@ -1239,7 +1274,12 @@ class YellowsPixelBuddies(QWidget):
         self._hang_bomb_thrown = False       # whether bomb throw sequence has triggered for this hang
         self._hang_bomb_count_remaining = 0  # serial bombs remaining to throw
         self._hang_bomb_index = 0            # index of current bomb in the series (0..BOMB_COUNT-1)
+        self._throw_pause_ticks = 0          # pause ticks remaining on frame 11
         self._bombs_spawned_for_current_throw = False
+        self._throw_started_at = 0.0         # perf_counter() time when throw sequence started
+        self._throw_start_y = 0.0            # starting y before upward float
+        self._throw_rise_px = 0.0            # upward distance to float during frames 1-5
+        self._post_throw_laugh = False       # True while post-bomb victory laugh lasts
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -1355,7 +1395,10 @@ class YellowsPixelBuddies(QWidget):
             self._stop_overlay()
 
         old_hand_x, old_hand_y = (0.0, 0.0)
-        if hasattr(self, "_phase") and self._phase is Phase.HANG:
+        should_adjust = (hasattr(self, "_phase")
+                         and (self._phase in (Phase.HANG, Phase.THROW)
+                              or (self._phase is Phase.FALL and self.state == THROW_STATE)))
+        if should_adjust:
             old_hand_x, old_hand_y = self._hand_offset()
 
         self.state = state
@@ -1378,7 +1421,7 @@ class YellowsPixelBuddies(QWidget):
             self._sub_loop_count = 0
         self._set_frame(0)
 
-        if hasattr(self, "_phase") and self._phase is Phase.HANG:
+        if should_adjust:
             new_hand_x, new_hand_y = self._hand_offset()
             self._x += (old_hand_x - new_hand_x)
             self._y += (old_hand_y - new_hand_y)
@@ -1448,16 +1491,53 @@ class YellowsPixelBuddies(QWidget):
                         self._set_frame(start_idx)
                         return
 
+        # Custom frame progression and looping for THROW_STATE
+        if self.state == THROW_STATE:
+            # 1. On first throw, pause briefly at frame 11 (0-indexed: 10)
+            if self._frame_idx == 10 and self._throw_pause_ticks > 0:
+                self._throw_pause_ticks -= 1
+                return
+
+            if self._frame_idx + 1 < count:
+                next_idx = self._frame_idx + 1
+                self._set_frame(next_idx)
+
+                # 2. Starting from frame 12 (0-indexed: 11), speed accelerates 2.5x
+                if next_idx >= 11:
+                    if self._anim_timer.interval() != THROW_FAST_INTERVAL_MS:
+                        self._anim_timer.setInterval(THROW_FAST_INTERVAL_MS)
+
+                # 3. Release bomb at frame 12 (0-indexed: 11)
+                if next_idx >= 11 and not self._bombs_spawned_for_current_throw:
+                    self._bombs_spawned_for_current_throw = True
+                    self._spawn_single_bomb(self._hang_bomb_index)
+                    self._hang_bomb_index += 1
+                    self._hang_bomb_count_remaining -= 1
+                return
+
+            # Reached frame 14 (0-indexed: 13, which is count - 1)
+            # 4. Loop back to frame 4 (0-indexed: 3) until the last throw
+            if self._hang_bomb_count_remaining > 0:
+                self._bombs_spawned_for_current_throw = False
+                self._set_frame(3)  # frame 4 is 0-indexed 3
+                return
+
+            # All 4 throws completed!
+            self._finish_throw_sequence()
+            return
+
         if self._frame_idx + 1 < count:
             self._set_frame(self._frame_idx + 1)
-            if self.state == THROW_STATE and not self._bombs_spawned_for_current_throw and self._frame_idx >= 10:
-                self._bombs_spawned_for_current_throw = True
-                self._spawn_single_bomb(self._hang_bomb_index)
-                self._hang_bomb_index += 1
-                self._hang_bomb_count_remaining -= 1
         elif self._loop:
             if count > 1:
                 self._set_frame(0)               # wrap around
+        elif self._post_throw_laugh and self.state == "laughing":
+            now = time.perf_counter()
+            if not self._can_end_post_throw_laugh(now):
+                self._set_frame(0)               # keep laughing while bombs/lasers active + extra 1+ s
+            else:
+                self._post_throw_laugh = False
+                self._finish_one_shot()
         elif self._repeat_count > 0:
             self._repeat_count -= 1
             self._set_frame(0)                   # repeat another cycle
@@ -1466,14 +1546,40 @@ class YellowsPixelBuddies(QWidget):
         else:
             self._finish_one_shot()
 
+    def _finish_throw_sequence(self) -> None:
+        """Finished 4-bomb barrage floating mid-air: fall laughing down to the ground."""
+        self._anim_timer.setInterval(FRAME_INTERVAL_MS.get("laughing", ANIM_INTERVAL_MS))
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
+        self._bombs_spawned_for_current_throw = False
+        self._begin_fall(JUMP_GRAVITY_PX_S2, reaction="laughing")
+        self._post_throw_laugh = True
+        self._play("laughing", loop=True)
+        log.debug("Finished throw barrage: falling laughing from mid-air to ground")
+
+    def _can_end_post_throw_laugh(self, now: float) -> bool:
+        """Check if post-throw victory laugh can end.
+
+        Must laugh until all bombs have exploded, all lasers have cleared, and at least
+        BOMB_LAUGH_EXTRA_S has elapsed since the last bomb explosion.
+        """
+        if self._throw_started_at > 0.0 and (now - self._throw_started_at) > 20.0:
+            return True  # failsafe timeout
+        if self._hang_bomb_count_remaining > 0:
+            return False
+        if self._bomb_overlay.has_active_bombs():
+            return False
+        if self._bomb_overlay.has_active_lasers():
+            return False
+        last_exploded = self._bomb_overlay.last_bomb_exploded_at
+        if last_exploded <= 0.0:
+            return False
+        return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
+
     def _finish_one_shot(self) -> None:
         """A special animation ended: resume previous activity or return to idle."""
-        if self.state == THROW_STATE and not self._bombs_spawned_for_current_throw:
-            self._bombs_spawned_for_current_throw = True
-            self._spawn_single_bomb(self._hang_bomb_index)
-            self._hang_bomb_index += 1
-            self._hang_bomb_count_remaining -= 1
-
         # If interrupted by window switch, resume previous state
         if self._interrupted_state:
             saved = self._interrupted_state
@@ -1484,10 +1590,6 @@ class YellowsPixelBuddies(QWidget):
             return
 
         if self._phase is Phase.HANG:
-            if self._hang_bomb_count_remaining > 0:
-                self._bombs_spawned_for_current_throw = False
-                self._play(THROW_STATE, loop=False, mirrored=self._throw_mirrored())
-                return
             self._play(HANGING_STATE, mirrored=self._hang_mirrored())
             return
 
@@ -1632,6 +1734,17 @@ class YellowsPixelBuddies(QWidget):
 
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
             self._tick_hang(cursor, now, dt, bounds)
+            self._sync_window_position()
+            return
+
+        if self._phase is Phase.THROW:              # stops hanging from cursor, floats mid-air
+            # First throw frames 1-5: float smoothly upwards
+            if self._throw_rise_px > 0.0:
+                rise_dur_s = 5 * (THROW_BASE_INTERVAL_MS / 1000.0)
+                elapsed = max(0.0, now - self._throw_started_at)
+                t = min(1.0, elapsed / rise_dur_s)
+                smooth_t = t * t * (3.0 - 2.0 * t)  # smoothstep S-curve
+                self._y = self._throw_start_y - smooth_t * self._throw_rise_px
             self._sync_window_position()
             return
 
@@ -1849,6 +1962,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _update_airborne_facing(self) -> None:
         """Update sprite mirroring and mask to match the current heading while airborne."""
+        if self.state != AIRBORNE_STATE:
+            return
         flipped = mirrored_key(AIRBORNE_STATE)
         self._sprite_key = flipped if self._airborne_mirrored() and flipped in self._bank.frames else AIRBORNE_STATE
         if self._sprite_key in self._bank.frames:
@@ -1943,9 +2058,8 @@ class YellowsPixelBuddies(QWidget):
         if not self._hang_bomb_thrown and (now - self._hang_started_at >= HANG_BOMB_DELAY_S):
             self._hang_bomb_thrown = True
             if random.random() < HANG_BOMB_CHANCE and self._can_play(THROW_STATE):
-                self._hang_bomb_count_remaining = BOMB_COUNT
-                self._hang_bomb_index = 0
                 self._start_hang_bomb_throw(now)
+                return
 
         min_x, max_x, min_y, ground_y = bounds
         hand_x, hand_y = self._hand_offset()
@@ -1956,15 +2070,23 @@ class YellowsPixelBuddies(QWidget):
         self._y += (goal_y - self._y) * follow
 
     def _start_hang_bomb_throw(self, now: float) -> None:
-        """Start serial bomb throw sequence while hanging."""
-        throw_frames = self._bank.frames.get(THROW_STATE, [])
-        single_dur_s = (len(throw_frames) * FRAME_INTERVAL_MS.get(THROW_STATE, 65)) / 1000.0
-        total_barrage_s = single_dur_s * max(1, self._hang_bomb_count_remaining) + 2.5
-        self._hang_ends_at = max(self._hang_ends_at, now + total_barrage_s)
+        """Start serial bomb throw sequence: detach from cursor and float mid-air."""
+        self._leave_hang()
+        self._phase = Phase.THROW
+        self._post_throw_laugh = False
+        self._bomb_overlay.reset_state()
+        self._hang_bomb_count_remaining = BOMB_COUNT
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = THROW_FRAME_11_HOLD_TICKS
         self._bombs_spawned_for_current_throw = False
+        self._throw_started_at = now
         self._play(THROW_STATE, loop=False, mirrored=self._throw_mirrored())
-        log.debug("Hang: started serial %d-bomb throw barrage (duration ~%.2fs)",
-                  self._hang_bomb_count_remaining, total_barrage_s)
+        self._anim_timer.setInterval(THROW_BASE_INTERVAL_MS)
+        self._throw_start_y = self._y
+        min_y = self._bounds()[2]
+        self._throw_rise_px = max(0.0, min(THROW_RISE_PX, self._throw_start_y - min_y))
+        log.debug("Detached from cursor: floating mid-air for serial bomb throw (rising %.1fpx)",
+                  self._throw_rise_px)
 
     def _spawn_single_bomb(self, bomb_idx: int) -> None:
         """Spawn one of the serial bombs below the pet targeting the taskbar floor."""
@@ -1975,11 +2097,11 @@ class YellowsPixelBuddies(QWidget):
         screen = self.screen() or QApplication.primaryScreen()
         screen_rect = screen.geometry()
         facing_left = not self._throw_mirrored()
-        spread_vx = [-180.0, -60.0, 60.0, 180.0]
+        spread_vx = [-360.0, -140.0, 140.0, 360.0]
         base_vx = spread_vx[bomb_idx % len(spread_vx)]
         if not facing_left:
             base_vx = -base_vx
-        vx = base_vx + random.uniform(-20.0, 20.0)
+        vx = base_vx + random.uniform(-30.0, 30.0)
         vy = random.uniform(BOMB_INITIAL_VY_MIN, BOMB_INITIAL_VY_MAX)
         self._bomb_overlay.spawn_single_bomb(origin_x, origin_y, vx, vy, ground_y, screen_rect)
         log.debug("Spawned serial bomb %d/%d below pet at (%.1f, %.1f) vx=%.1f vy=%.1f",
@@ -2035,6 +2157,8 @@ class YellowsPixelBuddies(QWidget):
         self._shake_trail.clear()
         self._hang_bomb_count_remaining = 0
         self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
         self._bombs_spawned_for_current_throw = False
 
     def _set_input_transparent(self, enabled: bool) -> None:
@@ -2051,6 +2175,7 @@ class YellowsPixelBuddies(QWidget):
         """Forget everything about a jump in progress. Used by every cancel path: drag, quit ..."""
         self._stop_overlay()
         self._leave_hang()
+        self._anim_timer.setInterval(ANIM_INTERVAL_MS)
         self._pending_reaction = None
         self._vx = 0.0
         self._wall_bounced = False
@@ -2059,7 +2184,10 @@ class YellowsPixelBuddies(QWidget):
         self._hang_bomb_thrown = False
         self._hang_bomb_count_remaining = 0
         self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
         self._bombs_spawned_for_current_throw = False
+        self._post_throw_laugh = False
 
     # ------------------------------------------------------- jump: debug aid
     def _schedule_debug_jump(self) -> None:
@@ -2108,9 +2236,9 @@ class YellowsPixelBuddies(QWidget):
         self._press_global = None
         if self._dragging:
             self._end_drag()
-        elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
-            # A plain click in mid-air changes nothing: it must not turn the pet into a
-            # "shocked" pause and so overwrite the landing reaction that is waiting for her.
+        elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
+            # A plain click in mid-air or during post-throw victory laugh changes nothing: it must not
+            # turn the pet into a "shocked" pause and so overwrite the victory laugh / landing reaction.
             return
         else:
             if self.state == "angry":
@@ -2157,8 +2285,9 @@ class YellowsPixelBuddies(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
-        if self._phase in (Phase.JUMP, Phase.HANG):
-            # Opening the menu aborts a jump / hang into a plain fall, with no reaction.
+        self._post_throw_laugh = False
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
+            # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
         menu = QMenu(self)
         jump_action = None
@@ -2191,7 +2320,9 @@ class YellowsPixelBuddies(QWidget):
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
-        if self._dragging or self._menu_open or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
+        if (self._dragging or self._menu_open
+                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW)
+                or self._post_throw_laugh):
             return
 
         dll = _user32()
@@ -2211,7 +2342,9 @@ class YellowsPixelBuddies(QWidget):
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
         """Evaluate the newly focused window after it has composited."""
-        if self._dragging or self._menu_open or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL):
+        if (self._dragging or self._menu_open
+                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW)
+                or self._post_throw_laugh):
             return
         dll = _user32()
         if dll is None:
