@@ -19,7 +19,13 @@
   - **Multi-click (Anger)**: Clicking 3 times within 2 seconds makes the pet angry (`angry` reaction). Continuing to click or spam her keeps her in the angry state; once clicking stops, she finishes her angry animation loop and calms down to `idle`.
   - **Left-click + drag**: Pick up and carry the pet around your screen (pet loops `shocked` while held). Release to watch gravity pull it back to the taskbar.
   - **Right-click**: Opens a context menu with **Exit**.
-- **System Tray & Hidden Icons Menu**: Automatically lives in your Windows taskbar notification area / "Hidden icons" menu (`^`). Right-click the tray icon to toggle **Start with Windows**, **Bring to Taskbar**, **Bomb Attack Mode** (with real-time probability slider and default 25% button), or cleanly **Exit**.
+- **Interactive Dialogue System**:
+  - Authentic DELTARUNE Cyber World speech bubbles rendered with crisp 9-slice scaling.
+  - Powered by the iconic **Determination** pixel font with classic typewriter text animations and punctuation micro-pauses.
+  - Dynamic in-character dialogue lines for idling, startled reactions (`shocked`), poke annoyances (`angry`), pick-up and drag (`drag`), landing (`land`), flashbang burns (`burnt`), singing, bomb attacks, and random peaceful taskbar thoughts.
+  - Left-click speech bubbles to immediately finish typing or dismiss them.
+  - Toggleable in real time via the system tray menu (**Dialogue Bubbles**).
+- **System Tray & Hidden Icons Menu**: Automatically lives in your Windows taskbar notification area / "Hidden icons" menu (`^`). Right-click the tray icon to toggle **Start with Windows**, **Bring to Taskbar**, **Dialogue Bubbles**, **Bomb Attack Mode** (with real-time probability slider and default 25% button), or cleanly **Exit**.
 - **Transparent & Click-Through**: Fully transparent background. Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
 - **High-DPI Ready**: Scales crisply across different monitor scaling factors (100%, 125%, 150%, 200%) using nearest-neighbor sampling for crisp pixel art.
 - **Maximized App & Flashbang Reactions**:
@@ -75,26 +81,27 @@ You can build Yellow's Pixel Buddies into an independent Windows `.exe` using [P
 
 2. **Build the executable**:
 
-   - **Option A: Self-contained single file (Sprites bundled inside)**  
-     Produces a single portable executable with all sprites and icon embedded:
+   - **Option A: Self-contained single file (Sprites & fonts bundled inside)**  
+     Produces a single portable executable with all sprites, fonts, and icon embedded:
      ```bash
-     python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" --add-data "sprites;sprites" --add-data "app_icon.ico;." yellows_pixel_buddies.py
+     python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" --add-data "sprites;sprites" --add-data "fonts;fonts" --add-data "app_icon.ico;." yellows_pixel_buddies.py
      ```
      The finished `.exe` will be located in the `dist/` directory:
      ```text
      dist/Yellows-Pixel-Buddies.exe
      ```
 
-   - **Option B: Moddable `.exe` (External `sprites/` folder)**  
-     If you want to easily customize or drop new PNGs into `sprites/` without recompiling:
+   - **Option B: Moddable `.exe` (External `sprites/` and `fonts/` folders)**  
+     If you want to easily customize or drop new PNGs or fonts without recompiling:
      ```bash
      python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" yellows_pixel_buddies.py
      ```
-     After building, copy the `sprites/` folder and `app_icon.ico` directly into `dist/` next to `Yellows-Pixel-Buddies.exe`:
+     After building, copy the `sprites/` and `fonts/` folders, and `app_icon.ico` directly into `dist/` next to `Yellows-Pixel-Buddies.exe`:
      ```text
      dist/
      ├── Yellows-Pixel-Buddies.exe
      ├── app_icon.ico
+     ├── fonts/
      └── sprites/
      ```
 
@@ -116,6 +123,7 @@ Place transparent `.png` files inside each respective state folder under `sprite
 
 ```text
 sprites/
+├── dialogue_box.png   # DELTARUNE Cyber World speech bubble (108x33 9-patch)
 ├── idle/          # Resting animation (looping)
 ├── walk_left/     # Walking left
 ├── walk_right/    # Walking right
@@ -135,6 +143,16 @@ sprites/
 ├── tongue/        # Sticking tongue out (held for 1s)
 ├── wistful/       # Pensive expression and slow wistful walk
 └── burnt/         # Rare special event or flashbang reaction (sooty crisp)
+```
+
+### 🔤 Fonts & Dialogue Typography
+
+Custom fonts for retro text rendering are located under `fonts/`:
+
+```text
+fonts/
+└── determination/
+    └── determination.ttf   # FontStruction "Determination" (CC BY 3.0)
 ```
 
 > [!TIP]
@@ -231,6 +249,20 @@ SWITCH_SHOCK_COOLDOWN_S = 30.0     # Cooldown in seconds for shock
 SWITCH_BURNT_COOLDOWN_S = 5.0      # Cooldown in seconds for flashbang burnt (half of original 10s shock cooldown)
 ```
 
+### Dialogue & Speech Bubbles
+```python
+DIALOGUE_ENABLED = True               # Enable speech bubbles / dialogue popups
+DIALOGUE_CHANCE_ON_PAUSE = 0.25       # 25% chance to speak a random thought during a normal rest pause
+DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
+DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
+DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
+DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
+DIALOGUE_BOX_SCALE = 2                # Pixel scale multiplier for the dialogue box (2 = crisp 2x nearest-neighbor)
+DIALOGUE_FONT_PIXEL_SIZE = 18         # Pixel font size for Determination text
+DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on punctuation for authentic retro dialogue pacing
+DIALOGUE_MAX_WIDTH_PX = 340           # Maximum inner text wrapping width in pixels
+```
+
 ---
 
 ## 🛑 How to Exit
@@ -261,8 +293,15 @@ SWITCH_BURNT_COOLDOWN_S = 5.0      # Cooldown in seconds for flashbang burnt (ha
 
 ---
 
-## 📄 License
+## 📄 License & Credits
 
-- The Python source code in this repository is licensed under the [MIT License](LICENSE).
-- Sprite artwork and characters belong to their respective copyright holders (**DELTARUNE © Toby Fox**) and are not covered under the MIT License.
+- **Source Code**: Licensed under the [MIT License](LICENSE).
+- **Sprite Artwork & Characters**: Belong to their respective copyright holders (**DELTARUNE © Toby Fox**) and are not covered under the MIT License.
+- **Font Attribution ("Determination")**:
+  - **File**: `fonts/determination/determination.ttf`
+  - **Author**: [anonymous-1438277 on FontStruct](https://fontstruct.com/fontstructions/show/2368299)
+  - **License**: [Creative Commons Attribution 3.0 Unported (CC BY 3.0)](http://creativecommons.org/licenses/by/3.0/)
+  - Free to share and adapt with appropriate attribution (detailed in [LICENSE](LICENSE)).
+
+
 
