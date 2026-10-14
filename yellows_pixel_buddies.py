@@ -94,7 +94,11 @@ import winreg
 
 from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
 from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QPixmap, QRegion, QTransform
-from PyQt5.QtWidgets import QAction, QApplication, QMenu, QSystemTrayIcon, QWidget
+from PyQt5.QtWidgets import (
+    QAction, QApplication, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QSlider, QStyle, QStyleOptionSlider, QSystemTrayIcon, QVBoxLayout,
+    QWidget, QWidgetAction
+)
 
 
 # =============================================================================
@@ -226,9 +230,10 @@ SWITCH_BURNT_COOLDOWN_S = 10.0         # cooldown in seconds for flashbang burnt
 
 # --- Bomb & Laser Attack -----------------------------------------------------
 HANG_BOMB_DELAY_S = 2.0           # seconds hanging from cursor before bomb throw triggers
-HANG_BOMB_CHANCE = 0.2            # chance (2/10, ~20%) to throw bombs after delay while hanging
+HANG_BOMB_DEFAULT_CHANCE_PERCENT = 25  # default chance (25%) to throw bombs after delay while hanging
+HANG_BOMB_CHANCE = HANG_BOMB_DEFAULT_CHANCE_PERCENT / 100.0  # backward-compatible float alias (0.25)
 HANG_BOMB_ENABLED = True          # default enabled state for bomb attack mode
-HANG_BOMB_FORCE_100 = False       # sub-switch: force 100% chance for bombs every time (when bomb mode active)
+HANG_BOMB_FORCE_100 = False       # backward-compatible alias
 BOMB_COUNT = 4                    # number of bombs thrown in series
 BOMB_SIZE = 80                     # logical px: cat bomb (clean 4x pixel scale, slightly bigger)
 SPARK_SIZE = 60                    # logical px: sparks animation at rope tip
@@ -1241,6 +1246,83 @@ class BombLaserOverlay(QWidget):
         painter.end()
 
 
+class ClickableSlider(QSlider):
+    """Horizontal slider where clicking anywhere along the track jumps directly to that value."""
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            opt = QStyleOptionSlider()
+            self.initStyleOption(opt)
+            sr = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+            if not sr.contains(event.pos()):
+                val = QStyle.sliderValueFromPosition(
+                    self.minimum(), self.maximum(),
+                    event.x() - sr.width() // 2,
+                    self.width() - sr.width()
+                )
+                self.setValue(val)
+        super().mousePressEvent(event)
+
+
+class BombChanceWidget(QWidget):
+    """Custom tray menu widget: percentage slider for bomb attack probability and a reset to default button."""
+
+    def __init__(self, initial_pct: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT,
+                 default_pct: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT,
+                 on_change=None, parent=None) -> None:
+        super().__init__(parent)
+        self._default_pct = default_pct
+        self._on_change = on_change
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 2, 16, 6)
+        layout.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
+        self.lbl_title = QLabel(f"Chance: {initial_pct}%")
+        self.lbl_title.setStyleSheet("font-size: 11px;")
+
+        self.btn_default = QPushButton(f"Default ({default_pct}%)")
+        self.btn_default.setFocusPolicy(Qt.NoFocus)
+        self.btn_default.setCursor(Qt.PointingHandCursor)
+        self.btn_default.setStyleSheet("font-size: 10px; padding: 1px 5px;")
+
+        top_row.addWidget(self.lbl_title)
+        top_row.addStretch()
+        top_row.addWidget(self.btn_default)
+        layout.addLayout(top_row)
+
+        self.slider = ClickableSlider(Qt.Horizontal)
+        self.slider.setRange(0, 100)
+        self.slider.setValue(initial_pct)
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(5)
+        self.slider.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self.slider)
+
+        self.slider.valueChanged.connect(self._on_slider_changed)
+        self.btn_default.clicked.connect(self._on_default_clicked)
+
+    def _on_slider_changed(self, val: int) -> None:
+        self.lbl_title.setText(f"Chance: {val}%")
+        if self._on_change is not None:
+            self._on_change(val)
+
+    def _on_default_clicked(self) -> None:
+        self.slider.setValue(self._default_pct)
+
+    def set_value(self, val: int) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(val)
+        self.lbl_title.setText(f"Chance: {val}%")
+        self.slider.blockSignals(False)
+
+    def value(self) -> int:
+        return self.slider.value()
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
@@ -1322,7 +1404,7 @@ class YellowsPixelBuddies(QWidget):
         self._post_throw_laugh = False       # True while post-bomb victory laugh lasts
         self._bomb_target_plan: list[str] = ["random", "random", "near", "beneath"]
         self._bomb_attack_enabled: bool = HANG_BOMB_ENABLED
-        self._bomb_force_100: bool = HANG_BOMB_FORCE_100
+        self._bomb_chance_percent: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -1371,6 +1453,8 @@ class YellowsPixelBuddies(QWidget):
         self._startup_action: QAction | None = None
         self._bomb_action: QAction | None = None
         self._bomb_force_action: QAction | None = None
+        self._bomb_chance_action: QWidgetAction | None = None
+        self._bomb_chance_widget: BombChanceWidget | None = None
         self._init_tray_icon()
 
     # ------------------------------------------------------------------ start
@@ -2104,7 +2188,7 @@ class YellowsPixelBuddies(QWidget):
                 and not self._hang_bomb_thrown
                 and (now - self._hang_started_at >= HANG_BOMB_DELAY_S)):
             self._hang_bomb_thrown = True
-            chance = 1.0 if self._bomb_force_100 else HANG_BOMB_CHANCE
+            chance = self._bomb_chance_percent / 100.0
             if random.random() < chance and self._can_play(THROW_STATE):
                 self._start_hang_bomb_throw(now)
                 return
@@ -2373,17 +2457,7 @@ class YellowsPixelBuddies(QWidget):
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
-        bomb_action = menu.addAction("Bomb Attack Mode")
-        bomb_action.setCheckable(True)
-        bomb_action.setChecked(self._bomb_attack_enabled)
-        bomb_action.toggled.connect(self._toggle_bomb_attack)
-
-        bomb_force_action = menu.addAction("  ↳ 100% Bomb Chance")
-        bomb_force_action.setCheckable(True)
-        bomb_force_action.setChecked(self._bomb_force_100)
-        bomb_force_action.setEnabled(self._bomb_attack_enabled)
-        bomb_force_action.toggled.connect(self._toggle_bomb_force_100)
-        bomb_action.toggled.connect(bomb_force_action.setEnabled)
+            menu.addSeparator()
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -2513,20 +2587,25 @@ class YellowsPixelBuddies(QWidget):
         self._startup_action.setChecked(is_run_at_startup_enabled())
         self._startup_action.toggled.connect(self._toggle_run_at_startup)
 
+        tray_menu.addSeparator()
+
+        reset_action = tray_menu.addAction("Bring to Taskbar")
+        reset_action.triggered.connect(self._reset_to_taskbar)
+
         self._bomb_action = tray_menu.addAction("Bomb Attack Mode")
         self._bomb_action.setCheckable(True)
         self._bomb_action.setChecked(self._bomb_attack_enabled)
         self._bomb_action.toggled.connect(self._toggle_bomb_attack)
 
-        self._bomb_force_action = tray_menu.addAction("  ↳ 100% Bomb Chance")
-        self._bomb_force_action.setCheckable(True)
-        self._bomb_force_action.setChecked(self._bomb_force_100)
-        self._bomb_force_action.setEnabled(self._bomb_attack_enabled)
-        self._bomb_force_action.toggled.connect(self._toggle_bomb_force_100)
-
-        tray_menu.addSeparator()
-        reset_action = tray_menu.addAction("Bring to Taskbar")
-        reset_action.triggered.connect(self._reset_to_taskbar)
+        self._bomb_chance_action = QWidgetAction(tray_menu)
+        self._bomb_chance_widget = BombChanceWidget(
+            initial_pct=self._bomb_chance_percent,
+            default_pct=HANG_BOMB_DEFAULT_CHANCE_PERCENT,
+            on_change=self._set_bomb_chance_percent,
+        )
+        self._bomb_chance_widget.setEnabled(self._bomb_attack_enabled)
+        self._bomb_chance_action.setDefaultWidget(self._bomb_chance_widget)
+        tray_menu.addAction(self._bomb_chance_action)
 
         tray_menu.addSeparator()
         exit_action = tray_menu.addAction("Exit")
@@ -2538,7 +2617,7 @@ class YellowsPixelBuddies(QWidget):
         self._tray_icon.show()
 
     def _sync_startup_action_state(self) -> None:
-        """Sync checkmark with actual registry state right before displaying the menu."""
+        """Sync checkmark and controls with actual state right before displaying the menu."""
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -2547,31 +2626,39 @@ class YellowsPixelBuddies(QWidget):
             self._bomb_action.blockSignals(True)
             self._bomb_action.setChecked(self._bomb_attack_enabled)
             self._bomb_action.blockSignals(False)
-        if self._bomb_force_action is not None:
-            self._bomb_force_action.blockSignals(True)
-            self._bomb_force_action.setChecked(self._bomb_force_100)
-            self._bomb_force_action.setEnabled(self._bomb_attack_enabled)
-            self._bomb_force_action.blockSignals(False)
+        if self._bomb_chance_widget is not None:
+            self._bomb_chance_widget.set_value(self._bomb_chance_percent)
+            self._bomb_chance_widget.setEnabled(self._bomb_attack_enabled)
 
     def _toggle_bomb_attack(self, checked: bool) -> None:
-        """Enable or disable the bomb attack mode (2/10 chance while hanging when enabled)."""
+        """Enable or disable the bomb attack mode."""
         self._bomb_attack_enabled = checked
         if self._bomb_action is not None:
             self._bomb_action.blockSignals(True)
             self._bomb_action.setChecked(checked)
             self._bomb_action.blockSignals(False)
-        if self._bomb_force_action is not None:
-            self._bomb_force_action.setEnabled(checked)
+        if self._bomb_chance_widget is not None:
+            self._bomb_chance_widget.setEnabled(checked)
         log.info("Bomb attack mode: %s", "ENABLED" if checked else "DISABLED")
 
+    def _set_bomb_chance_percent(self, pct: int) -> None:
+        """Update bomb attack chance percentage (0-100%)."""
+        self._bomb_chance_percent = max(0, min(100, int(pct)))
+        if self._bomb_chance_widget is not None:
+            self._bomb_chance_widget.set_value(self._bomb_chance_percent)
+        log.info("Bomb attack chance set to %d%%", self._bomb_chance_percent)
+
     def _toggle_bomb_force_100(self, checked: bool) -> None:
-        """Enable or disable 100% bomb attack chance every time while hanging."""
-        self._bomb_force_100 = checked
-        if self._bomb_force_action is not None:
-            self._bomb_force_action.blockSignals(True)
-            self._bomb_force_action.setChecked(checked)
-            self._bomb_force_action.blockSignals(False)
-        log.info("Bomb attack 100%% force chance: %s", "ENABLED" if checked else "DISABLED")
+        """Backward-compatible helper: force 100% or reset to default chance."""
+        self._set_bomb_chance_percent(100 if checked else HANG_BOMB_DEFAULT_CHANCE_PERCENT)
+
+    @property
+    def _bomb_force_100(self) -> bool:
+        return self._bomb_chance_percent >= 100
+
+    @_bomb_force_100.setter
+    def _bomb_force_100(self, checked: bool) -> None:
+        self._toggle_bomb_force_100(checked)
 
     def _toggle_run_at_startup(self, checked: bool) -> None:
         """Callback when user toggles 'Start with Windows'."""

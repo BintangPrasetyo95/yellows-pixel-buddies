@@ -19,7 +19,7 @@
   - **Multi-click (Anger)**: Clicking 3 times within 2 seconds makes the pet angry (`angry` reaction). Continuing to click or spam her keeps her in the angry state; once clicking stops, she finishes her angry animation loop and calms down to `idle`.
   - **Left-click + drag**: Pick up and carry the pet around your screen (pet loops `shocked` while held). Release to watch gravity pull it back to the taskbar.
   - **Right-click**: Opens a context menu with **Exit**.
-- **System Tray & Hidden Icons Menu**: Automatically lives in your Windows taskbar notification area / "Hidden icons" menu (`^`). Right-click the tray icon to toggle **Start with Windows**, **Bring to Taskbar**, or cleanly **Exit**.
+- **System Tray & Hidden Icons Menu**: Automatically lives in your Windows taskbar notification area / "Hidden icons" menu (`^`). Right-click the tray icon to toggle **Start with Windows**, **Bring to Taskbar**, **Bomb Attack Mode** (with real-time probability slider and default 25% button), or cleanly **Exit**.
 - **Transparent & Click-Through**: Fully transparent background. Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
 - **High-DPI Ready**: Scales crisply across different monitor scaling factors (100%, 125%, 150%, 200%) using nearest-neighbor sampling for crisp pixel art.
 - **Maximized App & Flashbang Reactions**:
