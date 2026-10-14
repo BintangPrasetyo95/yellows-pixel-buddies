@@ -25,6 +25,7 @@
   - Dynamic in-character dialogue lines for idling, startled reactions (`shocked`), poke annoyances (`angry`), pick-up and drag (`drag`), landing (`land`), flashbang burns (`burnt`), singing, bomb attacks, and random peaceful taskbar thoughts.
   - Left-click speech bubbles to immediately finish typing or dismiss them.
   - Toggleable in real time via the system tray menu (**Dialogue Bubbles**).
+- **Music & Song Detection**: Detects music playing on Windows (Spotify, YouTube, browser, etc.) via the Windows GSMTC API. When a song starts, she announces the title and who sang it, with a special "this sounds familiar" reaction when Toby Fox music is playing.
 - **System Tray & Hidden Icons Menu**: Automatically lives in your Windows taskbar notification area / "Hidden icons" menu (`^`). Right-click the tray icon to toggle **Start with Windows**, **Bring to Taskbar**, **Dialogue Bubbles**, **Bomb Attack Mode** (with real-time probability slider and default 25% button), or cleanly **Exit**.
 - **Transparent & Click-Through**: Fully transparent background. Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
 - **High-DPI Ready**: Scales crisply across different monitor scaling factors (100%, 125%, 150%, 200%) using nearest-neighbor sampling for crisp pixel art.
@@ -253,6 +254,10 @@ SWITCH_BURNT_COOLDOWN_S = 5.0      # Cooldown in seconds for flashbang burnt (ha
 ```python
 DIALOGUE_ENABLED = True               # Enable speech bubbles / dialogue popups
 DIALOGUE_CHANCE_ON_PAUSE = 0.25       # 25% chance to speak a random thought during a normal rest pause
+DIALOGUE_CHANCE_ON_DRAG = 0.25        # 25% chance to speak when picked up / dragged by cursor
+DIALOGUE_DRAG_COOLDOWN_S = 10.0       # Cooldown in seconds between drag / pull dialogues
+DIALOGUE_CHANCE_ON_SHOCKED = 0.25     # 25% chance to speak when startled / clicked
+DIALOGUE_SHOCKED_COOLDOWN_S = 8.0     # Cooldown in seconds between startled / click dialogues
 DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
@@ -261,6 +266,8 @@ DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue 
 DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on punctuation for authentic retro dialogue pacing
 DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
+SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
+SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
 ```
 
 ---

@@ -77,6 +77,7 @@ Behaviour
 
 import ctypes
 from ctypes import wintypes
+import asyncio
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -92,7 +93,7 @@ import sys
 import time
 import winreg
 
-from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
+from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QThread, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import (
     QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
     QPainter, QPen, QPixmap, QRegion, QTransform
@@ -408,6 +409,10 @@ DEBUG_JUMP_DELAY_S = 2.0          # ... and aims at the cursor this long AFTER y
 # --- Dialogue System ---------------------------------------------------------
 DIALOGUE_ENABLED = True               # Enable speech bubbles / dialogue popups
 DIALOGUE_CHANCE_ON_PAUSE = 0.25       # 25% chance to speak a random thought during a normal rest pause
+DIALOGUE_CHANCE_ON_DRAG = 0.25        # 25% chance to speak when picked up / dragged by cursor
+DIALOGUE_DRAG_COOLDOWN_S = 10.0       # Cooldown in seconds between drag / pull dialogues
+DIALOGUE_CHANCE_ON_SHOCKED = 0.25     # 25% chance to speak when startled / clicked
+DIALOGUE_SHOCKED_COOLDOWN_S = 8.0     # Cooldown in seconds between startled / click dialogues
 DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
@@ -418,6 +423,8 @@ DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on commas, periods, qu
 DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
 DIALOGUE_SIDE_OFFSET_PX = 4           # Gap between pet sprite edge and dialogue box
 DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where head is centered (~28px)
+SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
+SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
 
 DIALOGUE_LINES: dict[str, list[str]] = {
     # Idle / general thoughts during resting pauses
@@ -472,6 +479,24 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     "kneeling": [
         "* Just resting my knees for a second...",
         "* The taskbar is surprisingly comfortable.",
+    ],
+    # Burnt from window switch flashbang (dark -> bright light app)
+    "burnt_switch": [
+        "* MY EYES!!",
+        "* AHH!! MY EYES!",
+        "* GAH! SO BRIGHT!!",
+        "* OW!! MY EYES!",
+        "* AUGH! IT BURNS!",
+        "* (My eyes...!!)",
+        "* TOO BRIGHT!!",
+        "* BLINDED!!",
+    ],
+    # Toby Fox song reaction ("this looks/sounds familiar")
+    "toby_fox_familiar": [
+        "* (Wait... this sounds strangely familiar...)",
+        "* (... Huh? Have I heard this song before?)",
+        "* (... Did someone from Hometown compose this?)",
+        "* (Wait... why does this feel so familiar...?)",
     ],
 }
 
@@ -1017,6 +1042,10 @@ class DialogueOverlay(QWidget):
         self._text_start_y = 0
         self._line_h = 24
 
+        self._queue: list[str] = []
+        self._last_pet_x: float = 0.0
+        self._last_pet_y: float = 0.0
+
         self._font = QFont(self._font_family)
         self._font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
         self._font.setStyleStrategy(QFont.NoAntialias)
@@ -1033,10 +1062,22 @@ class DialogueOverlay(QWidget):
         """True if a dialogue line is actively being displayed or typed."""
         return self._active
 
-    def say(self, text: str, pet_x: float, pet_y: float) -> None:
-        """Start a new speech bubble with typewriter animation beside the pet's head."""
+    def say(self, text: str, pet_x: float, pet_y: float, queue: list[str] | None = None) -> None:
+        """Start a new speech bubble with typewriter animation beside the pet's head.
+
+        queue: optional list of additional messages to display sequentially after this one.
+        """
+        self._queue = list(queue) if queue else []
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+        self._display_text(text, pet_x, pet_y)
+
+    def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
+        """Render and begin typing a single dialogue bubble."""
         self._hold_timer.stop()
         self._type_timer.stop()
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
 
         self._full_text = text
         self._visible_chars = 0
@@ -1132,6 +1173,8 @@ class DialogueOverlay(QWidget):
 
     def update_position(self, pet_x: float, pet_y: float) -> None:
         """Position the dialogue bubble beside the pet's head (left or right depends on screen half)."""
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
         if not self._active:
             return
         area = QApplication.primaryScreen().availableGeometry()
@@ -1197,8 +1240,16 @@ class DialogueOverlay(QWidget):
             hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
             self._hold_timer.start(round(hold_s * 1000))
 
-    def dismiss(self) -> None:
-        """Hide and clear the dialogue overlay."""
+    def dismiss(self, clear_queue: bool = False) -> None:
+        """Hide and clear the dialogue overlay, or advance to the next queued message."""
+        if clear_queue:
+            self._queue.clear()
+
+        if self._queue:
+            next_text = self._queue.pop(0)
+            self._display_text(next_text, self._last_pet_x, self._last_pet_y)
+            return
+
         self._active = False
         self._type_timer.stop()
         self._hold_timer.stop()
@@ -1667,6 +1718,91 @@ class BombChanceWidget(QWidget):
         return self.slider.value()
 
 
+class MediaWatcher(QThread):
+    """Monitors system-wide media playback (Spotify, YouTube, browser, etc.) using Windows GSMTC."""
+    song_started = pyqtSignal(str, str)  # title, artist
+    song_ended = pyqtSignal()
+
+    def __init__(self, poll_interval_ms: int = 1500, parent=None) -> None:
+        super().__init__(parent)
+        self._poll_interval_s = max(0.5, poll_interval_ms / 1000.0)
+        self._running = True
+        self._last_track_id: tuple[str, str] = ("", "")
+        self._last_playing = False
+
+    def stop(self) -> None:
+        self._running = False
+
+    def run(self) -> None:
+        try:
+            from winrt.windows.media.control import (
+                GlobalSystemMediaTransportControlsSessionManager as MediaManager,
+                GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus
+            )
+        except Exception as err:
+            log.info("Windows Media Control (GSMTC) unavailable: %s", err)
+            return
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def _get_manager():
+            try:
+                return await MediaManager.request_async()
+            except Exception:
+                return None
+
+        async def _check_session(mgr):
+            try:
+                sess = mgr.get_current_session()
+                if sess is None:
+                    return None, False
+                pb = sess.get_playback_info()
+                is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
+                if not is_playing:
+                    return None, False
+                props = await sess.try_get_media_properties_async()
+                if props is None:
+                    return None, False
+                title = props.title.strip() if props.title else ""
+                artist = props.artist.strip() if props.artist else ""
+                return (title, artist), True
+            except Exception as ex:
+                log.debug("GSMTC poll error: %s", ex)
+                return None, False
+
+        try:
+            mgr = loop.run_until_complete(_get_manager())
+            while self._running:
+                if mgr is None:
+                    time.sleep(self._poll_interval_s * 2)
+                    mgr = loop.run_until_complete(_get_manager())
+                    continue
+
+                track, is_playing = loop.run_until_complete(_check_session(mgr))
+                if is_playing and track and track[0]:
+                    if track != self._last_track_id:
+                        self._last_track_id = track
+                        self._last_playing = True
+                        self.song_started.emit(track[0], track[1])
+                    else:
+                        self._last_playing = True
+                else:
+                    if self._last_playing:
+                        self._last_playing = False
+                        self.song_ended.emit()
+
+                # Sleep in short increments for responsive thread termination
+                for _ in range(int(self._poll_interval_s * 10)):
+                    if not self._running:
+                        break
+                    time.sleep(0.1)
+        except Exception as err:
+            log.warning("MediaWatcher encountered an error: %s", err)
+        finally:
+            loop.close()
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
@@ -1709,6 +1845,18 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_enabled: bool = DIALOGUE_ENABLED
         self._last_dialogue: str | None = None
         self._dialogue_action: QAction | None = None
+        self._last_drag_dialogue_time: float = -9999.0
+        self._last_shocked_dialogue_time: float = -9999.0
+
+        # --- media watcher (song detection) ------------------------------------
+        self._media_watcher: MediaWatcher | None = None
+        if SONG_DETECTION_ENABLED:
+            try:
+                self._media_watcher = MediaWatcher(poll_interval_ms=SONG_DETECTION_INTERVAL_MS, parent=self)
+                self._media_watcher.song_started.connect(self._on_song_started)
+                self._media_watcher.start()
+            except Exception as err:
+                log.info("MediaWatcher could not be started: %s", err)
 
         # --- behaviour state ---------------------------------------------------
         self._phase = Phase.PAUSE
@@ -1859,9 +2007,11 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.update_position(self._x, self._y)
 
-    def _say(self, category_or_text: str, force: bool = False) -> None:
+    def _say(self, category_or_text: str, force: bool = False, extra_queue: list[str] | None = None) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return
+        if getattr(self, "_phase", None) is Phase.JUMP or getattr(self, "_jump_active", False):
             return
         if category_or_text in DIALOGUE_LINES:
             lines = DIALOGUE_LINES[category_or_text]
@@ -1879,7 +2029,41 @@ class YellowsPixelBuddies(QWidget):
             return
 
         self._last_dialogue = line
-        self._dialogue_overlay.say(line, self._x, self._y)
+        self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue)
+
+    def _on_song_started(self, title: str, artist: str) -> None:
+        """React to newly started music playback via Windows GSMTC."""
+        if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return
+        clean_title = title.strip()
+        clean_artist = artist.strip()
+        if not clean_title:
+            return
+
+        log.info("Song started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
+
+        # Format title & artist to fit neatly in dialogue bubble
+        display_title = clean_title if len(clean_title) <= 50 else clean_title[:47] + "..."
+        display_artist = clean_artist if len(clean_artist) <= 35 else clean_artist[:32] + "..."
+
+        if display_artist:
+            line = f"* Now playing: {display_title} by {display_artist}"
+        else:
+            line = f"* Now playing: {display_title}"
+
+        extra_queue: list[str] = []
+        check_str = f"{clean_artist} {clean_title}".lower()
+        if "toby fox" in check_str or "toby 'radiation' fox" in check_str:
+            toby_lines = DIALOGUE_LINES.get("toby_fox_familiar", [
+                "* (Wait... this sounds strangely familiar...)",
+                "* (... Huh? Have I heard this song before?)",
+                "* (This melody... where do I know this from...?)",
+                "* (Wait... why does this feel so familiar...?)",
+                "* (... Did someone from Hometown compose this?)",
+            ])
+            extra_queue.append(random.choice(toby_lines))
+
+        self._say(line, force=True, extra_queue=extra_queue)
 
     # -------------------------------------------------------------- animation
     def _can_play(self, state: str) -> bool:
@@ -2187,7 +2371,15 @@ class YellowsPixelBuddies(QWidget):
 
         if special:
             if special in DIALOGUE_LINES and DIALOGUE_LINES[special]:
-                self._say(special, force=(forced is not None))
+                if special == "shocked":
+                    if forced is not None:
+                        now = time.perf_counter()
+                        if (random.random() < DIALOGUE_CHANCE_ON_SHOCKED
+                                and (now - self._last_shocked_dialogue_time >= DIALOGUE_SHOCKED_COOLDOWN_S)):
+                            self._last_shocked_dialogue_time = now
+                            self._say(special, force=True)
+                else:
+                    self._say(special, force=(forced is not None))
         else:
             if random.random() < DIALOGUE_CHANCE_ON_PAUSE:
                 self._say("idle", force=False)
@@ -2421,6 +2613,8 @@ class YellowsPixelBuddies(QWidget):
 
         self._jump_active = True                     # the cooldown starts when this sequence lands
         self._phase = Phase.JUMP
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss(clear_queue=True)
         self._brain_timer.stop()                     # no walk / pause timeout may fire mid-air
         self._pause_elapsed = False
         self._gravity = JUMP_GRAVITY_PX_S2
@@ -2819,7 +3013,11 @@ class YellowsPixelBuddies(QWidget):
         self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
         self._play("shocked", loop=True)          # loop it for as long as it is held
         self.setCursor(Qt.ClosedHandCursor)
-        self._say("drag", force=True)
+        now = time.perf_counter()
+        if (random.random() < DIALOGUE_CHANCE_ON_DRAG
+                and (now - self._last_drag_dialogue_time >= DIALOGUE_DRAG_COOLDOWN_S)):
+            self._last_drag_dialogue_time = now
+            self._say("drag", force=True)
 
     def _end_drag(self) -> None:
         """Drop the pet: it will fall back to the taskbar under gravity."""
@@ -2923,7 +3121,7 @@ class YellowsPixelBuddies(QWidget):
             self._last_switch_burnt_time = now
             log.info("Flashbang! Switched from dark (%.1f) to bright maximized app (%.1f) -> burnt",
                      prev_lum, curr_lum)
-            self._interrupt_with_reaction("burnt")
+            self._interrupt_with_reaction("burnt", dialogue_category="burnt_switch")
         else:
             now = time.perf_counter()
             if now - self._last_switch_shock_time < SWITCH_SHOCK_COOLDOWN_S:
@@ -2934,7 +3132,7 @@ class YellowsPixelBuddies(QWidget):
             log.info("Switched to maximized app -> shocked")
             self._interrupt_with_reaction("shocked")
 
-    def _interrupt_with_reaction(self, reaction: str) -> None:
+    def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
         if self._interrupted_state is None:
             rem_ms = max(500, self._brain_timer.remainingTime()) if self._brain_timer.isActive() else 2500
@@ -2947,7 +3145,7 @@ class YellowsPixelBuddies(QWidget):
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._play(reaction)
-        self._say(reaction, force=True)
+        self._say(dialogue_category or reaction, force=True)
 
     # -------------------------------------------------------- system tray icon
     def _init_tray_icon(self) -> None:
@@ -3096,16 +3294,23 @@ class YellowsPixelBuddies(QWidget):
         for timer in timers:
             timer.stop()
         self._stop_overlay()
+        if hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            self._media_watcher.stop()
+            self._media_watcher.wait(1000)
         if hasattr(self, "_vfx_overlay"):
             self._vfx_overlay.close()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
         if hasattr(self, "_dialogue_overlay"):
-            self._dialogue_overlay.dismiss()
+            self._dialogue_overlay.dismiss(clear_queue=True)
             self._dialogue_overlay.close()
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()
+
+    def closeEvent(self, event) -> None:
+        self._quit()
+        event.accept()
 
     # ---------------------------------------------------------------- painting
     def paintEvent(self, event) -> None:
