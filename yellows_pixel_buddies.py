@@ -412,10 +412,10 @@ DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewr
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
-DIALOGUE_BOX_SCALE = 2                # Pixel scale multiplier for the dialogue box (2 = crisp 2x nearest-neighbor)
-DIALOGUE_FONT_PIXEL_SIZE = 18         # Pixel font size for Determination text
+DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
+DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on commas, periods, question marks, exclamation marks
-DIALOGUE_MAX_WIDTH_PX = 340           # Maximum inner text wrapping width in pixels
+DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
 DIALOGUE_SIDE_OFFSET_PX = 4           # Gap between pet sprite edge and dialogue box
 DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where head is centered (~28px)
 
@@ -1065,16 +1065,16 @@ class DialogueOverlay(QWidget):
         total_text_h = self._line_h * len(self._lines)
 
         scale = self._scale
-        c_l = 14 * scale
-        c_r = 14 * scale
-        c_t = 12 * scale
-        c_b = 12 * scale
+        c_l = round(14 * scale)
+        c_r = round(14 * scale)
+        c_t = round(12 * scale)
+        c_b = round(12 * scale)
 
-        pad_x = 4 * scale
-        pad_y = 2 * scale
+        pad_x = round(4 * scale)
+        pad_y = round(2 * scale)
 
-        base_inner_w = 84 * scale
-        base_inner_h = 19 * scale
+        base_inner_w = round(84 * scale)
+        base_inner_h = round(19 * scale)
 
         req_inner_w = max_text_w + pad_x * 2
         req_inner_h = total_text_h + pad_y * 2
@@ -1082,8 +1082,8 @@ class DialogueOverlay(QWidget):
         extra_w = max(0, req_inner_w - base_inner_w)
         extra_h = max(0, req_inner_h - base_inner_h)
 
-        box_w = 108 * scale + extra_w
-        box_h = 33 * scale + extra_h
+        box_w = round(108 * scale) + extra_w
+        box_h = round(33 * scale) + extra_h
 
         # Build 9-slice background
         bg_img = QImage(box_w, box_h, QImage.Format_ARGB32_Premultiplied)
@@ -1116,9 +1116,9 @@ class DialogueOverlay(QWidget):
 
         p.end()
 
-        actual_inner_h = box_h - 14 * scale
-        self._text_start_y = 7 * scale + (actual_inner_h - total_text_h) // 2 + fm.ascent()
-        self._text_start_x = 12 * scale + pad_x
+        actual_inner_h = box_h - round(14 * scale)
+        self._text_start_y = round(7 * scale) + (actual_inner_h - total_text_h) // 2 + fm.ascent()
+        self._text_start_x = round(12 * scale) + pad_x
 
         self._cached_bg = QPixmap.fromImage(bg_img)
         self.setFixedSize(box_w, box_h)

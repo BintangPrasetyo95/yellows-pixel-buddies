@@ -257,10 +257,10 @@ DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewr
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
-DIALOGUE_BOX_SCALE = 2                # Pixel scale multiplier for the dialogue box (2 = crisp 2x nearest-neighbor)
-DIALOGUE_FONT_PIXEL_SIZE = 18         # Pixel font size for Determination text
+DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
+DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on punctuation for authentic retro dialogue pacing
-DIALOGUE_MAX_WIDTH_PX = 340           # Maximum inner text wrapping width in pixels
+DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
 ```
 
 ---
