@@ -77,6 +77,7 @@ Behaviour
 
 import ctypes
 from ctypes import wintypes
+import asyncio
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -92,8 +93,11 @@ import sys
 import time
 import winreg
 
-from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
-from PyQt5.QtGui import QColor, QCursor, QFont, QIcon, QImage, QPainter, QPen, QPixmap, QRegion, QTransform
+from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QThread, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import (
+    QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
+    QPainter, QPen, QPixmap, QRegion, QTransform
+)
 from PyQt5.QtWidgets import (
     QAction, QApplication, QHBoxLayout, QLabel, QMenu, QPushButton,
     QSlider, QStyle, QStyleOptionSlider, QSystemTrayIcon, QVBoxLayout,
@@ -113,12 +117,19 @@ if getattr(sys, "frozen", False):
         SPRITES_DIR = _exe_dir / "sprites"
     else:
         SPRITES_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "sprites"
+    if (_exe_dir / "fonts").exists():
+        FONTS_DIR = _exe_dir / "fonts"
+    else:
+        FONTS_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "fonts"
     _base_dir = Path(getattr(sys, "_MEIPASS", _exe_dir))
 else:
     SPRITES_DIR = Path(__file__).resolve().parent / "sprites"   # sprites/<state>/N.png
+    FONTS_DIR = Path(__file__).resolve().parent / "fonts"       # fonts/determination/...
     _base_dir = Path(__file__).resolve().parent
 
 ICON_PATH = _base_dir / "app_icon.ico"
+DIALOGUE_BOX_PATH = SPRITES_DIR / "dialogue_box.png"
+DETERMINATION_FONT_PATH = FONTS_DIR / "determination" / "determination.ttf"
 
 # On-screen size in *logical* pixels. The window is exactly SPRITE_SIZE x SPRITE_SIZE.
 # PNGs of any size are scaled to fit (aspect ratio kept, anchored bottom-centre).
@@ -381,7 +392,7 @@ SHAKE_GRACE_S = 0.5               # shakes are ignored this long after she grabb
 # Landing reactions. They are played through _start_pause(forced=...) when she touches down, so the
 # existing LAST_FRAME_HOLD_MS / SPECIAL_REPEAT_COUNT entries (peace_sign hold, laughing repeats) apply.
 MISS_REACTION = BURNT_STATE       # the jump missed the cursor
-RELEASE_REACTION = "tongue"       # she let go of the cursor herself (timeout, cursor left / too low)
+RELEASE_REACTION = "peace_sign"       # she let go of the cursor herself (timeout, cursor left / too low)
 SHAKEN_REACTION = "laughing"      # she was shaken off
 DROP_REACTION = "tongue"          # dragged and dropped (only while the jump feature is enabled; None = none)
 DROP_REACTION_MIN_HEIGHT_PX = 0   # ... only when dropped at least this high above the ground (0 = always)
@@ -394,6 +405,100 @@ DEBUG_JUMP_MENU = True            # add "Jump to cursor" to the right-click menu
                                   # gate and the cooldown (the jump feature still needs its sprites)
 DEBUG_JUMP_DELAY_S = 2.0          # ... and aims at the cursor this long AFTER you pick it, so you have
                                   # time to park the pointer somewhere high first (0 = immediately)
+
+# --- Dialogue System ---------------------------------------------------------
+DIALOGUE_ENABLED = True               # Enable speech bubbles / dialogue popups
+DIALOGUE_CHANCE_ON_PAUSE = 0.25       # 25% chance to speak a random thought during a normal rest pause
+DIALOGUE_CHANCE_ON_DRAG = 0.25        # 25% chance to speak when picked up / dragged by cursor
+DIALOGUE_DRAG_COOLDOWN_S = 10.0       # Cooldown in seconds between drag / pull dialogues
+DIALOGUE_CHANCE_ON_SHOCKED = 0.25     # 25% chance to speak when startled / clicked
+DIALOGUE_SHOCKED_COOLDOWN_S = 8.0     # Cooldown in seconds between startled / click dialogues
+DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
+DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
+DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
+DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
+DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
+DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
+DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on commas, periods, question marks, exclamation marks
+DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
+DIALOGUE_SIDE_OFFSET_PX = 4           # Gap between pet sprite edge and dialogue box
+DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where head is centered (~28px)
+SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
+SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
+
+DIALOGUE_LINES: dict[str, list[str]] = {
+    # Idle / general thoughts during resting pauses
+    "idle": [
+        "* (It's nice and cozy down here.)",
+        "* (I hope I'm not in your way...)",
+        "* (Just taking a quick breath...)",
+        "* (Do you think Susie is free today...?)",
+        "* (Kris told me a scary story yesterday... I still can't sleep.)",
+        "* (Everything looks so huge from down here!)",
+        "* (Don't forget to stay hydrated today!)",
+        "* (You've been working hard! Make sure to take breaks.)",
+        "* (I wonder what's inside all these open windows...)",
+        "* (Watching the cursor fly around is kind of fun.)",
+        "* (Maybe I should practice some ice magic later...)",
+        "* (It feels like a peaceful day.)",
+        "* (The taskbar is surprisingly warm and cozy.)",
+    ],
+    # Startled by a click
+    "shocked": [
+        "* Eep!!",
+        "* M-Myuh!?",
+        "* Whoa!",
+    ],
+    # Pestered / rapid clicks
+    "angry": [
+        "* Stop poking me!",
+        "* Cut it out already!",
+        "* Do you MIND?!",
+    ],
+    # Picked up / dragged
+    "drag": [
+        "* H-hey!",
+        "* W-whoa!!",
+    ],
+    # Landed after fall / drop
+    "land": [
+        "* Oof!",
+        "* Whew...",
+        "* Back on solid ground!",
+        "* 10 out of 10!",
+    ],
+    # Peace sign
+    "peace_sign": [
+        "* (＾▽＾)v",
+    ],
+    # Tongue
+    "tongue": [
+        "* :P",
+    ],
+    # Kneeling
+    "kneeling": [
+        "* Just resting my knees for a second...",
+        "* The taskbar is surprisingly comfortable.",
+    ],
+    # Burnt from window switch flashbang (dark -> bright light app)
+    "burnt_switch": [
+        "* MY EYES!!",
+        "* AHH!! MY EYES!",
+        "* GAH! SO BRIGHT!!",
+        "* OW!! MY EYES!",
+        "* AUGH! IT BURNS!",
+        "* (My eyes...!!)",
+        "* TOO BRIGHT!!",
+        "* BLINDED!!",
+    ],
+    # Toby Fox song reaction ("this looks/sounds familiar")
+    "toby_fox_familiar": [
+        "* (Wait... this sounds strangely familiar...)",
+        "* (... Huh? Have I heard this song before?)",
+        "* (... Did someone from Hometown compose this?)",
+        "* (Wait... why does this feel so familiar...?)",
+    ],
+}
 
 # --- Windows Startup ---------------------------------------------------------
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -908,6 +1013,296 @@ class VfxOverlay(QWidget):
         painter.end()
 
 
+class DialogueOverlay(QWidget):
+    """A frameless, translucent speech bubble overlay that displays text with a typewriter effect."""
+
+    def __init__(self, font_family: str, box_png_path: Path) -> None:
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
+                         | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+
+        self._font_family = font_family
+        self._box_src: QImage | None = None
+        if box_png_path.exists():
+            img = QImage(str(box_png_path))
+            if not img.isNull():
+                self._box_src = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+
+        self._active = False
+        self._full_text = ""
+        self._lines: list[str] = []
+        self._visible_chars = 0
+        self._total_chars = 0
+        self._char_delay_ticks = 0
+        self._scale = DIALOGUE_BOX_SCALE
+
+        self._cached_bg: QPixmap | None = None
+        self._text_start_x = 0
+        self._text_start_y = 0
+        self._line_h = 24
+
+        self._queue: list[str] = []
+        self._last_pet_x: float = 0.0
+        self._last_pet_y: float = 0.0
+
+        self._font = QFont(self._font_family)
+        self._font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
+        self._font.setStyleStrategy(QFont.NoAntialias)
+
+        self._type_timer = QTimer(self)
+        self._type_timer.setInterval(DIALOGUE_TYPEWRITER_MS)
+        self._type_timer.timeout.connect(self._type_tick)
+
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setSingleShot(True)
+        self._hold_timer.timeout.connect(self.dismiss)
+
+    def is_active(self) -> bool:
+        """True if a dialogue line is actively being displayed or typed."""
+        return self._active
+
+    def say(self, text: str, pet_x: float, pet_y: float, queue: list[str] | None = None) -> None:
+        """Start a new speech bubble with typewriter animation beside the pet's head.
+
+        queue: optional list of additional messages to display sequentially after this one.
+        """
+        self._queue = list(queue) if queue else []
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+        self._display_text(text, pet_x, pet_y)
+
+    def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
+        """Render and begin typing a single dialogue bubble."""
+        self._hold_timer.stop()
+        self._type_timer.stop()
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+
+        self._full_text = text
+        self._visible_chars = 0
+        self._char_delay_ticks = 0
+
+        fm = QFontMetrics(self._font)
+        self._line_h = fm.height()
+
+        # Wrap text nicely
+        self._lines = []
+        for para in text.split('\n'):
+            words = para.split(' ')
+            cur = []
+            for w in words:
+                test = ' '.join(cur + [w])
+                if cur and fm.horizontalAdvance(test) > DIALOGUE_MAX_WIDTH_PX:
+                    self._lines.append(' '.join(cur))
+                    cur = ['  ' + w] if para.startswith('* ') else [w]
+                else:
+                    cur.append(w)
+            if cur:
+                self._lines.append(' '.join(cur))
+
+        self._total_chars = sum(len(l) for l in self._lines)
+        max_text_w = max((fm.horizontalAdvance(l) for l in self._lines), default=60)
+        total_text_h = self._line_h * len(self._lines)
+
+        scale = self._scale
+        c_l = round(14 * scale)
+        c_r = round(14 * scale)
+        c_t = round(12 * scale)
+        c_b = round(12 * scale)
+
+        pad_x = round(4 * scale)
+        pad_y = round(2 * scale)
+
+        base_inner_w = round(84 * scale)
+        base_inner_h = round(19 * scale)
+
+        req_inner_w = max_text_w + pad_x * 2
+        req_inner_h = total_text_h + pad_y * 2
+
+        extra_w = max(0, req_inner_w - base_inner_w)
+        extra_h = max(0, req_inner_h - base_inner_h)
+
+        box_w = round(108 * scale) + extra_w
+        box_h = round(33 * scale) + extra_h
+
+        # Build 9-slice background
+        bg_img = QImage(box_w, box_h, QImage.Format_ARGB32_Premultiplied)
+        bg_img.fill(Qt.transparent)
+        p = QPainter(bg_img)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, False)
+
+        if self._box_src is not None:
+            mid_w = box_w - c_l - c_r
+            mid_h = box_h - c_t - c_b
+
+            # Corners
+            p.drawImage(QRect(0, 0, c_l, c_t), self._box_src, QRect(0, 0, 14, 12))
+            p.drawImage(QRect(box_w - c_r, 0, c_r, c_t), self._box_src, QRect(94, 0, 14, 12))
+            p.drawImage(QRect(0, box_h - c_b, c_l, c_b), self._box_src, QRect(0, 21, 14, 12))
+            p.drawImage(QRect(box_w - c_r, box_h - c_b, c_r, c_b), self._box_src, QRect(94, 21, 14, 12))
+
+            # Edges
+            p.drawImage(QRect(c_l, 0, mid_w, c_t), self._box_src, QRect(14, 0, 80, 12))
+            p.drawImage(QRect(c_l, box_h - c_b, mid_w, c_b), self._box_src, QRect(14, 21, 80, 12))
+            p.drawImage(QRect(0, c_t, c_l, mid_h), self._box_src, QRect(0, 12, 14, 9))
+            p.drawImage(QRect(box_w - c_r, c_t, c_r, mid_h), self._box_src, QRect(94, 12, 14, 9))
+
+            # Center
+            p.drawImage(QRect(c_l, c_t, mid_w, mid_h), self._box_src, QRect(14, 12, 80, 9))
+        else:
+            p.fillRect(QRect(0, 0, box_w, box_h), QColor(0, 0, 0, 230))
+            p.setPen(QColor(255, 255, 255))
+            p.drawRect(0, 0, box_w - 1, box_h - 1)
+
+        p.end()
+
+        actual_inner_h = box_h - round(14 * scale)
+        self._text_start_y = round(7 * scale) + (actual_inner_h - total_text_h) // 2 + fm.ascent()
+        self._text_start_x = round(12 * scale) + pad_x
+
+        self._cached_bg = QPixmap.fromImage(bg_img)
+        self.setFixedSize(box_w, box_h)
+        self.setMask(QRegion(self._cached_bg.mask()))
+
+        self._active = True
+        self.update_position(pet_x, pet_y)
+        self.show()
+        self.raise_()
+        self._type_timer.start()
+
+    def update_position(self, pet_x: float, pet_y: float) -> None:
+        """Position the dialogue bubble beside the pet's head (left or right depends on screen half)."""
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+        if not self._active:
+            return
+        area = QApplication.primaryScreen().availableGeometry()
+        w = self.width()
+        h = self.height()
+
+        screen_mid_x = area.x() + area.width() / 2.0
+        pet_center_x = pet_x + SPRITE_SIZE / 2.0
+
+        # Position beside subject's head: left or right depends on which half of the screen she is on
+        if pet_center_x < screen_mid_x:
+            # On left half -> bubble sits to the right of her head
+            target_x = pet_x + SPRITE_SIZE + DIALOGUE_SIDE_OFFSET_PX
+        else:
+            # On right half -> bubble sits to the left of her head
+            target_x = pet_x - w - DIALOGUE_SIDE_OFFSET_PX
+
+        # Vertically align beside the head
+        head_center_y = pet_y + (SPRITE_SIZE * DIALOGUE_HEAD_Y_RATIO)
+        target_y = head_center_y - (h / 2.0)
+
+        # Clamp within screen bounds
+        min_x = float(area.x() + 4)
+        max_x = max(min_x, float(area.x() + area.width() - w - 4))
+        target_x = min(max(target_x, min_x), max_x)
+
+        min_y = float(area.y() + 4)
+        max_y = max(min_y, float(area.y() + area.height() - h - 4))
+        target_y = min(max(target_y, min_y), max_y)
+
+        pos = QPoint(round(target_x), round(target_y))
+        if self.pos() != pos:
+            self.move(pos)
+
+    def _type_tick(self) -> None:
+        """Advance typewriter character count, inserting subtle pauses at punctuation."""
+        if not self._active:
+            self._type_timer.stop()
+            return
+
+        if self._char_delay_ticks > 0:
+            self._char_delay_ticks -= 1
+            return
+
+        if self._visible_chars < self._total_chars:
+            curr = 0
+            target_char = ''
+            for line in self._lines:
+                if self._visible_chars < curr + len(line):
+                    target_char = line[self._visible_chars - curr]
+                    break
+                curr += len(line)
+
+            self._visible_chars += 1
+            if target_char in ('.', '!', '?'):
+                self._char_delay_ticks = DIALOGUE_PUNCTUATION_PAUSE_TICKS
+            elif target_char in (',', ';', ':'):
+                self._char_delay_ticks = DIALOGUE_PUNCTUATION_PAUSE_TICKS // 2
+
+            self.update()
+        else:
+            self._type_timer.stop()
+            hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+            self._hold_timer.start(round(hold_s * 1000))
+
+    def dismiss(self, clear_queue: bool = False) -> None:
+        """Hide and clear the dialogue overlay, or advance to the next queued message."""
+        if clear_queue:
+            self._queue.clear()
+
+        if self._queue:
+            next_text = self._queue.pop(0)
+            self._display_text(next_text, self._last_pet_x, self._last_pet_y)
+            return
+
+        self._active = False
+        self._type_timer.stop()
+        self._hold_timer.stop()
+        self.clearMask()
+        self.hide()
+
+    def mousePressEvent(self, event) -> None:
+        """Left-click fast-forwards typewriter or dismisses dialogue."""
+        if event.button() == Qt.LeftButton and DIALOGUE_CLICK_TO_DISMISS:
+            if self._visible_chars < self._total_chars:
+                self._visible_chars = self._total_chars
+                self._char_delay_ticks = 0
+                self._type_timer.stop()
+                hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                self._hold_timer.start(round(hold_s * 1000))
+                self.update()
+            else:
+                self.dismiss()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def paintEvent(self, event) -> None:
+        if not self._active or self._cached_bg is None:
+            return
+
+        painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.drawPixmap(0, 0, self._cached_bg)
+
+        painter.setFont(self._font)
+        painter.setPen(QColor(255, 255, 255))
+
+        ty = self._text_start_y
+        chars_left = self._visible_chars
+        for line in self._lines:
+            if chars_left <= 0:
+                break
+            if len(line) <= chars_left:
+                painter.drawText(self._text_start_x, ty, line)
+                chars_left -= len(line)
+            else:
+                painter.drawText(self._text_start_x, ty, line[:chars_left])
+                chars_left = 0
+            ty += self._line_h
+
+        painter.end()
+
+
 @dataclass
 class Bomb:
     x: float
@@ -1323,10 +1718,95 @@ class BombChanceWidget(QWidget):
         return self.slider.value()
 
 
+class MediaWatcher(QThread):
+    """Monitors system-wide media playback (Spotify, YouTube, browser, etc.) using Windows GSMTC."""
+    song_started = pyqtSignal(str, str)  # title, artist
+    song_ended = pyqtSignal()
+
+    def __init__(self, poll_interval_ms: int = 1500, parent=None) -> None:
+        super().__init__(parent)
+        self._poll_interval_s = max(0.5, poll_interval_ms / 1000.0)
+        self._running = True
+        self._last_track_id: tuple[str, str] = ("", "")
+        self._last_playing = False
+
+    def stop(self) -> None:
+        self._running = False
+
+    def run(self) -> None:
+        try:
+            from winrt.windows.media.control import (
+                GlobalSystemMediaTransportControlsSessionManager as MediaManager,
+                GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus
+            )
+        except Exception as err:
+            log.info("Windows Media Control (GSMTC) unavailable: %s", err)
+            return
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def _get_manager():
+            try:
+                return await MediaManager.request_async()
+            except Exception:
+                return None
+
+        async def _check_session(mgr):
+            try:
+                sess = mgr.get_current_session()
+                if sess is None:
+                    return None, False
+                pb = sess.get_playback_info()
+                is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
+                if not is_playing:
+                    return None, False
+                props = await sess.try_get_media_properties_async()
+                if props is None:
+                    return None, False
+                title = props.title.strip() if props.title else ""
+                artist = props.artist.strip() if props.artist else ""
+                return (title, artist), True
+            except Exception as ex:
+                log.debug("GSMTC poll error: %s", ex)
+                return None, False
+
+        try:
+            mgr = loop.run_until_complete(_get_manager())
+            while self._running:
+                if mgr is None:
+                    time.sleep(self._poll_interval_s * 2)
+                    mgr = loop.run_until_complete(_get_manager())
+                    continue
+
+                track, is_playing = loop.run_until_complete(_check_session(mgr))
+                if is_playing and track and track[0]:
+                    if track != self._last_track_id:
+                        self._last_track_id = track
+                        self._last_playing = True
+                        self.song_started.emit(track[0], track[1])
+                    else:
+                        self._last_playing = True
+                else:
+                    if self._last_playing:
+                        self._last_playing = False
+                        self.song_ended.emit()
+
+                # Sleep in short increments for responsive thread termination
+                for _ in range(int(self._poll_interval_s * 10)):
+                    if not self._running:
+                        break
+                    time.sleep(0.1)
+        except Exception as err:
+            log.warning("MediaWatcher encountered an error: %s", err)
+        finally:
+            loop.close()
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
-    def __init__(self, bank: SpriteBank) -> None:
+    def __init__(self, bank: SpriteBank, font_family: str = "Determination") -> None:
         # Qt.Tool                     -> no taskbar button / Alt-Tab entry
         # Qt.FramelessWindowHint      -> no title bar or border
         # Qt.WindowStaysOnTopHint     -> stays above normal windows
@@ -1342,6 +1822,7 @@ class YellowsPixelBuddies(QWidget):
             self.setWindowIcon(QIcon(str(ICON_PATH)))
 
         self._bank = bank
+        self._font_family = font_family
 
         # --- animation state ---------------------------------------------------
         self.state = "idle"                  # which sprite folder is being played
@@ -1360,6 +1841,22 @@ class YellowsPixelBuddies(QWidget):
         self._overlay_pixmap: QPixmap | None = None
         self._vfx_overlay = VfxOverlay()
         self._bomb_overlay = BombLaserOverlay(bank)
+        self._dialogue_overlay = DialogueOverlay(self._font_family, DIALOGUE_BOX_PATH)
+        self._dialogue_enabled: bool = DIALOGUE_ENABLED
+        self._last_dialogue: str | None = None
+        self._dialogue_action: QAction | None = None
+        self._last_drag_dialogue_time: float = -9999.0
+        self._last_shocked_dialogue_time: float = -9999.0
+
+        # --- media watcher (song detection) ------------------------------------
+        self._media_watcher: MediaWatcher | None = None
+        if SONG_DETECTION_ENABLED:
+            try:
+                self._media_watcher = MediaWatcher(poll_interval_ms=SONG_DETECTION_INTERVAL_MS, parent=self)
+                self._media_watcher.song_started.connect(self._on_song_started)
+                self._media_watcher.start()
+            except Exception as err:
+                log.info("MediaWatcher could not be started: %s", err)
 
         # --- behaviour state ---------------------------------------------------
         self._phase = Phase.PAUSE
@@ -1507,6 +2004,66 @@ class YellowsPixelBuddies(QWidget):
             self.move(target)
         if hasattr(self, "_vfx_overlay") and self._overlay_state is not None and self._overlay_pixmap is not None:
             self._show_overlay_frame(self._overlay_pixmap)
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.update_position(self._x, self._y)
+
+    def _say(self, category_or_text: str, force: bool = False, extra_queue: list[str] | None = None) -> None:
+        """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
+        if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return
+        if getattr(self, "_phase", None) is Phase.JUMP or getattr(self, "_jump_active", False):
+            return
+        if category_or_text in DIALOGUE_LINES:
+            lines = DIALOGUE_LINES[category_or_text]
+            if not lines:
+                return  # No dialogue lines defined for this sprite -> do not show dialogue
+            choices = [l for l in lines if l != self._last_dialogue] if len(lines) > 1 else lines
+            line = random.choice(choices)
+        elif category_or_text.startswith("* "):
+            line = category_or_text
+        else:
+            # Sprite state or category has no dialogue lines -> do not show dialogue
+            return
+
+        if not force and self._dialogue_overlay.is_active():
+            return
+
+        self._last_dialogue = line
+        self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue)
+
+    def _on_song_started(self, title: str, artist: str) -> None:
+        """React to newly started music playback via Windows GSMTC."""
+        if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return
+        clean_title = title.strip()
+        clean_artist = artist.strip()
+        if not clean_title:
+            return
+
+        log.info("Song started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
+
+        # Format title & artist to fit neatly in dialogue bubble
+        display_title = clean_title if len(clean_title) <= 50 else clean_title[:47] + "..."
+        display_artist = clean_artist if len(clean_artist) <= 35 else clean_artist[:32] + "..."
+
+        if display_artist:
+            line = f"* Now playing: {display_title} by {display_artist}"
+        else:
+            line = f"* Now playing: {display_title}"
+
+        extra_queue: list[str] = []
+        check_str = f"{clean_artist} {clean_title}".lower()
+        if "toby fox" in check_str or "toby 'radiation' fox" in check_str:
+            toby_lines = DIALOGUE_LINES.get("toby_fox_familiar", [
+                "* (Wait... this sounds strangely familiar...)",
+                "* (... Huh? Have I heard this song before?)",
+                "* (This melody... where do I know this from...?)",
+                "* (Wait... why does this feel so familiar...?)",
+                "* (... Did someone from Hometown compose this?)",
+            ])
+            extra_queue.append(random.choice(toby_lines))
+
+        self._say(line, force=True, extra_queue=extra_queue)
 
     # -------------------------------------------------------------- animation
     def _can_play(self, state: str) -> bool:
@@ -1812,6 +2369,21 @@ class YellowsPixelBuddies(QWidget):
             special = self._roll_special()
         self._play(special if special else "idle")
 
+        if special:
+            if special in DIALOGUE_LINES and DIALOGUE_LINES[special]:
+                if special == "shocked":
+                    if forced is not None:
+                        now = time.perf_counter()
+                        if (random.random() < DIALOGUE_CHANCE_ON_SHOCKED
+                                and (now - self._last_shocked_dialogue_time >= DIALOGUE_SHOCKED_COOLDOWN_S)):
+                            self._last_shocked_dialogue_time = now
+                            self._say(special, force=True)
+                else:
+                    self._say(special, force=(forced is not None))
+        else:
+            if random.random() < DIALOGUE_CHANCE_ON_PAUSE:
+                self._say("idle", force=False)
+
     def _roll_special(self) -> str | None:
         """Pick a special animation for this pause, or None for a plain rest.
 
@@ -2041,6 +2613,8 @@ class YellowsPixelBuddies(QWidget):
 
         self._jump_active = True                     # the cooldown starts when this sequence lands
         self._phase = Phase.JUMP
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss(clear_queue=True)
         self._brain_timer.stop()                     # no walk / pause timeout may fire mid-air
         self._pause_elapsed = False
         self._gravity = JUMP_GRAVITY_PX_S2
@@ -2206,6 +2780,7 @@ class YellowsPixelBuddies(QWidget):
         self._leave_hang()
         self._phase = Phase.THROW
         self._post_throw_laugh = False
+        self._say("throw", force=True)
         self._bomb_overlay.reset_state()
         pair = ["near", "beneath"]
         random.shuffle(pair)
@@ -2314,6 +2889,8 @@ class YellowsPixelBuddies(QWidget):
         if reaction is not None and not self._can_play(reaction):
             reaction = None
         self._start_pause(roll_special=False, forced=reaction)
+        if reaction is None:
+            self._say("land", force=True)
 
     def _leave_hang(self) -> None:
         """Undo what the hang set up: click-through off, shake history gone."""
@@ -2436,6 +3013,11 @@ class YellowsPixelBuddies(QWidget):
         self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
         self._play("shocked", loop=True)          # loop it for as long as it is held
         self.setCursor(Qt.ClosedHandCursor)
+        now = time.perf_counter()
+        if (random.random() < DIALOGUE_CHANCE_ON_DRAG
+                and (now - self._last_drag_dialogue_time >= DIALOGUE_DRAG_COOLDOWN_S)):
+            self._last_drag_dialogue_time = now
+            self._say("drag", force=True)
 
     def _end_drag(self) -> None:
         """Drop the pet: it will fall back to the taskbar under gravity."""
@@ -2539,7 +3121,7 @@ class YellowsPixelBuddies(QWidget):
             self._last_switch_burnt_time = now
             log.info("Flashbang! Switched from dark (%.1f) to bright maximized app (%.1f) -> burnt",
                      prev_lum, curr_lum)
-            self._interrupt_with_reaction("burnt")
+            self._interrupt_with_reaction("burnt", dialogue_category="burnt_switch")
         else:
             now = time.perf_counter()
             if now - self._last_switch_shock_time < SWITCH_SHOCK_COOLDOWN_S:
@@ -2550,7 +3132,7 @@ class YellowsPixelBuddies(QWidget):
             log.info("Switched to maximized app -> shocked")
             self._interrupt_with_reaction("shocked")
 
-    def _interrupt_with_reaction(self, reaction: str) -> None:
+    def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
         if self._interrupted_state is None:
             rem_ms = max(500, self._brain_timer.remainingTime()) if self._brain_timer.isActive() else 2500
@@ -2563,6 +3145,7 @@ class YellowsPixelBuddies(QWidget):
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._play(reaction)
+        self._say(dialogue_category or reaction, force=True)
 
     # -------------------------------------------------------- system tray icon
     def _init_tray_icon(self) -> None:
@@ -2608,6 +3191,13 @@ class YellowsPixelBuddies(QWidget):
         tray_menu.addAction(self._bomb_chance_action)
 
         tray_menu.addSeparator()
+
+        self._dialogue_action = tray_menu.addAction("Dialogue Bubbles")
+        self._dialogue_action.setCheckable(True)
+        self._dialogue_action.setChecked(self._dialogue_enabled)
+        self._dialogue_action.toggled.connect(self._toggle_dialogue)
+
+        tray_menu.addSeparator()
         exit_action = tray_menu.addAction("Exit")
         exit_action.triggered.connect(self._quit)
 
@@ -2629,6 +3219,21 @@ class YellowsPixelBuddies(QWidget):
         if self._bomb_chance_widget is not None:
             self._bomb_chance_widget.set_value(self._bomb_chance_percent)
             self._bomb_chance_widget.setEnabled(self._bomb_attack_enabled)
+        if self._dialogue_action is not None:
+            self._dialogue_action.blockSignals(True)
+            self._dialogue_action.setChecked(self._dialogue_enabled)
+            self._dialogue_action.blockSignals(False)
+
+    def _toggle_dialogue(self, checked: bool) -> None:
+        """Enable or disable speech bubble popups."""
+        self._dialogue_enabled = checked
+        if not checked and hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss()
+        if self._dialogue_action is not None:
+            self._dialogue_action.blockSignals(True)
+            self._dialogue_action.setChecked(checked)
+            self._dialogue_action.blockSignals(False)
+        log.info("Dialogue bubbles: %s", "ENABLED" if checked else "DISABLED")
 
     def _toggle_bomb_attack(self, checked: bool) -> None:
         """Enable or disable the bomb attack mode."""
@@ -2689,13 +3294,23 @@ class YellowsPixelBuddies(QWidget):
         for timer in timers:
             timer.stop()
         self._stop_overlay()
+        if hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            self._media_watcher.stop()
+            self._media_watcher.wait(1000)
         if hasattr(self, "_vfx_overlay"):
             self._vfx_overlay.close()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss(clear_queue=True)
+            self._dialogue_overlay.close()
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()
+
+    def closeEvent(self, event) -> None:
+        self._quit()
+        event.accept()
 
     # ---------------------------------------------------------------- painting
     def paintEvent(self, event) -> None:
@@ -2742,9 +3357,24 @@ def main() -> int:
     if ICON_PATH.exists():
         app.setWindowIcon(QIcon(str(ICON_PATH)))
 
+    font_family = "Determination"
+    if DETERMINATION_FONT_PATH.exists():
+        fid = QFontDatabase.addApplicationFont(str(DETERMINATION_FONT_PATH))
+        if fid >= 0:
+            families = QFontDatabase.applicationFontFamilies(fid)
+            if families:
+                font_family = families[0]
+                log.info("Loaded font '%s' from %s", font_family, DETERMINATION_FONT_PATH)
+            else:
+                log.warning("Could not determine font family from %s", DETERMINATION_FONT_PATH)
+        else:
+            log.warning("Failed to load application font from %s", DETERMINATION_FONT_PATH)
+    else:
+        log.info("Determination font not found at %s - falling back to default font", DETERMINATION_FONT_PATH)
+
     sprites_dir = SPRITES_DIR
     bank = SpriteBank(sprites_dir, app.primaryScreen().devicePixelRatio())
-    buddy = YellowsPixelBuddies(bank)
+    buddy = YellowsPixelBuddies(bank, font_family=font_family)
     buddy.start()
 
     return app.exec_()
