@@ -254,10 +254,9 @@ SWITCH_BURNT_COOLDOWN_S = 5.0      # Cooldown in seconds for flashbang burnt (ha
 ```python
 DIALOGUE_ENABLED = True               # Enable speech bubbles / dialogue popups
 DIALOGUE_CHANCE_ON_PAUSE = 0.25       # 25% chance to speak a random thought during a normal rest pause
-DIALOGUE_CHANCE_ON_DRAG = 0.25        # 25% chance to speak when picked up / dragged by cursor
-DIALOGUE_DRAG_COOLDOWN_S = 10.0       # Cooldown in seconds between drag / pull dialogues
 DIALOGUE_CHANCE_ON_SHOCKED = 0.25     # 25% chance to speak when startled / clicked
 DIALOGUE_SHOCKED_COOLDOWN_S = 8.0     # Cooldown in seconds between startled / click dialogues
+DIALOGUE_TONGUE_COOLDOWN_S = 2.0      # Cooldown in seconds between :P tongue dialogues
 DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)

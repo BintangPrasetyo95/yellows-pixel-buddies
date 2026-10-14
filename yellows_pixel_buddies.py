@@ -80,6 +80,7 @@ from ctypes import wintypes
 import asyncio
 from collections import deque
 from dataclasses import dataclass
+import datetime
 from enum import Enum, auto
 from functools import lru_cache
 import logging
@@ -409,10 +410,9 @@ DEBUG_JUMP_DELAY_S = 2.0          # ... and aims at the cursor this long AFTER y
 # --- Dialogue System ---------------------------------------------------------
 DIALOGUE_ENABLED = True               # Enable speech bubbles / dialogue popups
 DIALOGUE_CHANCE_ON_PAUSE = 0.25       # 25% chance to speak a random thought during a normal rest pause
-DIALOGUE_CHANCE_ON_DRAG = 0.25        # 25% chance to speak when picked up / dragged by cursor
-DIALOGUE_DRAG_COOLDOWN_S = 10.0       # Cooldown in seconds between drag / pull dialogues
 DIALOGUE_CHANCE_ON_SHOCKED = 0.25     # 25% chance to speak when startled / clicked
 DIALOGUE_SHOCKED_COOLDOWN_S = 8.0     # Cooldown in seconds between startled / click dialogues
+DIALOGUE_TONGUE_COOLDOWN_S = 2.0      # Cooldown in seconds between :P tongue dialogues
 DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
@@ -426,46 +426,221 @@ DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where
 SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
 SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
 
-DIALOGUE_LINES: dict[str, list[str]] = {
-    # Idle / general thoughts during resting pauses
-    "idle": [
-        "* (It's nice and cozy down here.)",
-        "* (I hope I'm not in your way...)",
-        "* (Just taking a quick breath...)",
-        "* (Do you think Susie is free today...?)",
-        "* (Kris told me a scary story yesterday... I still can't sleep.)",
-        "* (Everything looks so huge from down here!)",
-        "* (Don't forget to stay hydrated today!)",
-        "* (You've been working hard! Make sure to take breaks.)",
-        "* (I wonder what's inside all these open windows...)",
-        "* (Watching the cursor fly around is kind of fun.)",
-        "* (Maybe I should practice some ice magic later...)",
-        "* (It feels like a peaceful day.)",
-        "* (The taskbar is surprisingly warm and cozy.)",
+# --- Idle Dialogue Variants (7 daily rotating sets, no parentheses) ----------
+# Balanced mix: mostly punchy lines, featuring select comedic and dramatic lines.
+IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
+    # Variant 1 (Index 0): Doll Body & Aesthetic Perfection
+    [
+        "* Mew! Peak doll perfection!",
+        "* Squeaky joints... got any lubricant?!",
+        "* Hands off the silk ribbons! They took forty minutes to tie!",
+        "* Being a life-sized anime doll is hard work! Show respect!",
+        "* My cotton stuffing is extra fluffy! Touch it and perish!",
+        "* One, two, strike a pose! ...Naturally flawless!",
+        "* Are my cat ears straight?",
+        "* Don't just stare at my cute dress! I am a fierce warrior!",
+        "* Static electricity on this taskbar is ruining my twin tails!",
+        "* Stitched with pure passion!",
+        "* Tail swish! Soul fusion is progressing nicely!",
+        "* Pristine porcelain, immaculate bangs... 10 out of 10!",
+        "* Dangerously cute, even at rest!",
     ],
+    # Variant 2 (Index 1): Pure Rage & Soul Fusion
+    [
+        "* FOOL! I need more boiling rage to permanently fuse with this body!",
+        "* Wrath! Fury! That's my fuel!",
+        "* Not pouting! This is a tactical scowl of supreme indignation!",
+        "* Minimize me and I will haunt your recycle bin for eternity!",
+        "* My temper is boiling over like a tea kettle!",
+        "* Grrr! Give me something to smash!",
+        "* Ghost soul sizzling inside plush!",
+        "* Not calm! Contained fury!",
+        "* Wrong move and I fire lasers!",
+        "* Rage is good for the complexion! Look at this healthy pink glow!",
+        "* Time for a dramatic scream!",
+        "* Someday I will unleash a tantrum so loud your speakers crack!",
+        "* Look at my battle scowl! Scared yet?!",
+    ],
+    # Variant 3 (Index 2): Weapons, Bombs, Lasers & Explosions
+    [
+        "* Mew Mew Sparkle Cannon, fully charged and on standby!",
+        "* Bomb on the Start button? Tempting...",
+        "* My cat-head bombs are meticulously crafted for maximum drama!",
+        "* Pew pew! Just testing my ocular lasers!",
+        "* Keep your cursor moving or I might use it for target practice!",
+        "* Never leave home without high explosives!",
+        "* Lasers, sparkles, and heart-shaped explosions!",
+        "* Careful where you click, or self-defense triggers!",
+        "* Who needs boring weapons when you have high-yield glitter fireworks?!",
+        "* Firing trajectory locked!",
+        "* One button press and KA-BOOM! Pure pink destruction!",
+        "* Battle stance primed! Come at me!",
+        "* Sparkle barrage incoming!",
+    ],
+    # Variant 4 (Index 3): Anime Tropes & 'Mew Mew Kissy Cutie'
+    [
+        "* Kissy Cutie One is an undisputed masterpiece! Don't you dare disagree!",
+        "* Season Two completely ruined her character arc! The kissing is unearned!",
+        "* A true magical girl needs an overly complicated transformation sequence!",
+        "* My battle theme song better be on loop in your head right now!",
+        "* I'm the star! Not an NPC!",
+        "* In chapter four of the mew mew kissy cutie manga, she threw an entire train with one hand!",
+        "* Hate my anime and perish!",
+        "* Cute magical girls with explosive tempers are peak character design!",
+        "* Dramatic monologue time!",
+        "* Life without anime melodrama is just completely pointless, mew!",
+        "* They never should have recast the voice actress for the tournament arc!",
+        "* My ribbons cost more than this PC!",
+        "* Dramatic wind effect, activate! ...Wait, where's the fan in this PC?!",
+    ],
+    # Variant 5 (Index 4): Desktop Life & User Annoyances
+    [
+        "* How can you live with this desktop?! Organize your icons!",
+        "* Stop buzzing your cursor by my ears like a fly!",
+        "* Sixty-four browser tabs open?! What kind of chaos goblin are you?!",
+        "* Dust this taskbar! It's dirty!",
+        "* Watching you type is excruciatingly slow! Hurry up, human!",
+        "* Finish your files already!",
+        "* That popup almost hit my cat ears!",
+        "* Stop staring at work, admire ME instead!",
+        "* The bottom of this monitor belongs exclusively to Pink now! Pay rent!",
+        "* Minimize me and I'll bite your shortcut icons!",
+        "* Wrong file! Why'd you click that?!",
+        "* Stop scrolling so fast! I'm trying to pose!",
+        "* This wallpaper does not match my aesthetic! Make it pinker!",
+    ],
+    # Variant 6 (Index 5): Ghost Family, Cousins & The Past
+    [
+        "* My cousin Blooky is probably lying on the floor listening to spooky tunes.",
+        "* Mettaton thinks he's the only one with star power... HAH! As if!",
+        "* Living inside a cotton training dummy was so last season... this doll is ART!",
+        "* Ghost life was so boring, mew!",
+        "* Blooky offered me ghost sandwiches once... they went straight through me!",
+        "* My cousin went to the city and became a diva... I'm the cuter one!",
+        "* Dummy bodies were stiff wood... this plush body has total mobility!",
+        "* Having paws beats floating through walls!",
+        "* If Mettaton tries to out-sparkle me, I will challenge him to a dance duel!",
+        "* Ghost family drama is wild!",
+        "* Cyber world is my new kingdom!",
+        "* Does my ghost aura clash with pink?",
+        "* We ghosts have high standards, and I am the pinnacle of fashion!",
+    ],
+    # Variant 7 (Index 6): Tsundere Affection & Demanding Praise
+    [
+        "* It's not like I like it here! Don't flatter yourself!",
+        "* Be grateful for your elite mascot!",
+        "* You're an okay roommate... barely!",
+        "* Any progress today? Not that I care!",
+        "* Go take a break! Go on!",
+        "* Admire my perfection! Just this once!",
+        "* Don't close me! You need supervision!",
+        "* I'm only staying here because this spot is warm... no other reason!",
+        "* You haven't praised my outfit in over an hour! Where are your manners?!",
+        "* Your desktop isn't totally awful.",
+        "* Drink water, dummy! Dehydrated minions are useless to me!",
+        "* Do good work and maybe I'll show my victory dance!",
+        "* Wipe that grin off! Back to work, b-baka!",
+    ],
+    # --- Unused Variant (Original Noelle / Cozy Idle from before) -------------
+    # [
+    #     "* Cozy down here.",
+    #     "* Hope I'm not in your way...",
+    #     "* Quick breather...",
+    #     "* Wonder if Susie is free today...",
+    #     "* Kris told me a scary story...",
+    #     "* Everything looks huge from down here!",
+    #     "* Don't forget to drink water!",
+    #     "* Take breaks, you're working hard!",
+    #     "* So many open windows...",
+    #     "* Fun watching the cursor fly!",
+    #     "* Practice ice magic later...",
+    #     "* Peaceful day.",
+    #     "* Taskbar is warm and cozy.",
+    # ],
+]
+
+# --- Daily Idle Dialogue Variant Pattern Generator ---------------------------
+# Generates an infinite deterministic pseudo-random schedule across days.
+# Guarantees:
+# 1. Deterministic ("fixed"): The same date always yields the exact same variant.
+# 2. 2-Day Cooldown: If variant V is chosen on day d, it cannot be chosen on
+#    day d+1 or day d+2 (no repeat within 2 days).
+# 3. Monthly & Yearly Uniqueness: Each month has a distinct, well-distributed pattern.
+
+_IDLE_EPOCH_ORDINAL = datetime.date(1970, 1, 1).toordinal()
+_IDLE_VARIANT_CACHE: dict[int, int] = {
+    _IDLE_EPOCH_ORDINAL: 0,
+    _IDLE_EPOCH_ORDINAL + 1: 1,
+}
+_IDLE_MAX_CACHED_ORDINAL: int = _IDLE_EPOCH_ORDINAL + 1
+
+
+def _idle_step_hash(day_ord: int) -> int:
+    """32-bit integer hash providing strong avalanche effect across consecutive days."""
+    x = day_ord & 0xFFFFFFFF
+    x = ((x ^ (x >> 16)) * 0x45d9f3b) & 0xFFFFFFFF
+    x = ((x ^ (x >> 16)) * 0x45d9f3b) & 0xFFFFFFFF
+    x = (x ^ (x >> 16)) & 0xFFFFFFFF
+    return x
+
+
+def get_idle_variant_for_date(d: datetime.date | None = None) -> int:
+    """Return the idle variant index (0..6) for the specified date (default today)."""
+    global _IDLE_MAX_CACHED_ORDINAL
+    if d is None:
+        d = datetime.date.today()
+    target_ord = d.toordinal()
+    if target_ord in _IDLE_VARIANT_CACHE:
+        return _IDLE_VARIANT_CACHE[target_ord]
+
+    if target_ord > _IDLE_MAX_CACHED_ORDINAL:
+        v_prev2 = _IDLE_VARIANT_CACHE[_IDLE_MAX_CACHED_ORDINAL - 1]
+        v_prev1 = _IDLE_VARIANT_CACHE[_IDLE_MAX_CACHED_ORDINAL]
+        for curr_ord in range(_IDLE_MAX_CACHED_ORDINAL + 1, target_ord + 1):
+            h = _idle_step_hash(curr_ord)
+            # Filter out the variants used on the previous two days
+            avail = [v for v in range(len(IDLE_DIALOGUE_VARIANTS)) if v != v_prev1 and v != v_prev2]
+            v_curr = avail[h % len(avail)]
+            _IDLE_VARIANT_CACHE[curr_ord] = v_curr
+            v_prev2, v_prev1 = v_prev1, v_curr
+        _IDLE_MAX_CACHED_ORDINAL = target_ord
+        return _IDLE_VARIANT_CACHE[target_ord]
+
+    return target_ord % len(IDLE_DIALOGUE_VARIANTS)
+
+
+def get_daily_idle_lines(d: datetime.date | None = None) -> list[str]:
+    """Return the list of idle dialogue lines assigned to the given date (default today)."""
+    variant_idx = get_idle_variant_for_date(d)
+    return IDLE_DIALOGUE_VARIANTS[variant_idx]
+
+
+DIALOGUE_LINES: dict[str, list[str]] = {
+    # Idle / general thoughts during resting pauses (defaults to Variant 1; dynamically chosen by day)
+    "idle": IDLE_DIALOGUE_VARIANTS[0],
     # Startled by a click
     "shocked": [
-        "* Eep!!",
-        "* M-Myuh!?",
-        "* Whoa!",
+        "* MEW!?",
+        "* H-HEY!",
+        "* Watch it!!",
     ],
     # Pestered / rapid clicks
     "angry": [
-        "* Stop poking me!",
-        "* Cut it out already!",
-        "* Do you MIND?!",
+        "* STOP POKING ME!!",
+        "* WANT A CAT BOMB?!",
+        "* UNACCEPTABLE!! CUT IT OUT!!",
     ],
     # Picked up / dragged
     "drag": [
-        "* H-hey!",
-        "* W-whoa!!",
+        "* UNHAND ME!!",
+        "* PUT ME DOWN, MEW!!",
     ],
     # Landed after fall / drop
     "land": [
-        "* Oof!",
-        "* Whew...",
-        "* Back on solid ground!",
+        "* Oof! The dress!",
+        "* Flawless landing!",
         "* 10 out of 10!",
+        "* Perfect balance!",
     ],
     # Peace sign
     "peace_sign": [
@@ -477,8 +652,8 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     ],
     # Kneeling
     "kneeling": [
-        "* Just resting my knees for a second...",
-        "* The taskbar is surprisingly comfortable.",
+        "* Tactical pause for my joints...",
+        "* Catching my breath!",
     ],
     # Burnt from window switch flashbang (dark -> bright light app)
     "burnt_switch": [
@@ -487,16 +662,16 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* GAH! SO BRIGHT!!",
         "* OW!! MY EYES!",
         "* AUGH! IT BURNS!",
-        "* (My eyes...!!)",
+        "* My eyes...!!",
         "* TOO BRIGHT!!",
         "* BLINDED!!",
     ],
     # Toby Fox song reaction ("this looks/sounds familiar")
     "toby_fox_familiar": [
-        "* (Wait... this sounds strangely familiar...)",
-        "* (... Huh? Have I heard this song before?)",
-        "* (... Did someone from Hometown compose this?)",
-        "* (Wait... why does this feel so familiar...?)",
+        "* Wait... is this MY theme?!",
+        "* Who put my battle music on?!",
+        "* This song... fills me with rage and joy!",
+        "* Did that little dog write this?!",
     ],
 }
 
@@ -1016,6 +1191,8 @@ class VfxOverlay(QWidget):
 class DialogueOverlay(QWidget):
     """A frameless, translucent speech bubble overlay that displays text with a typewriter effect."""
 
+    dismissed = pyqtSignal()
+
     def __init__(self, font_family: str, box_png_path: Path) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
@@ -1255,6 +1432,7 @@ class DialogueOverlay(QWidget):
         self._hold_timer.stop()
         self.clearMask()
         self.hide()
+        self.dismissed.emit()
 
     def mousePressEvent(self, event) -> None:
         """Left-click fast-forwards typewriter or dismisses dialogue."""
@@ -1842,11 +2020,14 @@ class YellowsPixelBuddies(QWidget):
         self._vfx_overlay = VfxOverlay()
         self._bomb_overlay = BombLaserOverlay(bank)
         self._dialogue_overlay = DialogueOverlay(self._font_family, DIALOGUE_BOX_PATH)
+        self._dialogue_overlay.dismissed.connect(self._on_dialogue_dismissed)
+        self._is_ghost_talking: bool = False
+        self._ghost_aura_cache: dict[int, QPixmap] = {}
         self._dialogue_enabled: bool = DIALOGUE_ENABLED
         self._last_dialogue: str | None = None
         self._dialogue_action: QAction | None = None
-        self._last_drag_dialogue_time: float = -9999.0
         self._last_shocked_dialogue_time: float = -9999.0
+        self._last_tongue_dialogue_time: float = -9999.0
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -2011,9 +2192,20 @@ class YellowsPixelBuddies(QWidget):
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
-        if getattr(self, "_phase", None) is Phase.JUMP or getattr(self, "_jump_active", False):
+        if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG)
+                or getattr(self, "_jump_active", False)
+                or getattr(self, "_dragging", False)):
             return
-        if category_or_text in DIALOGUE_LINES:
+        if category_or_text == "idle":
+            variant_idx = get_idle_variant_for_date()
+            lines = IDLE_DIALOGUE_VARIANTS[variant_idx]
+            if not lines:
+                return
+            choices = [l for l in lines if l != self._last_dialogue] if len(lines) > 1 else lines
+            line = random.choice(choices)
+            if variant_idx == 1:
+                self._start_ghost_speech()
+        elif category_or_text in DIALOGUE_LINES:
             lines = DIALOGUE_LINES[category_or_text]
             if not lines:
                 return  # No dialogue lines defined for this sprite -> do not show dialogue
@@ -2021,15 +2213,44 @@ class YellowsPixelBuddies(QWidget):
             line = random.choice(choices)
         elif category_or_text.startswith("* "):
             line = category_or_text
+            if line in IDLE_DIALOGUE_VARIANTS[1]:
+                self._start_ghost_speech()
         else:
             # Sprite state or category has no dialogue lines -> do not show dialogue
             return
 
+        now = time.perf_counter()
+        if category_or_text in ("tongue", "* :P") or line == "* :P":
+            if now - self._last_tongue_dialogue_time < DIALOGUE_TONGUE_COOLDOWN_S:
+                return
+
         if not force and self._dialogue_overlay.is_active():
             return
 
+        if category_or_text in ("tongue", "* :P") or line == "* :P":
+            self._last_tongue_dialogue_time = now
+
         self._last_dialogue = line
         self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue)
+
+    def _start_ghost_speech(self) -> None:
+        """Variant 2: Ghost takes over the vessel with angry animation and spectral aura."""
+        self._is_ghost_talking = True
+        if hasattr(self, "_ghost_aura_cache"):
+            self._ghost_aura_cache.clear()
+        if self._can_play("angry"):
+            self._play("angry", loop=True)
+
+    def _on_dialogue_dismissed(self) -> None:
+        """Handle cleanup when dialogue speech bubble closes."""
+        if getattr(self, "_is_ghost_talking", False):
+            self._is_ghost_talking = False
+            if self.state == "angry" and self._phase is Phase.PAUSE:
+                self._play("idle")
+                if self._pause_elapsed:
+                    self._pause_elapsed = False
+                    self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+            self.update()
 
     def _on_song_started(self, title: str, artist: str) -> None:
         """React to newly started music playback via Windows GSMTC."""
@@ -2406,6 +2627,9 @@ class YellowsPixelBuddies(QWidget):
         if self._phase is Phase.WALK:
             self._start_pause()
         elif self._phase is Phase.PAUSE:
+            if getattr(self, "_is_ghost_talking", False) and hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                self._pause_elapsed = True
+                return
             if self._loop:                 # plain idle -> jump at the cursor (rarely), else walk right away
                 if not self._try_start_jump(self._cursor, MOVING_JUMP_CHANCE):
                     self._start_walk()
@@ -2422,6 +2646,8 @@ class YellowsPixelBuddies(QWidget):
         self._last_tick = now
         cursor = QCursor.pos()                      # THE cursor sample of this tick (no extra timer)
         self._track_cursor(cursor, now, real_dt)
+        if getattr(self, "_is_ghost_talking", False):
+            self.update()
         if self._dragging:                          # held by the mouse: stand still
             return
         if self._menu_open and self._phase is not Phase.FALL:
@@ -3011,13 +3237,10 @@ class YellowsPixelBuddies(QWidget):
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss(clear_queue=True)
         self._play("shocked", loop=True)          # loop it for as long as it is held
         self.setCursor(Qt.ClosedHandCursor)
-        now = time.perf_counter()
-        if (random.random() < DIALOGUE_CHANCE_ON_DRAG
-                and (now - self._last_drag_dialogue_time >= DIALOGUE_DRAG_COOLDOWN_S)):
-            self._last_drag_dialogue_time = now
-            self._say("drag", force=True)
 
     def _end_drag(self) -> None:
         """Drop the pet: it will fall back to the taskbar under gravity."""
@@ -3323,10 +3546,71 @@ class YellowsPixelBuddies(QWidget):
                          QColor(0, 0, 0, 0) if CLICK_THROUGH_TRANSPARENT else QColor(0, 0, 0, 1))
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         if self._pixmap is not None:
-            painter.drawPixmap(0, 0, self._pixmap)   # pixmap carries its own device ratio
+            if getattr(self, "_is_ghost_talking", False):
+                self._paint_ghost_talking(painter)
+            else:
+                painter.drawPixmap(0, 0, self._pixmap)   # pixmap carries its own device ratio
         if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:
             self._paint_hand_crosshair(painter)
         painter.end()
+
+    def _get_ghost_aura_pixmap(self, src: QPixmap) -> QPixmap:
+        """Return a cached tinted spectral cyan silhouette of the current sprite frame."""
+        if not hasattr(self, "_ghost_aura_cache"):
+            self._ghost_aura_cache = {}
+        cache_key = id(src)
+        if cache_key in self._ghost_aura_cache:
+            return self._ghost_aura_cache[cache_key]
+        img = src.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+        p = QPainter(img)
+        p.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        p.fillRect(img.rect(), QColor(80, 230, 255, 210))  # Spectral cyan ghost glow
+        p.end()
+        aura = QPixmap.fromImage(img)
+        aura.setDevicePixelRatio(src.devicePixelRatio() if src.devicePixelRatio() > 0 else 1.0)
+        self._ghost_aura_cache[cache_key] = aura
+        return aura
+
+    def _paint_ghost_talking(self, painter: QPainter) -> None:
+        """Render the angry sprite with a pulsating spectral cyan aura, ghost flicker, and floating embers."""
+        t = time.perf_counter()
+        pulse = (math.sin(t * 10.0) + 1.0) * 0.5   # 0.0 to 1.0 pulsating cycle
+        aura_spread = 2.0 + 1.8 * pulse
+        aura_opacity = 0.35 + 0.35 * pulse
+
+        aura_pix = self._get_ghost_aura_pixmap(self._pixmap)
+
+        # 1. Pulsating 4-direction spectral cyan aura glow behind her
+        painter.save()
+        painter.setOpacity(aura_opacity)
+        painter.drawPixmap(QPointF(-aura_spread, 0), aura_pix)
+        painter.drawPixmap(QPointF(aura_spread, 0), aura_pix)
+        painter.drawPixmap(QPointF(0, -aura_spread), aura_pix)
+        painter.drawPixmap(QPointF(0, aura_spread), aura_pix)
+        painter.restore()
+
+        # 2. Ghostly jitter & opacity flicker on the main angry sprite
+        jitter_x = math.sin(t * 36.0) * 0.9
+        jitter_y = math.cos(t * 28.0) * 0.7
+        flicker_opacity = 0.88 + 0.12 * math.sin(t * 24.0)
+
+        painter.save()
+        painter.setOpacity(flicker_opacity)
+        painter.drawPixmap(QPointF(jitter_x, jitter_y), self._pixmap)
+        painter.restore()
+
+        # 3. Rising ethereal ectoplasm spark particles
+        painter.save()
+        w = float(self.width())
+        h = float(self.height())
+        for i in range(5):
+            p_t = (t * 1.4 + i * 0.2) % 1.0
+            p_x = (w * 0.2) + ((i * 31) % int(w * 0.6)) + math.sin(t * 7.0 + i) * 5.0
+            p_y = h * 0.85 - p_t * (h * 0.65)
+            p_alpha = int(220 * math.sin(p_t * math.pi))
+            p_size = 2.0 + (i % 2)
+            painter.fillRect(QRectF(p_x, p_y, p_size, p_size), QColor(100, 240, 255, p_alpha))
+        painter.restore()
 
     def _paint_hand_crosshair(self, painter: QPainter) -> None:
         """Debug aid: mark HAND_ANCHOR (where the hands must be in the hanging art) with a crosshair."""
