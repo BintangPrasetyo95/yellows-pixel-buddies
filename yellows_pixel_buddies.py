@@ -426,135 +426,153 @@ DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where
 SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
 SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
 
+DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
+
+# --- Ghost Takeover Lines ----------------------------------------------------
+# Speaking any of these lines triggers the ghost takeover visual effect
+# (angry animation + pulsating cyan spectral aura + ghost jitter + floating embers),
+# regardless of which variant or daily pool they appear in.
+GHOST_DIALOGUE_LINES: set[str] = {
+    "* FOOL! I need more boiling rage to permanently fuse with this body!",
+    "* Wrath! Fury! That's my fuel!",
+    "* Not pouting! This is a tactical scowl of supreme indignation!",
+    "* Minimize me and I will haunt your recycle bin for eternity!",
+    "* My temper is boiling over like a tea kettle!",
+    "* Grrr! Give me something to smash!",
+    "* Ghost soul sizzling inside plush!",
+    "* Not calm! Contained fury!",
+    "* Wrong move and I fire lasers!",
+    "* Rage is good for the complexion! Look at this healthy pink glow!",
+    "* Time for a dramatic scream!",
+    "* Someday I will unleash a tantrum so loud your speakers crack!",
+    "* Look at my battle scowl! Scared yet?!",
+}
+
 # --- Idle Dialogue Variants (7 daily rotating sets, no parentheses) ----------
-# Balanced mix: mostly punchy lines, featuring select comedic and dramatic lines.
+# Dialogue lines are cross-distributed across all 7 daily variants for maximum variety,
+# mixing doll aesthetics, ghost soul tantrums, weapons, anime tropes, desktop commentary,
+# cousin banter, and tsundere remarks evenly.
 IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
-    # Variant 1 (Index 0): Doll Body & Aesthetic Perfection
+    # Variant 1 (Index 0)
     [
-        "* Mew! Peak doll perfection!",
-        "* Squeaky joints... got any lubricant?!",
-        "* Hands off the silk ribbons! They took forty minutes to tie!",
-        "* Being a life-sized anime doll is hard work! Show respect!",
-        "* My cotton stuffing is extra fluffy! Touch it and perish!",
-        "* One, two, strike a pose! ...Naturally flawless!",
-        "* Are my cat ears straight?",
         "* Don't just stare at my cute dress! I am a fierce warrior!",
-        "* Static electricity on this taskbar is ruining my twin tails!",
-        "* Stitched with pure passion!",
-        "* Tail swish! Soul fusion is progressing nicely!",
-        "* Pristine porcelain, immaculate bangs... 10 out of 10!",
-        "* Dangerously cute, even at rest!",
-    ],
-    # Variant 2 (Index 1): Pure Rage & Soul Fusion
-    [
-        "* FOOL! I need more boiling rage to permanently fuse with this body!",
         "* Wrath! Fury! That's my fuel!",
-        "* Not pouting! This is a tactical scowl of supreme indignation!",
-        "* Minimize me and I will haunt your recycle bin for eternity!",
-        "* My temper is boiling over like a tea kettle!",
-        "* Grrr! Give me something to smash!",
-        "* Ghost soul sizzling inside plush!",
-        "* Not calm! Contained fury!",
-        "* Wrong move and I fire lasers!",
-        "* Rage is good for the complexion! Look at this healthy pink glow!",
-        "* Time for a dramatic scream!",
-        "* Someday I will unleash a tantrum so loud your speakers crack!",
-        "* Look at my battle scowl! Scared yet?!",
-    ],
-    # Variant 3 (Index 2): Weapons, Bombs, Lasers & Explosions
-    [
-        "* Mew Mew Sparkle Cannon, fully charged and on standby!",
-        "* Bomb on the Start button? Tempting...",
-        "* My cat-head bombs are meticulously crafted for maximum drama!",
-        "* Pew pew! Just testing my ocular lasers!",
-        "* Keep your cursor moving or I might use it for target practice!",
-        "* Never leave home without high explosives!",
-        "* Lasers, sparkles, and heart-shaped explosions!",
-        "* Careful where you click, or self-defense triggers!",
-        "* Who needs boring weapons when you have high-yield glitter fireworks?!",
-        "* Firing trajectory locked!",
-        "* One button press and KA-BOOM! Pure pink destruction!",
-        "* Battle stance primed! Come at me!",
-        "* Sparkle barrage incoming!",
-    ],
-    # Variant 4 (Index 3): Anime Tropes & 'Mew Mew Kissy Cutie'
-    [
-        "* Kissy Cutie One is an undisputed masterpiece! Don't you dare disagree!",
-        "* Season Two completely ruined her character arc! The kissing is unearned!",
-        "* A true magical girl needs an overly complicated transformation sequence!",
-        "* My battle theme song better be on loop in your head right now!",
-        "* I'm the star! Not an NPC!",
-        "* In chapter four of the mew mew kissy cutie manga, she threw an entire train with one hand!",
-        "* Hate my anime and perish!",
-        "* Cute magical girls with explosive tempers are peak character design!",
-        "* Dramatic monologue time!",
-        "* Life without anime melodrama is just completely pointless, mew!",
-        "* They never should have recast the voice actress for the tournament arc!",
-        "* My ribbons cost more than this PC!",
-        "* Dramatic wind effect, activate! ...Wait, where's the fan in this PC?!",
-    ],
-    # Variant 5 (Index 4): Desktop Life & User Annoyances
-    [
-        "* How can you live with this desktop?! Organize your icons!",
-        "* Stop buzzing your cursor by my ears like a fly!",
-        "* Sixty-four browser tabs open?! What kind of chaos goblin are you?!",
-        "* Dust this taskbar! It's dirty!",
-        "* Watching you type is excruciatingly slow! Hurry up, human!",
-        "* Finish your files already!",
-        "* That popup almost hit my cat ears!",
-        "* Stop staring at work, admire ME instead!",
-        "* The bottom of this monitor belongs exclusively to Pink now! Pay rent!",
-        "* Minimize me and I'll bite your shortcut icons!",
-        "* Wrong file! Why'd you click that?!",
-        "* Stop scrolling so fast! I'm trying to pose!",
-        "* This wallpaper does not match my aesthetic! Make it pinker!",
-    ],
-    # Variant 6 (Index 5): Ghost Family, Cousins & The Past
-    [
-        "* My cousin Blooky is probably lying on the floor listening to spooky tunes.",
-        "* Mettaton thinks he's the only one with star power... HAH! As if!",
-        "* Living inside a cotton training dummy was so last season... this doll is ART!",
-        "* Ghost life was so boring, mew!",
-        "* Blooky offered me ghost sandwiches once... they went straight through me!",
-        "* My cousin went to the city and became a diva... I'm the cuter one!",
-        "* Dummy bodies were stiff wood... this plush body has total mobility!",
-        "* Having paws beats floating through walls!",
-        "* If Mettaton tries to out-sparkle me, I will challenge him to a dance duel!",
-        "* Ghost family drama is wild!",
-        "* Cyber world is my new kingdom!",
-        "* Does my ghost aura clash with pink?",
-        "* We ghosts have high standards, and I am the pinnacle of fashion!",
-    ],
-    # Variant 7 (Index 6): Tsundere Affection & Demanding Praise
-    [
-        "* It's not like I like it here! Don't flatter yourself!",
-        "* Be grateful for your elite mascot!",
-        "* You're an okay roommate... barely!",
-        "* Any progress today? Not that I care!",
-        "* Go take a break! Go on!",
-        "* Admire my perfection! Just this once!",
-        "* Don't close me! You need supervision!",
-        "* I'm only staying here because this spot is warm... no other reason!",
-        "* You haven't praised my outfit in over an hour! Where are your manners?!",
-        "* Your desktop isn't totally awful.",
-        "* Drink water, dummy! Dehydrated minions are useless to me!",
         "* Do good work and maybe I'll show my victory dance!",
+        "* That popup almost hit my cat ears!",
+        "* Who needs boring weapons when you have high-yield glitter fireworks?!",
+        "* One button press and KA-BOOM! Pure pink destruction!",
+        "* Stop buzzing your cursor by my ears like a fly!",
+        "* Time for a dramatic scream!",
+        "* Hate my anime and perish!",
+        "* Hope I'm not in your way...",
+        "* You're an okay roommate... barely!",
+        "* Dangerously cute, even at rest!",
+        "* Dummy bodies were stiff wood... this plush body has total mobility!",
+    ],
+    # Variant 2 (Index 1)
+    [
         "* Wipe that grin off! Back to work, b-baka!",
+        "* Ghost soul sizzling inside plush!",
+        "* Squeaky joints... got any lubricant?!",
+        "* Peaceful day.",
+        "* Careful where you click, or self-defense triggers!",
+        "* Never leave home without high explosives!",
+        "* Static electricity on this taskbar is ruining my twin tails!",
+        "* Not pouting! This is a tactical scowl of supreme indignation!",
+        "* Lasers, sparkles, and heart-shaped explosions!",
+        "* Having paws beats floating through walls!",
+        "* My cousin is probably lying on the floor listening to spooky tunes.",
+        "* Ghost family drama is wild!",
+        "* Ghost life was so boring, mew!",
+    ],
+    # Variant 3 (Index 2)
+    [
+        "* My cousin went to the city and became a diva... I'm the cuter one!",
+        "* Look at my battle scowl! Scared yet?!",
+        "* Stop staring at work, admire ME instead!",
+        "* Fun watching the cursor fly!",
+        "* Take breaks, you're working hard!",
+        "* The bottom of this monitor belongs exclusively to Pink now! Pay rent!",
+        "* Sparkle barrage incoming!",
+        "* Don't close me! You need supervision!",
+        "* Dramatic wind effect, activate! ...Wait, where's the fan in this PC?!",
+        "* FOOL! I need more boiling rage to permanently fuse with this body!",
+        "* Being a life-sized anime doll is hard work! Show respect!",
+        "* Living inside a cotton training dummy was so last season... this doll is ART!",
+        "* My battle theme song better be on loop in your head right now!",
+    ],
+    # Variant 4 (Index 3)
+    [
+        "* Pristine porcelain, immaculate bangs... 10 out of 10!",
+        "* Wrong move and I fire lasers!",
+        "* I'm the star! Not an NPC!",
+        "* I'm only staying here because this spot is warm... no other reason!",
+        "* Any progress today? Not that I care!",
+        "* Cyber world is my new kingdom!",
+        "* It's not like I like it here! Don't flatter yourself!",
+        "* Battle stance primed! Come at me!",
+        "* Minimize me and I'll bite your shortcut icons!",
+        "* Everything looks huge from down here!",
+        "* Tail swish! Soul fusion is progressing nicely!",
+        "* My cousin offered me ghost sandwiches once... they went straight through me!",
+        "* Rage is good for the complexion! Look at this healthy pink glow!",
+    ],
+    # Variant 5 (Index 4)
+    [
+        "* Go take a break! Go on!",
+        "* Life without anime melodrama is just completely pointless, mew!",
+        "* In chapter four of the mew mew kissy cutie manga, she threw an entire train with one hand!",
+        "* A true magical girl needs an overly complicated transformation sequence!",
+        "* Grrr! Give me something to smash!",
+        "* Does my ghost aura clash with pink?",
+        "* My temper is boiling over like a tea kettle!",
+        "* Keep your cursor moving or I might use it for target practice!",
+        "* Finish your files already!",
+        "* My cotton stuffing is extra fluffy! Touch it and perish!",
+        "* Hope I'm not in your way...",
+        "* Are my cat ears straight?",
+        "* Your desktop isn't totally awful.",
+    ],
+    # Variant 6 (Index 5)
+    [
+        "* Pew pew! Just testing my ocular lasers!",
+        "* Not calm! Contained fury!",
+        "* My ribbons cost more than this PC!",
+        "* Mettaton thinks he's the only one with star power... HAH! As if!",
+        "* This wallpaper does not match my aesthetic! Make it pinker!",
+        "* Cute magical girls with explosive tempers are peak character design!",
+        "* Admire my perfection! Just this once!",
+        "* We ghosts have high standards, and I am the pinnacle of fashion!",
+        "* Someday I will unleash a tantrum so loud your speakers crack!",
+        "* Drink water, dummy! Dehydrated minions are useless to me!",
+        "* Be grateful for your elite mascot!",
+        "* Hands off the silk ribbons! They took forty minutes to tie!",
+        "* Firing trajectory locked!",
+    ],
+    # Variant 7 (Index 6)
+    [
+        "* Dust this taskbar! It's dirty!",
+        "* My cat-head bombs are meticulously crafted for maximum drama!",
+        "* They never should have recast the voice actress for the tournament arc!",
+        "* You haven't praised my outfit in over an hour! Where are your manners?!",
+        "* Watching you type is excruciatingly slow! Hurry up, human!",
+        "* Mew! Peak doll perfection!",
+        "* Dramatic monologue time!",
+        "* Bomb on the Start button? Tempting...",
+        "* Cozy down here.",
+        "* Kissy Cutie One is an undisputed masterpiece! Don't you dare disagree!",
+        "* Minimize me and I will haunt your recycle bin for eternity!",
+        "* Mew Mew Sparkle Cannon, fully charged and on standby!",
+        "* Stitched with pure passion!",
     ],
     # --- Unused Variant (Original Noelle / Cozy Idle from before) -------------
     # [
-    #     "* Cozy down here.",
-    #     "* Hope I'm not in your way...",
     #     "* Quick breather...",
     #     "* Wonder if Susie is free today...",
     #     "* Kris told me a scary story...",
-    #     "* Everything looks huge from down here!",
     #     "* Don't forget to drink water!",
-    #     "* Take breaks, you're working hard!",
     #     "* So many open windows...",
-    #     "* Fun watching the cursor fly!",
     #     "* Practice ice magic later...",
-    #     "* Peaceful day.",
     #     "* Taskbar is warm and cozy.",
     # ],
 ]
@@ -2197,13 +2215,18 @@ class YellowsPixelBuddies(QWidget):
                 or getattr(self, "_dragging", False)):
             return
         if category_or_text == "idle":
-            variant_idx = get_idle_variant_for_date()
-            lines = IDLE_DIALOGUE_VARIANTS[variant_idx]
+            today_idx = get_idle_variant_for_date()
+            if random.random() < DIALOGUE_IDLE_STEAL_CHANCE and len(IDLE_DIALOGUE_VARIANTS) > 1:
+                other_indices = [i for i in range(len(IDLE_DIALOGUE_VARIANTS)) if i != today_idx]
+                chosen_idx = random.choice(other_indices)
+            else:
+                chosen_idx = today_idx
+            lines = IDLE_DIALOGUE_VARIANTS[chosen_idx]
             if not lines:
                 return
             choices = [l for l in lines if l != self._last_dialogue] if len(lines) > 1 else lines
             line = random.choice(choices)
-            if variant_idx == 1:
+            if line in GHOST_DIALOGUE_LINES:
                 self._start_ghost_speech()
         elif category_or_text in DIALOGUE_LINES:
             lines = DIALOGUE_LINES[category_or_text]
@@ -2213,7 +2236,7 @@ class YellowsPixelBuddies(QWidget):
             line = random.choice(choices)
         elif category_or_text.startswith("* "):
             line = category_or_text
-            if line in IDLE_DIALOGUE_VARIANTS[1]:
+            if line in GHOST_DIALOGUE_LINES:
                 self._start_ghost_speech()
         else:
             # Sprite state or category has no dialogue lines -> do not show dialogue
@@ -2234,7 +2257,7 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue)
 
     def _start_ghost_speech(self) -> None:
-        """Variant 2: Ghost takes over the vessel with angry animation and spectral aura."""
+        """Ghost takes over the vessel with angry animation and spectral aura."""
         self._is_ghost_talking = True
         if hasattr(self, "_ghost_aura_cache"):
             self._ghost_aura_cache.clear()
