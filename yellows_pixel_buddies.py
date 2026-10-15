@@ -312,23 +312,12 @@ ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_S
 # --- Startup Hiding & Summoning ----------------------------------------------
 EAR_PEEK_HEIGHT_PX = 34   # height (px) of ghost ears poking above the taskbar (lowered slightly)
 EAR_PEEK_OFFSET_X = 24.0  # distance (px) from right screen edge where ears peek
-SUMMON_OPENING_LINES: list[tuple[str, ...]] = [
-    (
-        "* Whoa!",
-        "* That surprised me.",
-    ),
-    (
-        "* EEEK!! How did you find my secret spot?!",
-        "* Don't look at me like that! I was just... doing desktop recon!",
-    ),
-    (
-        "* Y-YOU!!",
-        "* A ghost doll needs her privacy, you know!!",
-    ),
-    (
-        "* Aaahh!!",
-        "* You almost blew my cover! I am a fierce warrior, not a peep show!",
-    ),
+SUMMON_OPENING_LINES: list[str] = [
+    "* Whoa!!",
+    "* MEW!?",
+    "* EEEK!?",
+    "* Wah!!",
+    "* H-HEY!",
 ]
 
 # The original states always work (placeholder fallback). Every other ("new") state is only
@@ -498,7 +487,7 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
     ],
     # Variant 2 (Index 1)
     [
-        "* Wipe that grin off! Back to work, b-baka!",
+        "* Wipe that grin off! Back to work!",
         "* Ghost soul sizzling inside plush!",
         "* Squeaky joints... got any lubricant?!",
         "* Peaceful day.",
@@ -673,7 +662,8 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     "angry": [
         "* STOP POKING ME!!",
         "* WANT A CAT BOMB?!",
-        "* UNACCEPTABLE!! CUT IT OUT!!",
+        "* UNACCEPTABLE!!",
+        "* CUT IT OUT!!",
     ],
     # Picked up / dragged
     "drag": [
@@ -686,10 +676,6 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* Flawless landing!",
         "* 10 out of 10!",
         "* Perfect balance!",
-    ],
-    # Peace sign
-    "peace_sign": [
-        "* (＾▽＾)v",
     ],
     # Tongue
     "tongue": [
@@ -1185,6 +1171,7 @@ class Phase(Enum):
     SUMMON_DIALOGUE = auto()  # dialogue playing after ears clicked ("...", "..?")
     SUMMON_INTRO = auto()     # ghost rises FAST, looks R&L, flies off right, shocked pops in
     HIDE_OUTRO = auto()       # runs right, ghost enters, slowly sinks into hide state
+    EXIT_OUTRO = auto()       # runs to furthest screen edge and quits when offscreen
 
 
 class VfxOverlay(QWidget):
@@ -1283,16 +1270,23 @@ class DialogueOverlay(QWidget):
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self.dismiss)
+        self._skippable = True
 
     def is_active(self) -> bool:
         """True if a dialogue line is actively being displayed or typed."""
         return self._active
 
-    def say(self, text: str, pet_x: float, pet_y: float, queue: list[str] | None = None) -> None:
+    def is_skippable(self) -> bool:
+        """True if the dialogue bubble can be fast-forwarded or dismissed by clicks."""
+        return self._skippable
+
+    def say(self, text: str, pet_x: float, pet_y: float, queue: list[str] | None = None, skippable: bool = True) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
         queue: optional list of additional messages to display sequentially after this one.
+        skippable: whether clicking can advance or dismiss this dialogue.
         """
+        self._skippable = skippable
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -1485,7 +1479,7 @@ class DialogueOverlay(QWidget):
 
     def advance_or_dismiss(self) -> None:
         """Fast-forward typewriter if typing, or dismiss/advance queue if already complete."""
-        if not self._active:
+        if not self._active or not self._skippable:
             return
         if self._visible_chars < self._total_chars:
             self._visible_chars = self._total_chars
@@ -1499,6 +1493,9 @@ class DialogueOverlay(QWidget):
 
     def mousePressEvent(self, event) -> None:
         """Left-click fast-forwards typewriter or dismisses dialogue."""
+        if not self._skippable:
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and DIALOGUE_CLICK_TO_DISMISS:
             self.advance_or_dismiss()
             event.accept()
@@ -2111,6 +2108,8 @@ class YellowsPixelBuddies(QWidget):
         self._dragging = False
         self._menu_open = False
         self._click_times: list[float] = []        # recent plain left-clicks (for "angry")
+        self._in_angry_spam: bool = False          # active angry click-spam sequence
+        self._last_angry_click_time: float = 0.0   # timestamp of the most recent click during anger spam
         self._walk_before_menu: str | None = None  # walk / run animation swapped for idle while the menu is open
 
         # --- jump to the cursor ------------------------------------------------
@@ -2259,11 +2258,13 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.update_position(self._x, self._y)
 
-    def _say(self, category_or_text: str, force: bool = False, extra_queue: list[str] | None = None) -> None:
+    def _say(self, category_or_text: str, force: bool = False, extra_queue: list[str] | None = None, skippable: bool = True) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
-        if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG)
+        if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
+                                              Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+                                              Phase.SUMMON_INTRO, Phase.EXIT_OUTRO)
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
@@ -2306,8 +2307,11 @@ class YellowsPixelBuddies(QWidget):
         if category_or_text in ("tongue", "* :P") or line == "* :P":
             self._last_tongue_dialogue_time = now
 
+        if category_or_text == "angry" or getattr(self, "_in_angry_spam", False):
+            skippable = False
+
         self._last_dialogue = line
-        self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue)
+        self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue, skippable=skippable)
 
     def _start_ghost_speech(self) -> None:
         """Ghost takes over the vessel with angry animation and spectral aura."""
@@ -2324,9 +2328,12 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_is_ghost_talking", False):
             self._is_ghost_talking = False
-        if self._phase is Phase.PAUSE:
-            if self.state in ("angry", "shocked") or not self._loop:
+            if self._phase is Phase.PAUSE and self.state == "angry":
                 self._play("idle")
+        if self._phase is Phase.PAUSE:
+            if not getattr(self, "_in_angry_spam", False) and self.state != "angry":
+                if self.state in ("shocked",) or not self._loop:
+                    self._play("idle")
             if self._pause_elapsed or not self._brain_timer.isActive():
                 self._pause_elapsed = False
                 self._brain_timer.start(AFTER_SPECIAL_REST_MS)
@@ -2336,7 +2343,9 @@ class YellowsPixelBuddies(QWidget):
         """React to newly started music playback via Windows GSMTC."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+                           Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
+                           Phase.EXIT_OUTRO):
             return
         clean_title = title.strip()
         clean_artist = artist.strip()
@@ -2573,6 +2582,21 @@ class YellowsPixelBuddies(QWidget):
             return False
         return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
 
+    def _keep_angry(self) -> None:
+        """Keep Pink continuously mad while clicks keep coming in the angry spam."""
+        self._in_angry_spam = True
+        self._last_angry_click_time = time.perf_counter()
+        if self._phase is not Phase.PAUSE:
+            self._phase = Phase.PAUSE
+        if self.state != "angry":
+            if self._can_play("angry"):
+                self._play("angry")
+        angry_cycles = max(1, SPECIAL_REPEAT_COUNT.get("angry", 6) - 1)
+        self._repeat_count = max(self._repeat_count, angry_cycles)
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        self._pause_elapsed = False
+        self.update()
+
     def _finish_one_shot(self) -> None:
         """A special animation ended: resume previous activity or return to idle."""
         # If interrupted by window switch, resume previous state
@@ -2587,6 +2611,16 @@ class YellowsPixelBuddies(QWidget):
         if self._phase is Phase.HANG:
             self._play(HANGING_STATE, mirrored=self._hang_mirrored())
             return
+
+        if self.state == "angry":
+            now = time.perf_counter()
+            # If clicks are still coming within the spam window, keep her angry!
+            if self._in_angry_spam and (now - self._last_angry_click_time <= CLICK_ANGRY_WINDOW_S):
+                self._keep_angry()
+                self._set_frame(0)
+                return
+            self._in_angry_spam = False
+            self._click_times.clear()
 
         self._play("idle")
         if self._phase is Phase.PAUSE and self._pause_elapsed:
@@ -2767,6 +2801,12 @@ class YellowsPixelBuddies(QWidget):
             self._sync_window_position()
             return
 
+        if self._phase is Phase.EXIT_OUTRO:
+            self._tick_exit_outro(now, dt, bounds)
+            if self.isVisible():
+                self._sync_window_position()
+            return
+
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
             self._tick_hang(cursor, now, dt, bounds)
             self._sync_window_position()
@@ -2923,29 +2963,34 @@ class YellowsPixelBuddies(QWidget):
                 self._finish_summon_sequence()
 
     def _finish_summon_sequence(self) -> None:
-        """Pink has arrived on the taskbar! Deliver opening dialogue and begin normal pet life."""
+        """Pink has arrived on the taskbar! Deliver a quick shocked line and begin normal pet life."""
         self._phase = Phase.PAUSE
         self._play("shocked", loop=False)
 
-        opening_entry = random.choice(SUMMON_OPENING_LINES)
-        first_line = opening_entry[0]
-        extra_lines = list(opening_entry[1:]) if len(opening_entry) > 1 else None
+        line = random.choice(SUMMON_OPENING_LINES)
+        self._say(line, force=True)
 
-        self._say(first_line, force=True, extra_queue=extra_lines)
-
-        self._brain_timer.start(random_ms(PAUSE_MIN_S + 0.5, PAUSE_MAX_S + 1.2))
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
         self._pause_elapsed = False
 
     # ---------------------------------------------------- hide sequence (outro)
     def _start_hide_sequence(self) -> None:
         """User chose 'Hide': Pink runs to the right offscreen, then the ghost slowly takes over the hide spot."""
-        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.dismiss(clear_queue=True)
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._reset_jump_state()
+        self._interrupted_state = None
+        self._in_angry_spam = False
+        self._click_times.clear()
+        self._dragging = False
+        self._press_global = None
+        self._stop_overlay()
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay.close()
 
         bounds = self._bounds()
         ground_y = bounds[3]
@@ -3013,6 +3058,69 @@ class YellowsPixelBuddies(QWidget):
         self._sync_window_position()
         self.update()
         log.info("Hide sequence completed: Pink settled into HIDE_PEEK")
+
+    # ---------------------------------------------------- exit sequence (outro)
+    def _start_exit_outro(self) -> None:
+        """User chose 'Exit': Pink runs to the furthest screen edge offscreen, then the application quits."""
+        if self._phase is Phase.EXIT_OUTRO:
+            return
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
+            self._do_real_quit()
+            return
+
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        self._brain_timer.stop()
+        self._pause_elapsed = False
+        self._reset_jump_state()
+        self._interrupted_state = None
+        self._in_angry_spam = False
+        self._click_times.clear()
+        self._dragging = False
+        self._press_global = None
+        self._stop_overlay()
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay.close()
+
+        bounds = self._bounds()
+        ground_y = bounds[3]
+        self._y = ground_y
+        self._vy = 0.0
+
+        area = QApplication.primaryScreen().availableGeometry()
+        screen_left = float(area.x())
+        screen_right = float(area.x() + area.width())
+        dist_left = self._x - screen_left
+        dist_right = screen_right - (self._x + self.width())
+
+        self._phase = Phase.EXIT_OUTRO
+        if dist_right >= dist_left:
+            self._facing = "right"
+            self._vx = 520.0
+            self._play("run_right", loop=True)
+            log.info("Exit sequence started: Pink running right towards furthest edge...")
+        else:
+            self._facing = "left"
+            self._vx = -520.0
+            self._play("run_left", loop=True)
+            log.info("Exit sequence started: Pink running left towards furthest edge...")
+
+    def _tick_exit_outro(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
+        _min_x, _max_x, _min_y, ground_y = bounds
+        self._y = ground_y
+        area = QApplication.primaryScreen().availableGeometry()
+        screen_left = float(area.x())
+        screen_right = float(area.x() + area.width())
+
+        self._x += self._vx * dt
+        if self._vx > 0.0:
+            if self._x >= screen_right + 10.0:
+                log.info("Exit run finished (offscreen right): exiting application.")
+                self._do_real_quit()
+        else:
+            if self._x <= screen_left - self.width() - 10.0:
+                log.info("Exit run finished (offscreen left): exiting application.")
+                self._do_real_quit()
 
     # ------------------------------------------------- jump: cursor + geometry
     def _track_cursor(self, cursor: QPoint, now: float, real_dt: float) -> None:
@@ -3451,6 +3559,8 @@ class YellowsPixelBuddies(QWidget):
         self._bombs_spawned_for_current_throw = False
         self._post_throw_laugh = False
         self._dialogue_clicked = False
+        self._in_angry_spam = False
+        self._click_times.clear()
 
     # ------------------------------------------------------- jump: debug aid
     def _schedule_debug_jump(self) -> None:
@@ -3469,23 +3579,27 @@ class YellowsPixelBuddies(QWidget):
 
     # ------------------------------------------------------------------- mouse
     def mousePressEvent(self, event) -> None:
+        if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             if self._phase == Phase.HIDE_PEEK:
                 self._on_peek_ears_clicked()
                 event.accept()
                 return
-            if self._phase in (Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
+            if self._phase in (Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
                 if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
                     self._dialogue_overlay.advance_or_dismiss()
                 event.accept()
                 return
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
-                self._dialogue_overlay.advance_or_dismiss()
-                self._dialogue_clicked = True
-                self._press_global = event.globalPos()
-                self._grab_offset = event.globalPos() - self.pos()
-                event.accept()
-                return
+                if self._dialogue_overlay.is_skippable():
+                    self._dialogue_overlay.advance_or_dismiss()
+                    self._dialogue_clicked = True
+                    self._press_global = event.globalPos()
+                    self._grab_offset = event.globalPos() - self.pos()
+                    event.accept()
+                    return
             self._dialogue_clicked = False
             self._press_global = event.globalPos()
             self._grab_offset = event.globalPos() - self.pos()
@@ -3494,6 +3608,8 @@ class YellowsPixelBuddies(QWidget):
             super().mousePressEvent(event)   # right button -> contextMenuEvent follows
 
     def mouseMoveEvent(self, event) -> None:
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
         if self._press_global is None or not (event.buttons() & Qt.LeftButton):
             return
         if not self._dragging:
@@ -3514,13 +3630,11 @@ class YellowsPixelBuddies(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or self._press_global is None:
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             self._press_global = None
             return
         self._press_global = None
-        if getattr(self, "_dialogue_clicked", False):
-            self._dialogue_clicked = False
-            return
+        self._dialogue_clicked = False
         if self._dragging:
             self._end_drag()
         elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
@@ -3528,22 +3642,23 @@ class YellowsPixelBuddies(QWidget):
             # turn the pet into a "shocked" pause and so overwrite the victory laugh / landing reaction.
             return
         else:
-            if self.state == "angry":
-                # Already mad: keep her mad while clicks keep coming!
-                self._click_times.clear()
-                angry_cycles = max(0, SPECIAL_REPEAT_COUNT.get("angry", 6) - 1)
-                self._repeat_count = max(self._repeat_count, angry_cycles)
-                self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
-                self._pause_elapsed = False
-                return
+            now = time.perf_counter()
+            if self._in_angry_spam or self.state == "angry":
+                # Currently mad or in active spam: keep her continuously mad while clicks keep coming!
+                if (now - self._last_angry_click_time <= CLICK_ANGRY_WINDOW_S) or self.state == "angry":
+                    self._keep_angry()
+                    return
+                else:
+                    self._in_angry_spam = False
 
             # Direct mouse click overrides any background resume state
             self._interrupted_state = None
-            now = time.perf_counter()
             self._click_times = [t for t in self._click_times if now - t <= CLICK_ANGRY_WINDOW_S]
             self._click_times.append(now)
 
             if len(self._click_times) >= CLICK_ANGRY_COUNT and self._can_play("angry"):
+                self._in_angry_spam = True
+                self._last_angry_click_time = now
                 self._click_times.clear()
                 self._start_pause(roll_special=False, forced="angry")
             else:
@@ -3576,7 +3691,9 @@ class YellowsPixelBuddies(QWidget):
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
         self._post_throw_laugh = False
-        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
+        self._in_angry_spam = False
+        self._click_times.clear()
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
@@ -3611,7 +3728,7 @@ class YellowsPixelBuddies(QWidget):
     def _resume_walk_after_menu(self) -> None:
         """The menu is closed: bring the walk / run animation back - if she is still on that walk."""
         walk, self._walk_before_menu = self._walk_before_menu, None
-        if self._phase is Phase.HIDE_OUTRO:
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
         if walk is not None and self._phase is Phase.WALK and self.state == "idle":
             self._play(walk)
@@ -3620,7 +3737,10 @@ class YellowsPixelBuddies(QWidget):
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
         if (self._dragging or self._menu_open
-                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW)
+                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+                                   Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+                                   Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
+                                   Phase.EXIT_OUTRO)
                 or self._post_throw_laugh):
             return
 
@@ -3642,7 +3762,10 @@ class YellowsPixelBuddies(QWidget):
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
         """Evaluate the newly focused window after it has composited."""
         if (self._dragging or self._menu_open
-                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW)
+                or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+                                   Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+                                   Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
+                                   Phase.EXIT_OUTRO)
                 or self._post_throw_laugh):
             return
         dll = _user32()
@@ -3660,7 +3783,7 @@ class YellowsPixelBuddies(QWidget):
             return
 
         # Do not interrupt anger if clicks are currently spamming
-        if self.state == "angry" and self._repeat_count > 0:
+        if self._in_angry_spam or (self.state == "angry" and self._repeat_count > 0):
             return
 
         # Flashbang check: switched from dark to dominant white/light
@@ -3686,6 +3809,10 @@ class YellowsPixelBuddies(QWidget):
 
     def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+                           Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
+                           Phase.EXIT_OUTRO):
+            return
         if self._interrupted_state is None:
             rem_ms = max(500, self._brain_timer.remainingTime()) if self._brain_timer.isActive() else 2500
             self._interrupted_state = {
@@ -3770,7 +3897,7 @@ class YellowsPixelBuddies(QWidget):
             else:
                 self._bring_action.setText("Bring to Taskbar")
         if self._hide_tray_action is not None:
-            self._hide_tray_action.setVisible(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO))
+            self._hide_tray_action.setVisible(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -3841,7 +3968,7 @@ class YellowsPixelBuddies(QWidget):
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
             self._start_summon_intro()
             return
-        if self._phase in (Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
+        if self._phase in (Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
         self._reset_jump_state()
         min_x, max_x, _min_y, ground_y = self._bounds()
@@ -3854,6 +3981,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """Left-click or double-click tray icon to call Pink if she is hiding."""
+        if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
+            return
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             if self._phase == Phase.HIDE_PEEK:
                 self._on_peek_ears_clicked()
@@ -3861,7 +3990,16 @@ class YellowsPixelBuddies(QWidget):
                 self._start_summon_intro()
 
     def _quit(self) -> None:
-        """Stop everything and leave the application."""
+        """Stop everything and leave the application (or run offscreen first)."""
+        if self._phase is Phase.EXIT_OUTRO:
+            return
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
+            self._do_real_quit()
+            return
+        self._start_exit_outro()
+
+    def _do_real_quit(self) -> None:
+        """Stop everything and terminate the application."""
         if hasattr(self, "_tray_icon") and self._tray_icon is not None:
             self._tray_icon.hide()
         timers = [self._anim_timer, self._move_timer, self._brain_timer, self._overlay_timer]
@@ -3885,8 +4023,16 @@ class YellowsPixelBuddies(QWidget):
         QApplication.quit()
 
     def closeEvent(self, event) -> None:
+        if self._phase is Phase.EXIT_OUTRO:
+            event.accept()
+            self._do_real_quit()
+            return
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
+            self._do_real_quit()
+            event.accept()
+            return
+        event.ignore()
         self._quit()
-        event.accept()
 
     # ---------------------------------------------------------------- painting
     def paintEvent(self, event) -> None:
