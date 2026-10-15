@@ -310,7 +310,8 @@ ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_S
               + (BURNT_STATE, THROW_STATE, GHOST_STATE) + JUMP_STATES + EFFECT_STATES)
 
 # --- Startup Hiding & Summoning ----------------------------------------------
-EAR_PEEK_HEIGHT_PX = 44  # height (px) of ghost ears poking above the taskbar
+EAR_PEEK_HEIGHT_PX = 34   # height (px) of ghost ears poking above the taskbar (lowered slightly)
+EAR_PEEK_OFFSET_X = 24.0  # distance (px) from right screen edge where ears peek
 SUMMON_OPENING_LINES: list[tuple[str, ...]] = [
     (
         "* Whoa!",
@@ -1183,6 +1184,7 @@ class Phase(Enum):
     HIDE_PEEK = auto()        # hiding behind taskbar: only ears visible at bottom-right
     SUMMON_DIALOGUE = auto()  # dialogue playing after ears clicked ("...", "..?")
     SUMMON_INTRO = auto()     # ghost rises FAST, looks R&L, flies off right, shocked pops in
+    HIDE_OUTRO = auto()       # runs right, ghost enters, slowly sinks into hide state
 
 
 class VfxOverlay(QWidget):
@@ -2188,11 +2190,14 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_chance_action: QWidgetAction | None = None
         self._bomb_chance_widget: BombChanceWidget | None = None
 
-        # --- startup summon intro state ---------------------------------------
+        # --- startup summon intro & hide outro state -------------------------
         self._intro_subphase: str = ""
         self._intro_timer: float = 0.0
         self._intro_apex_y: float = 0.0
         self._intro_target_land_x: float = 0.0
+        self._hide_subphase: str = ""
+        self._hide_timer: float = 0.0
+        self._hide_tray_action: QAction | None = None
         self._dialogue_clicked: bool = False
 
         self._init_tray_icon()
@@ -2206,7 +2211,7 @@ class YellowsPixelBuddies(QWidget):
         self._sprite_key = GHOST_STATE
         self._frame_idx = 0
         self._loop = True
-        self._x = float(area.x() + area.width() - self.width() - 24)
+        self._x = float(area.x() + area.width() - self.width() - EAR_PEEK_OFFSET_X)
         self._y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
         self._set_frame(0)
         self._sync_window_position()
@@ -2443,6 +2448,10 @@ class YellowsPixelBuddies(QWidget):
         mask = frame.mask
         if self._phase == Phase.HIDE_PEEK:
             return mask.intersected(QRegion(0, 0, self.width(), EAR_PEEK_HEIGHT_PX))
+        if self._phase == Phase.HIDE_OUTRO and getattr(self, "_hide_subphase", "") in ("ghost_rise_from_below", "ghost_sink"):
+            area = QApplication.primaryScreen().availableGeometry()
+            vis_h = max(0, min(self.height(), round(area.y() + area.height() - self._y)))
+            return mask.intersected(QRegion(0, 0, self.width(), vis_h))
         if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:
             hand_x, hand_y = self._hand_offset()
             reach = DEBUG_CROSSHAIR_PX + 2
@@ -2740,7 +2749,7 @@ class YellowsPixelBuddies(QWidget):
 
         if self._phase is Phase.HIDE_PEEK:
             area = QApplication.primaryScreen().availableGeometry()
-            self._x = float(area.x() + area.width() - self.width() - 24)
+            self._x = float(area.x() + area.width() - self.width() - EAR_PEEK_OFFSET_X)
             self._y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
             self._sync_window_position()
             return
@@ -2750,6 +2759,11 @@ class YellowsPixelBuddies(QWidget):
 
         if self._phase is Phase.SUMMON_INTRO:
             self._tick_summon_intro(now, dt, bounds)
+            self._sync_window_position()
+            return
+
+        if self._phase is Phase.HIDE_OUTRO:
+            self._tick_hide_outro(now, dt, bounds)
             self._sync_window_position()
             return
 
@@ -2921,6 +2935,84 @@ class YellowsPixelBuddies(QWidget):
 
         self._brain_timer.start(random_ms(PAUSE_MIN_S + 0.5, PAUSE_MAX_S + 1.2))
         self._pause_elapsed = False
+
+    # ---------------------------------------------------- hide sequence (outro)
+    def _start_hide_sequence(self) -> None:
+        """User chose 'Hide': Pink runs to the right offscreen, then the ghost slowly takes over the hide spot."""
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
+            return
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        self._brain_timer.stop()
+        self._pause_elapsed = False
+        self._reset_jump_state()
+
+        bounds = self._bounds()
+        ground_y = bounds[3]
+        self._y = ground_y
+        self._vy = 0.0
+        self._vx = 520.0
+        self._facing = "right"
+        self._phase = Phase.HIDE_OUTRO
+        self._hide_subphase = "run_right"
+        self._hide_timer = 0.0
+        self._play("run_right", loop=True)
+        log.info("Hide sequence started: Pink running right...")
+
+    def _tick_hide_outro(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
+        _min_x, _max_x, _min_y, ground_y = bounds
+        area = QApplication.primaryScreen().availableGeometry()
+        screen_right = float(area.x() + area.width())
+        target_hide_x = float(area.x() + area.width() - self.width() - EAR_PEEK_OFFSET_X)
+        target_hide_y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
+
+        if self._hide_subphase == "run_right":
+            self._x += self._vx * dt
+            if self._x >= screen_right + 40.0:
+                # Pink is completely offscreen right -> brief delay before ghost emerges
+                self._hide_subphase = "offscreen_delay"
+                self._hide_timer = 0.0
+                self._vx = 0.0
+
+        elif self._hide_subphase == "offscreen_delay":
+            self._hide_timer += dt
+            if self._hide_timer >= 0.4:
+                # Ghost emerges from below at the hiding spot!
+                self._play(GHOST_STATE, loop=True, mirrored=False)
+                self._x = target_hide_x
+                self._y = float(area.y() + area.height())
+                self._vx = 0.0
+                self._vy = -20.0  # slowly rises up from below the taskbar
+                self._hide_subphase = "ghost_rise_from_below"
+                if CLICK_THROUGH_TRANSPARENT:
+                    self.setMask(QRegion(0, 0, self.width(), 0))
+                self._sync_window_position()
+                self.update()
+
+        elif self._hide_subphase == "ghost_rise_from_below":
+            self._y += self._vy * dt
+            if self._y <= target_hide_y:
+                self._y = target_hide_y
+                self._vy = 0.0
+                self._finish_hide_sequence()
+                return
+            frame = self._bank.frames[self._sprite_key][self._frame_idx]
+            vis_h = max(0, min(self.height(), round(area.y() + area.height() - self._y)))
+            if CLICK_THROUGH_TRANSPARENT:
+                self.setMask(frame.mask.intersected(QRegion(0, 0, self.width(), vis_h)))
+            self.update()
+
+    def _finish_hide_sequence(self) -> None:
+        """Ghost has reached the peeking ears position: lock into Phase.HIDE_PEEK."""
+        self._phase = Phase.HIDE_PEEK
+        self.state = GHOST_STATE
+        self._sprite_key = GHOST_STATE
+        self._frame_idx = 0
+        self._loop = True
+        self._set_frame(0)
+        self._sync_window_position()
+        self.update()
+        log.info("Hide sequence completed: Pink settled into HIDE_PEEK")
 
     # ------------------------------------------------- jump: cursor + geometry
     def _track_cursor(self, cursor: QPoint, now: float, real_dt: float) -> None:
@@ -3382,7 +3474,7 @@ class YellowsPixelBuddies(QWidget):
                 self._on_peek_ears_clicked()
                 event.accept()
                 return
-            if self._phase in (Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+            if self._phase in (Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
                 if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
                     self._dialogue_overlay.advance_or_dismiss()
                 event.accept()
@@ -3422,7 +3514,7 @@ class YellowsPixelBuddies(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or self._press_global is None:
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
             self._press_global = None
             return
         self._press_global = None
@@ -3484,7 +3576,7 @@ class YellowsPixelBuddies(QWidget):
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
         self._post_throw_laugh = False
-        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
             return
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
@@ -3494,6 +3586,8 @@ class YellowsPixelBuddies(QWidget):
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
             menu.addSeparator()
+        hide_action = menu.addAction("Hide 🐾")
+        menu.addSeparator()
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -3503,6 +3597,8 @@ class YellowsPixelBuddies(QWidget):
             self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
+        elif chosen is hide_action:
+            self._start_hide_sequence()
         elif jump_action is not None and chosen is jump_action:
             self._schedule_debug_jump()
 
@@ -3515,6 +3611,8 @@ class YellowsPixelBuddies(QWidget):
     def _resume_walk_after_menu(self) -> None:
         """The menu is closed: bring the walk / run animation back - if she is still on that walk."""
         walk, self._walk_before_menu = self._walk_before_menu, None
+        if self._phase is Phase.HIDE_OUTRO:
+            return
         if walk is not None and self._phase is Phase.WALK and self.state == "idle":
             self._play(walk)
 
@@ -3629,6 +3727,9 @@ class YellowsPixelBuddies(QWidget):
         self._bring_action = tray_menu.addAction("Call Pink 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
         self._bring_action.triggered.connect(self._reset_to_taskbar)
 
+        self._hide_tray_action = tray_menu.addAction("Hide Pink 🐾")
+        self._hide_tray_action.triggered.connect(self._start_hide_sequence)
+
         self._bomb_action = tray_menu.addAction("Bomb Attack Mode")
         self._bomb_action.setCheckable(True)
         self._bomb_action.setChecked(self._bomb_attack_enabled)
@@ -3668,6 +3769,8 @@ class YellowsPixelBuddies(QWidget):
                 self._bring_action.setText("Call Pink 🐾")
             else:
                 self._bring_action.setText("Bring to Taskbar")
+        if self._hide_tray_action is not None:
+            self._hide_tray_action.setVisible(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO))
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -3738,6 +3841,8 @@ class YellowsPixelBuddies(QWidget):
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
             self._start_summon_intro()
             return
+        if self._phase in (Phase.SUMMON_INTRO, Phase.HIDE_OUTRO):
+            return
         self._reset_jump_state()
         min_x, max_x, _min_y, ground_y = self._bounds()
         self._x = float((min_x + max_x) // 2)
@@ -3799,6 +3904,13 @@ class YellowsPixelBuddies(QWidget):
             elif self._phase == Phase.HIDE_PEEK:
                 painter.save()
                 painter.setClipRect(0, 0, self.width(), EAR_PEEK_HEIGHT_PX)
+                painter.drawPixmap(0, 0, self._pixmap)
+                painter.restore()
+            elif self._phase == Phase.HIDE_OUTRO and getattr(self, "_hide_subphase", "") in ("ghost_rise_from_below", "ghost_sink"):
+                area = QApplication.primaryScreen().availableGeometry()
+                vis_h = max(0, min(self.height(), round(area.y() + area.height() - self._y)))
+                painter.save()
+                painter.setClipRect(0, 0, self.width(), vis_h)
                 painter.drawPixmap(0, 0, self._pixmap)
                 painter.restore()
             else:
