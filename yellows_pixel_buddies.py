@@ -174,6 +174,8 @@ FRAME_INTERVAL_MS = {
     "airborne__mirrored": AIRBORNE_FRAME_INTERVAL_MS,
     "throw": THROW_BASE_INTERVAL_MS,
     "throw__mirrored": THROW_BASE_INTERVAL_MS,
+    "ghost": 120,
+    "ghost__mirrored": 120,
     # "idle": 250,
     # "laughing": 100,
 }
@@ -265,13 +267,15 @@ LASER_EXTEND_SPEED_PX_S = 6000.0  # speed at which laser beam extends outwards
 BOMB_PHYSICS_INTERVAL_MS = 16     # physics & overlay tick interval (~60 FPS)
 BOMB_LAUGH_EXTRA_S = 1.3          # seconds to laugh after the last bomb explodes (1+ sec)
 
+BOMB_BOTTOM_PADDING = 8.0          # transparent px under bomb in 20x20 art (2px * 4x scale)
+
 # Relative rope tip anchor (x_frac, y_frac) for each of the 5 bomb frames:
 BOMB_ROPE_TIPS = [
-    (14.5 / 20.0, 2.0 / 20.0),   # frame 1
-    (12.5 / 20.0, 2.0 / 20.0),   # frame 2
-    (12.5 / 20.0, 2.0 / 20.0),   # frame 3
-    (10.5 / 20.0, 3.0 / 20.0),   # frame 4
-    (7.5 / 20.0, 4.0 / 20.0),    # frame 5
+    (16.5 / 20.0, 2.5 / 20.0),   # frame 1: unburnt full rope tip
+    (14.5 / 20.0, 3.5 / 20.0),   # frame 2: first burn stage tip
+    (12.5 / 20.0, 2.5 / 20.0),   # frame 3: second burn stage tip
+    (11.0 / 20.0, 3.5 / 20.0),   # frame 4: third burn stage tip
+    (10.5 / 20.0, 4.5 / 20.0),   # frame 5: fuse base stub
 ]
 
 # --- Animation states --------------------------------------------------------
@@ -301,8 +305,30 @@ EFFECT_SIZES = {
 EFFECT_GROUND_RATIO = {
     "explosion": EXPLOSION_BASELINE_RATIO,
 }
+GHOST_STATE = "ghost"
 ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
-              + (BURNT_STATE, THROW_STATE) + JUMP_STATES + EFFECT_STATES)
+              + (BURNT_STATE, THROW_STATE, GHOST_STATE) + JUMP_STATES + EFFECT_STATES)
+
+# --- Startup Hiding & Summoning ----------------------------------------------
+EAR_PEEK_HEIGHT_PX = 44  # height (px) of ghost ears poking above the taskbar
+SUMMON_OPENING_LINES: list[tuple[str, ...]] = [
+    (
+        "* Whoa!",
+        "* That surprised me.",
+    ),
+    (
+        "* EEEK!! How did you find my secret spot?!",
+        "* Don't look at me like that! I was just... doing desktop recon!",
+    ),
+    (
+        "* Y-YOU!!",
+        "* A ghost doll needs her privacy, you know!!",
+    ),
+    (
+        "* Aaahh!!",
+        "* You almost blew my cover! I am a fierce warrior, not a peep show!",
+    ),
+]
 
 # The original states always work (placeholder fallback). Every other ("new") state is only
 # used when its sprites/<state>/ folder holds real PNGs - see SpriteBank.has_real_sprites().
@@ -640,7 +666,7 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     "shocked": [
         "* MEW!?",
         "* H-HEY!",
-        "* Watch it!!",
+        "* Whoa!!",
     ],
     # Pestered / rapid clicks
     "angry": [
@@ -1051,7 +1077,7 @@ class SpriteBank:
         # The jump art is authored facing ONE way, so keep a mirrored copy for the other way
         # (derived like MIRROR_WALK_RIGHT_FOR_LEFT does it). airborne always needs one; hanging
         # only when HANGING_ART_FACES says it is not front-facing.
-        for state in (AIRBORNE_STATE, THROW_STATE) + ((HANGING_STATE,) if HANGING_ART_FACES != "none" else ()):
+        for state in (AIRBORNE_STATE, THROW_STATE, GHOST_STATE) + ((HANGING_STATE,) if HANGING_ART_FACES != "none" else ()):
             if state in self._sources:
                 self._sources[mirrored_key(state)] = [img.mirrored(True, False)   # flip horizontally
                                                       for img in self._sources[state]]
@@ -1154,6 +1180,9 @@ class Phase(Enum):
     JUMP = auto()    # leaping at the cursor: the rise, and the fall after a miss
     HANG = auto()    # hanging from the cursor (no gravity, no walking)
     THROW = auto()   # bomb barrage floating mid-air (stops hanging from cursor)
+    HIDE_PEEK = auto()        # hiding behind taskbar: only ears visible at bottom-right
+    SUMMON_DIALOGUE = auto()  # dialogue playing after ears clicked ("...", "..?")
+    SUMMON_INTRO = auto()     # ghost rises FAST, looks R&L, flies off right, shocked pops in
 
 
 class VfxOverlay(QWidget):
@@ -1452,18 +1481,24 @@ class DialogueOverlay(QWidget):
         self.hide()
         self.dismissed.emit()
 
+    def advance_or_dismiss(self) -> None:
+        """Fast-forward typewriter if typing, or dismiss/advance queue if already complete."""
+        if not self._active:
+            return
+        if self._visible_chars < self._total_chars:
+            self._visible_chars = self._total_chars
+            self._char_delay_ticks = 0
+            self._type_timer.stop()
+            hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+            self._hold_timer.start(round(hold_s * 1000))
+            self.update()
+        else:
+            self.dismiss()
+
     def mousePressEvent(self, event) -> None:
         """Left-click fast-forwards typewriter or dismisses dialogue."""
         if event.button() == Qt.LeftButton and DIALOGUE_CLICK_TO_DISMISS:
-            if self._visible_chars < self._total_chars:
-                self._visible_chars = self._total_chars
-                self._char_delay_ticks = 0
-                self._type_timer.stop()
-                hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-                self._hold_timer.start(round(hold_s * 1000))
-                self.update()
-            else:
-                self.dismiss()
+            self.advance_or_dismiss()
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -1635,9 +1670,9 @@ class BombLaserOverlay(QWidget):
             b.x += b.vx * dt
             b.y += b.vy * dt
 
-            # Ground collision
-            if b.y + b.size >= self._ground_y:
-                b.y = self._ground_y - b.size
+            # Ground collision (accounting for transparent bottom padding)
+            if b.y + b.size - BOMB_BOTTOM_PADDING >= self._ground_y:
+                b.y = self._ground_y - b.size + BOMB_BOTTOM_PADDING
                 if not b.has_bounced:
                     b.has_bounced = True
                     b.is_ignited = True
@@ -2147,18 +2182,33 @@ class YellowsPixelBuddies(QWidget):
         # --- system tray icon (hidden icons menu on taskbar) ------------------
         self._tray_icon: QSystemTrayIcon | None = None
         self._startup_action: QAction | None = None
+        self._bring_action: QAction | None = None
         self._bomb_action: QAction | None = None
         self._bomb_force_action: QAction | None = None
         self._bomb_chance_action: QWidgetAction | None = None
         self._bomb_chance_widget: BombChanceWidget | None = None
+
+        # --- startup summon intro state ---------------------------------------
+        self._intro_subphase: str = ""
+        self._intro_timer: float = 0.0
+        self._intro_apex_y: float = 0.0
+        self._intro_target_land_x: float = 0.0
+        self._dialogue_clicked: bool = False
+
         self._init_tray_icon()
 
     # ------------------------------------------------------------------ start
     def start(self) -> None:
-        """Place the pet on the taskbar, show it and start all timers."""
-        min_x, max_x, _min_y, ground_y = self._bounds()
-        self._x = random.uniform(min_x, max_x)     # appear somewhere along the taskbar
-        self._y = ground_y
+        """Hide Pink at the bottom-right taskbar on startup; she emerges when clicked or called."""
+        area = QApplication.primaryScreen().availableGeometry()
+        self._phase = Phase.HIDE_PEEK
+        self.state = GHOST_STATE
+        self._sprite_key = GHOST_STATE
+        self._frame_idx = 0
+        self._loop = True
+        self._x = float(area.x() + area.width() - self.width() - 24)
+        self._y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
+        self._set_frame(0)
         self._sync_window_position()
         self.show()
 
@@ -2174,8 +2224,6 @@ class YellowsPixelBuddies(QWidget):
                     self._last_foreground_hwnd = fg
                     self._last_luminance = sample_screen_luminance()
             self._window_timer.start()
-
-        self._start_pause()                        # begin with a rest, then walk
 
     # --------------------------------------------------------------- geometry
     def _bounds(self) -> tuple[float, float, float, float]:
@@ -2266,18 +2314,24 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_dialogue_dismissed(self) -> None:
         """Handle cleanup when dialogue speech bubble closes."""
+        if self._phase is Phase.SUMMON_DIALOGUE:
+            self._start_summon_intro()
+            return
         if getattr(self, "_is_ghost_talking", False):
             self._is_ghost_talking = False
-            if self.state == "angry" and self._phase is Phase.PAUSE:
+        if self._phase is Phase.PAUSE:
+            if self.state in ("angry", "shocked") or not self._loop:
                 self._play("idle")
-                if self._pause_elapsed:
-                    self._pause_elapsed = False
-                    self._brain_timer.start(AFTER_SPECIAL_REST_MS)
-            self.update()
+            if self._pause_elapsed or not self._brain_timer.isActive():
+                self._pause_elapsed = False
+                self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+        self.update()
 
     def _on_song_started(self, title: str, artist: str) -> None:
         """React to newly started music playback via Windows GSMTC."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
             return
         clean_title = title.strip()
         clean_artist = artist.strip()
@@ -2387,6 +2441,8 @@ class YellowsPixelBuddies(QWidget):
         otherwise the mask would clip the crosshair whenever the hands are on a transparent pixel.
         """
         mask = frame.mask
+        if self._phase == Phase.HIDE_PEEK:
+            return mask.intersected(QRegion(0, 0, self.width(), EAR_PEEK_HEIGHT_PX))
         if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:
             hand_x, hand_y = self._hand_offset()
             reach = DEBUG_CROSSHAIR_PX + 2
@@ -2650,7 +2706,7 @@ class YellowsPixelBuddies(QWidget):
         if self._phase is Phase.WALK:
             self._start_pause()
         elif self._phase is Phase.PAUSE:
-            if getattr(self, "_is_ghost_talking", False) and hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
                 self._pause_elapsed = True
                 return
             if self._loop:                 # plain idle -> jump at the cursor (rarely), else walk right away
@@ -2681,6 +2737,21 @@ class YellowsPixelBuddies(QWidget):
 
         bounds = self._bounds()
         min_x, max_x, _min_y, ground_y = bounds
+
+        if self._phase is Phase.HIDE_PEEK:
+            area = QApplication.primaryScreen().availableGeometry()
+            self._x = float(area.x() + area.width() - self.width() - 24)
+            self._y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
+            self._sync_window_position()
+            return
+
+        if self._phase is Phase.SUMMON_DIALOGUE:
+            return
+
+        if self._phase is Phase.SUMMON_INTRO:
+            self._tick_summon_intro(now, dt, bounds)
+            self._sync_window_position()
+            return
 
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
             self._tick_hang(cursor, now, dt, bounds)
@@ -2741,6 +2812,115 @@ class YellowsPixelBuddies(QWidget):
         """The pet hit a screen edge: carry on ("left" / "right"), keeping walk / run mode."""
         next_state = f"{self.state.rsplit('_', 1)[0]}_{heading}"   # walk_left -> walk_right ...
         self._play(next_state)
+
+    # ---------------------------------------------------- startup summon intro
+    def _on_peek_ears_clicked(self) -> None:
+        """User clicked Pink's peeking ears: she notices and begins the summon dialogue!"""
+        if self._phase != Phase.HIDE_PEEK:
+            return
+        self._phase = Phase.SUMMON_DIALOGUE
+        if self._dialogue_enabled and hasattr(self, "_dialogue_overlay"):
+            self._say("* ...", force=True, extra_queue=["* ..?"])
+        else:
+            QTimer.singleShot(600, self._start_summon_intro)
+
+    def _start_summon_intro(self) -> None:
+        """Ghost goes up FAST, pauses looking right & left, flies off right, then shocked pops in."""
+        if self._phase == Phase.SUMMON_INTRO:
+            return
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        self._phase = Phase.SUMMON_INTRO
+        self._intro_subphase = "rise"
+        self._intro_timer = 0.0
+        self._play(GHOST_STATE, loop=True, mirrored=False)
+        frame = self._bank.frames[self._sprite_key][self._frame_idx]
+        if CLICK_THROUGH_TRANSPARENT:
+            self.setMask(self._mask_for(frame))
+        self.update()
+
+        area = QApplication.primaryScreen().availableGeometry()
+        ground_y = float(area.y() + area.height() - self.height() + FOOT_PADDING)
+        self._intro_apex_y = ground_y
+        self._vy = -340.0
+        self._vx = 0.0
+
+    def _tick_summon_intro(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
+        min_x, max_x, min_y, ground_y = bounds
+        area = QApplication.primaryScreen().availableGeometry()
+        screen_right = float(area.x() + area.width())
+
+        if self._intro_subphase == "rise":
+            self._y += self._vy * dt
+            if self._y <= self._intro_apex_y:
+                self._y = self._intro_apex_y
+                self._vy = 0.0
+                self._intro_subphase = "look_right"
+                self._intro_timer = 0.0
+                self._play(GHOST_STATE, loop=True, mirrored=True)
+
+        elif self._intro_subphase == "look_right":
+            self._intro_timer += dt
+            if self._intro_timer >= 0.85:
+                self._intro_subphase = "look_left"
+                self._intro_timer = 0.0
+                self._play(GHOST_STATE, loop=True, mirrored=False)
+
+        elif self._intro_subphase == "look_left":
+            self._intro_timer += dt
+            if self._intro_timer >= 0.85:
+                self._intro_subphase = "fly_off_right"
+                self._intro_timer = 0.0
+                self._play(GHOST_STATE, loop=True, mirrored=True)
+                self._vx = 700.0
+
+        elif self._intro_subphase == "fly_off_right":
+            self._x += self._vx * dt
+            if self._x >= screen_right + 40.0:
+                # Ghost is off-screen -> pause for 0.75s before Pink bursts in!
+                self._intro_subphase = "offscreen_delay"
+                self._intro_timer = 0.0
+                self._vx = 0.0
+                self._x = screen_right + 50.0
+
+        elif self._intro_subphase == "offscreen_delay":
+            self._intro_timer += dt
+            if self._intro_timer >= 0.75:
+                # 0.75s delay finished -> shocked doll pops in from the right off screen!
+                self._intro_subphase = "pop_in_shocked"
+                self._play("shocked", loop=True)
+                self._y = ground_y
+                self._x = screen_right + 10.0
+                self._intro_target_land_x = screen_right - self.width() - 80.0
+                self._vx = -520.0
+
+        elif self._intro_subphase == "pop_in_shocked":
+            self._x += self._vx * dt
+            if self._x <= self._intro_target_land_x:
+                self._x = self._intro_target_land_x
+                self._vx = 0.0
+                self._intro_subphase = "landed_shocked"
+                self._intro_timer = 0.0
+
+        elif self._intro_subphase == "landed_shocked":
+            self._intro_timer += dt
+            if self._intro_timer >= 0.6:
+                self._finish_summon_sequence()
+
+    def _finish_summon_sequence(self) -> None:
+        """Pink has arrived on the taskbar! Deliver opening dialogue and begin normal pet life."""
+        self._phase = Phase.PAUSE
+        self._play("shocked", loop=False)
+
+        opening_entry = random.choice(SUMMON_OPENING_LINES)
+        first_line = opening_entry[0]
+        extra_lines = list(opening_entry[1:]) if len(opening_entry) > 1 else None
+
+        self._say(first_line, force=True, extra_queue=extra_lines)
+
+        self._brain_timer.start(random_ms(PAUSE_MIN_S + 0.5, PAUSE_MAX_S + 1.2))
+        self._pause_elapsed = False
 
     # ------------------------------------------------- jump: cursor + geometry
     def _track_cursor(self, cursor: QPoint, now: float, real_dt: float) -> None:
@@ -3178,6 +3358,7 @@ class YellowsPixelBuddies(QWidget):
         self._throw_rise_px = 0.0
         self._bombs_spawned_for_current_throw = False
         self._post_throw_laugh = False
+        self._dialogue_clicked = False
 
     # ------------------------------------------------------- jump: debug aid
     def _schedule_debug_jump(self) -> None:
@@ -3197,6 +3378,23 @@ class YellowsPixelBuddies(QWidget):
     # ------------------------------------------------------------------- mouse
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
+            if self._phase == Phase.HIDE_PEEK:
+                self._on_peek_ears_clicked()
+                event.accept()
+                return
+            if self._phase in (Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+                if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                    self._dialogue_overlay.advance_or_dismiss()
+                event.accept()
+                return
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                self._dialogue_overlay.advance_or_dismiss()
+                self._dialogue_clicked = True
+                self._press_global = event.globalPos()
+                self._grab_offset = event.globalPos() - self.pos()
+                event.accept()
+                return
+            self._dialogue_clicked = False
             self._press_global = event.globalPos()
             self._grab_offset = event.globalPos() - self.pos()
             event.accept()
@@ -3211,6 +3409,7 @@ class YellowsPixelBuddies(QWidget):
             moved = (event.globalPos() - self._press_global).manhattanLength()
             if moved < QApplication.startDragDistance():
                 return
+            self._dialogue_clicked = False
             self._begin_drag()
 
         # Follow the cursor, clamped to the work area so the pet can't leave the screen.
@@ -3223,7 +3422,13 @@ class YellowsPixelBuddies(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or self._press_global is None:
             return
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+            self._press_global = None
+            return
         self._press_global = None
+        if getattr(self, "_dialogue_clicked", False):
+            self._dialogue_clicked = False
+            return
         if self._dragging:
             self._end_drag()
         elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
@@ -3255,6 +3460,7 @@ class YellowsPixelBuddies(QWidget):
     def _begin_drag(self) -> None:
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""
         self._dragging = True
+        self._dialogue_clicked = False
         self._phase = Phase.DRAG
         self._interrupted_state = None            # drag overrides any pending resume state
         self._brain_timer.stop()
@@ -3278,6 +3484,8 @@ class YellowsPixelBuddies(QWidget):
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
         self._post_throw_laugh = False
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+            return
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
@@ -3418,8 +3626,8 @@ class YellowsPixelBuddies(QWidget):
 
         tray_menu.addSeparator()
 
-        reset_action = tray_menu.addAction("Bring to Taskbar")
-        reset_action.triggered.connect(self._reset_to_taskbar)
+        self._bring_action = tray_menu.addAction("Call Pink 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
+        self._bring_action.triggered.connect(self._reset_to_taskbar)
 
         self._bomb_action = tray_menu.addAction("Bomb Attack Mode")
         self._bomb_action.setCheckable(True)
@@ -3450,10 +3658,16 @@ class YellowsPixelBuddies(QWidget):
         tray_menu.aboutToShow.connect(self._sync_startup_action_state)
 
         self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.activated.connect(self._on_tray_activated)
         self._tray_icon.show()
 
     def _sync_startup_action_state(self) -> None:
         """Sync checkmark and controls with actual state right before displaying the menu."""
+        if self._bring_action is not None:
+            if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
+                self._bring_action.setText("Call Pink 🐾")
+            else:
+                self._bring_action.setText("Bring to Taskbar")
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -3520,7 +3734,10 @@ class YellowsPixelBuddies(QWidget):
             self._startup_action.blockSignals(False)
 
     def _reset_to_taskbar(self) -> None:
-        """Emergency reset: place the pet safely back on the primary taskbar."""
+        """Emergency reset or manual summon: place the pet safely back on the primary taskbar."""
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
+            self._start_summon_intro()
+            return
         self._reset_jump_state()
         min_x, max_x, _min_y, ground_y = self._bounds()
         self._x = float((min_x + max_x) // 2)
@@ -3529,6 +3746,14 @@ class YellowsPixelBuddies(QWidget):
         self.show()
         self.raise_()
         self._start_pause(roll_special=False)
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        """Left-click or double-click tray icon to call Pink if she is hiding."""
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            if self._phase == Phase.HIDE_PEEK:
+                self._on_peek_ears_clicked()
+            elif self._phase == Phase.SUMMON_DIALOGUE:
+                self._start_summon_intro()
 
     def _quit(self) -> None:
         """Stop everything and leave the application."""
@@ -3571,6 +3796,11 @@ class YellowsPixelBuddies(QWidget):
         if self._pixmap is not None:
             if getattr(self, "_is_ghost_talking", False):
                 self._paint_ghost_talking(painter)
+            elif self._phase == Phase.HIDE_PEEK:
+                painter.save()
+                painter.setClipRect(0, 0, self.width(), EAR_PEEK_HEIGHT_PX)
+                painter.drawPixmap(0, 0, self._pixmap)
+                painter.restore()
             else:
                 painter.drawPixmap(0, 0, self._pixmap)   # pixmap carries its own device ratio
         if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:

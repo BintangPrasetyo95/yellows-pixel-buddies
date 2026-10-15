@@ -19,6 +19,9 @@
   - **Multi-click (Anger)**: Clicking 3 times within 2 seconds makes the pet angry (`angry` reaction). Continuing to click or spam her keeps her in the angry state; once clicking stops, she finishes her angry animation loop and calms down to `idle`.
   - **Left-click + drag**: Pick up and carry the pet around your screen (pet loops `shocked` while held). Release to watch gravity pull it back to the taskbar.
   - **Right-click**: Opens a context menu with **Exit**.
+- **Startup Hiding & Cinematic Summoning**:
+  - Whenever the app starts, Pink hides behind the taskbar with only her ghost ears peeking out at the bottom-right (full opacity, fully click-through around the ears).
+  - Click her peeking ears (or click her system tray icon) to summon her: she reacts with `"* ..."` followed by `"* ..?"`, shoots upward at high speed as a floating ghost, pauses to look right and left, zooms off-screen to the right, and then dramatically pops onto the taskbar in her physical doll body (`shocked`) with an in-character opening dialogue!
 - **Interactive Dialogue System**:
   - Authentic DELTARUNE Cyber World speech bubbles rendered with crisp 9-slice scaling.
   - Powered by the iconic **Determination** pixel font with classic typewriter text animations and punctuation micro-pauses.
