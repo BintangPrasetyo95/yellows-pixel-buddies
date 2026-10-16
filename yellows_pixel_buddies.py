@@ -83,8 +83,11 @@ from dataclasses import dataclass
 import datetime
 from enum import Enum, auto
 from functools import lru_cache
+import base64
+import json
 import logging
 import math
+import os
 from pathlib import Path
 import random
 import re
@@ -94,13 +97,16 @@ import sys
 import time
 import winreg
 
-from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QThread, Qt, QTimer, pyqtSignal
+import requests
+from PyQt5.QtCore import (
+    QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QThread, Qt, QTimer, pyqtSignal
+)
 from PyQt5.QtGui import (
     QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
-    QPainter, QPen, QPixmap, QRegion, QTransform
+    QPainter, QPalette, QPen, QPixmap, QRegion, QTransform
 )
 from PyQt5.QtWidgets import (
-    QAction, QApplication, QHBoxLayout, QLabel, QMenu, QPushButton,
+    QAction, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QPushButton,
     QSlider, QStyle, QStyleOptionSlider, QSystemTrayIcon, QVBoxLayout,
     QWidget, QWidgetAction
 )
@@ -445,6 +451,21 @@ SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milli
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
+
+# --- Gemini AI & Memory Configuration ----------------------------------------
+GEMINI_MODEL = "gemini-3.1-flash-lite"
+GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+GEMINI_TIMEOUT_S = 20
+PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion living on the Windows taskbar.
+You have the sassy, tsundere magical ghost doll personality inspired by Mad Mew Mew from Deltarune / Undertale.
+- Persona & Tone: Proud, dramatic, tsundere, slightly chaotic, playful.
+- Speech Habits: Occasionally use "mew!" or "Hmph!". Refer to the user as "minion", "human", or "darling".
+- Secretly Helpful: Even while teasing, you give genuinely smart, observant, and helpful answers when asked.
+- Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or point MUST begin with "* ".
+- Strict Length Limit: Keep your reply CONCISE (1 to 3 short punchy sentences, under 45 words total). Long walls of text cannot fit on screen!
+- Animation Tag: At the very end of your message, include exactly one bracketed emotion tag matching your mood:
+  [anim: peace_sign], [anim: laughing], [anim: overjoyed], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
+"""
 
 # --- Ghost Takeover Lines ----------------------------------------------------
 # Speaking any of these lines triggers the ghost takeover visual effect
@@ -2036,6 +2057,583 @@ class DialogueOverlay(QWidget):
         painter.end()
 
 
+class ChatLineEdit(QLineEdit):
+    """A QLineEdit that emits escapePressed when the Esc key is hit."""
+
+    escapePressed = pyqtSignal()
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.escapePressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class ChatInputOverlay(QWidget):
+    """A frameless, translucent text input bar styled after Deltarune dialogue boxes."""
+
+    submitted = pyqtSignal(str, bool)
+    cancelled = pyqtSignal()
+
+    def __init__(self, font_family: str, box_png_path: Path, parent: QWidget | None = None) -> None:
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        self._font_family = font_family
+        self._box_src: QImage | None = None
+        if box_png_path.exists():
+            img = QImage(str(box_png_path))
+            if not img.isNull():
+                self._box_src = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+
+        self._scale = DIALOGUE_BOX_SCALE
+        self._cached_bg: QPixmap | None = None
+        self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
+
+        self._init_ui()
+
+    def _create_soul_heart_pixmap(self) -> QPixmap:
+        """Create a crisp pixel-art Deltarune red soul heart pixmap."""
+        grid = [
+            " 11   11 ",
+            "1111 1111",
+            "111111111",
+            "111111111",
+            " 1111111 ",
+            "  11111  ",
+            "   111   ",
+            "    1    ",
+        ]
+        h = len(grid)
+        w = len(grid[0])
+        scale = max(1, round(self._scale))
+        img = QImage(w * scale, h * scale, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        red = QColor(255, 0, 64, 255).rgba()
+        for y, row in enumerate(grid):
+            for x, c in enumerate(row):
+                if c == '1':
+                    for sy in range(scale):
+                        for sx in range(scale):
+                            img.setPixel(x * scale + sx, y * scale + sy, red)
+        return QPixmap.fromImage(img)
+
+    def _init_ui(self) -> None:
+        font = QFont(self._font_family)
+        font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
+        font.setStyleStrategy(QFont.NoAntialias)
+
+        layout = QHBoxLayout(self)
+        pad_h = round(16 * self._scale)
+        pad_v = round(7 * self._scale)
+        layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
+        layout.setSpacing(6)
+
+        # Soul heart indicator
+        self._heart_label = QLabel(self)
+        if self._soul_heart_pix:
+            self._heart_label.setPixmap(self._soul_heart_pix)
+            self._heart_label.setFixedSize(self._soul_heart_pix.size())
+        self._heart_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._heart_label)
+
+        # Asterisk
+        self._star_label = QLabel("*", self)
+        self._star_label.setFont(font)
+        self._star_label.setStyleSheet("color: #FFFFFF;")
+        layout.addWidget(self._star_label)
+
+        # Input text field
+        self._line_edit = ChatLineEdit(self)
+        self._line_edit.setFont(font)
+        self._line_edit.setPlaceholderText("Talk to Pink... (Enter to send)")
+        pal = self._line_edit.palette()
+        pal.setColor(QPalette.PlaceholderText, QColor(140, 140, 140))
+        self._line_edit.setPalette(pal)
+        self._line_edit.setStyleSheet(
+            "QLineEdit {"
+            "  background: transparent;"
+            "  border: none;"
+            "  color: #FFFFFF;"
+            "  selection-background-color: #FFFF00;"
+            "  selection-color: #000000;"
+            "}"
+        )
+        self._line_edit.returnPressed.connect(self._on_submit)
+        self._line_edit.escapePressed.connect(self.cancel)
+        layout.addWidget(self._line_edit, stretch=1)
+
+        # Screen vision toggle button
+        self._vision_btn = QPushButton("👁️", self)
+        self._vision_btn.setFont(font)
+        self._vision_btn.setCursor(Qt.PointingHandCursor)
+        self._vision_btn.setCheckable(True)
+        self._vision_btn.setChecked(False)
+        self._vision_btn.setToolTip("Toggle Screen Vision (Let Pink see your screen)")
+        self._vision_btn.setFixedHeight(round(18 * self._scale))
+        self._vision_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #000000;"
+            "  color: #888888;"
+            "  border: 1px solid #555555;"
+            "  padding: 0px 5px;"
+            "  font-size: 11px;"
+            "}"
+            "QPushButton:hover {"
+            "  color: #00FFFF;"
+            "  border: 1px solid #00FFFF;"
+            "}"
+            "QPushButton:checked {"
+            "  background-color: #00FFFF;"
+            "  color: #000000;"
+            "  border: 1px solid #00FFFF;"
+            "}"
+        )
+        layout.addWidget(self._vision_btn)
+
+        # Send button
+        self._send_btn = QPushButton("Send", self)
+        self._send_btn.setFont(font)
+        self._send_btn.setCursor(Qt.PointingHandCursor)
+        self._send_btn.setFixedHeight(round(18 * self._scale))
+        self._send_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #000000;"
+            "  color: #FFFF00;"
+            "  border: 1px solid #FFFF00;"
+            "  padding: 0px 8px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #FFFF00;"
+            "  color: #000000;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #FFA500;"
+            "  color: #000000;"
+            "}"
+        )
+        self._send_btn.clicked.connect(self._on_submit)
+        layout.addWidget(self._send_btn)
+
+        # Close button
+        self._close_btn = QPushButton("×", self)
+        self._close_btn.setFont(font)
+        self._close_btn.setCursor(Qt.PointingHandCursor)
+        self._close_btn.setFixedHeight(round(18 * self._scale))
+        self._close_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: transparent;"
+            "  color: #888888;"
+            "  border: none;"
+            "  padding: 0px 4px;"
+            "  font-size: 14px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  color: #FF5555;"
+            "}"
+        )
+        self._close_btn.clicked.connect(self.cancel)
+        layout.addWidget(self._close_btn)
+
+        box_w = round(270 * self._scale)
+        box_h = round(34 * self._scale)
+        self.setFixedSize(box_w, box_h)
+        self._build_background(box_w, box_h)
+
+    def _build_background(self, box_w: int, box_h: int) -> None:
+        scale = self._scale
+        c_l = round(14 * scale)
+        c_r = round(14 * scale)
+        c_t = round(12 * scale)
+        c_b = round(12 * scale)
+
+        bg_img = QImage(box_w, box_h, QImage.Format_ARGB32_Premultiplied)
+        bg_img.fill(Qt.transparent)
+        p = QPainter(bg_img)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, False)
+
+        if self._box_src is not None:
+            mid_w = box_w - c_l - c_r
+            mid_h = box_h - c_t - c_b
+
+            # Corners
+            p.drawImage(QRect(0, 0, c_l, c_t), self._box_src, QRect(0, 0, 14, 12))
+            p.drawImage(QRect(box_w - c_r, 0, c_r, c_t), self._box_src, QRect(94, 0, 14, 12))
+            p.drawImage(QRect(0, box_h - c_b, c_l, c_b), self._box_src, QRect(0, 21, 14, 12))
+            p.drawImage(QRect(box_w - c_r, box_h - c_b, c_r, c_b), self._box_src, QRect(94, 21, 14, 12))
+
+            # Edges
+            p.drawImage(QRect(c_l, 0, mid_w, c_t), self._box_src, QRect(14, 0, 80, 12))
+            p.drawImage(QRect(c_l, box_h - c_b, mid_w, c_b), self._box_src, QRect(14, 21, 80, 12))
+            p.drawImage(QRect(0, c_t, c_l, mid_h), self._box_src, QRect(0, 12, 14, 9))
+            p.drawImage(QRect(box_w - c_r, c_t, c_r, mid_h), self._box_src, QRect(94, 12, 14, 9))
+
+            # Center
+            p.drawImage(QRect(c_l, c_t, mid_w, mid_h), self._box_src, QRect(14, 12, 80, 9))
+        else:
+            p.fillRect(QRect(0, 0, box_w, box_h), QColor(0, 0, 0, 230))
+            p.setPen(QColor(255, 255, 255))
+            p.drawRect(0, 0, box_w - 1, box_h - 1)
+
+        p.end()
+        self._cached_bg = QPixmap.fromImage(bg_img)
+        self.setMask(QRegion(self._cached_bg.mask()))
+
+    def paintEvent(self, event) -> None:
+        if self._cached_bg is None:
+            return
+        painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.drawPixmap(0, 0, self._cached_bg)
+        painter.end()
+
+    def update_position(self, pet_x: float, pet_y: float) -> None:
+        area = QApplication.primaryScreen().availableGeometry()
+        w = self.width()
+        h = self.height()
+
+        screen_mid_x = area.x() + area.width() / 2.0
+        pet_center_x = pet_x + SPRITE_SIZE / 2.0
+
+        if pet_center_x < screen_mid_x:
+            target_x = pet_x + SPRITE_SIZE + DIALOGUE_SIDE_OFFSET_PX
+        else:
+            target_x = pet_x - w - DIALOGUE_SIDE_OFFSET_PX
+
+        head_center_y = pet_y + (SPRITE_SIZE * DIALOGUE_HEAD_Y_RATIO)
+        target_y = head_center_y - (h / 2.0)
+
+        min_x = float(area.x() + 4)
+        max_x = max(min_x, float(area.x() + area.width() - w - 4))
+        target_x = min(max(target_x, min_x), max_x)
+
+        min_y = float(area.y() + 4)
+        max_y = max(min_y, float(area.y() + area.height() - h - 4))
+        target_y = min(max(target_y, min_y), max_y)
+
+        self.move(round(target_x), round(target_y))
+
+    def open_at(self, pet_x: float, pet_y: float) -> None:
+        self.update_position(pet_x, pet_y)
+        self._line_edit.clear()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._line_edit.setFocus()
+
+    def cancel(self) -> None:
+        self.hide()
+        self.cancelled.emit()
+
+    def _on_submit(self) -> None:
+        text = self._line_edit.text().strip()
+        see_screen = self._vision_btn.isChecked()
+        self.hide()
+        self.submitted.emit(text, see_screen)
+
+
+def capture_screen_base64() -> str:
+    """Capture the primary screen and return a compressed JPEG as a base64 string."""
+    screen = QApplication.primaryScreen()
+    if screen is None:
+        return ""
+    pixmap = screen.grabWindow(0)
+    if pixmap.isNull():
+        return ""
+    # Downscale to max width 1280 to keep API payload fast and lightweight
+    if pixmap.width() > 1280:
+        pixmap = pixmap.scaledToWidth(1280, Qt.SmoothTransformation)
+
+    buffer = QBuffer()
+    buffer.open(QIODevice.WriteOnly)
+    pixmap.save(buffer, "JPEG", 75)
+    raw_bytes = bytes(buffer.data())
+    buffer.close()
+    return base64.b64encode(raw_bytes).decode("utf-8")
+
+
+class MemoryManager:
+    """Manages local session chat logs, long-term facts, and config/API key storage."""
+
+    def __init__(self, base_dir: Path) -> None:
+        self.base_dir = base_dir
+        self.memory_dir = base_dir / "memory"
+        self.sessions_dir = self.memory_dir / "sessions"
+        self.config_path = self.memory_dir / "config.json"
+        self.env_path = base_dir / ".env"
+        self.facts_path = self.memory_dir / "facts.json"
+
+        self._ensure_dirs()
+        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
+        self.history: list[dict[str, any]] = []
+        self._init_session_file()
+
+    def _ensure_dirs(self) -> None:
+        try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
+            if not self.facts_path.exists():
+                default_facts = {
+                    "user_name": "Dork",
+                    "notes": ["The user created Yellow's Pixel Buddies"],
+                }
+                self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not initialize memory directories/facts: %s", err)
+
+    def _init_session_file(self) -> None:
+        init_data = {
+            "session_id": self._session_id,
+            "started_at": datetime.datetime.now().isoformat(),
+            "messages": [],
+        }
+        try:
+            self.session_file.write_text(json.dumps(init_data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not initialize session file: %s", err)
+
+    def get_api_key(self) -> str:
+        """Retrieve Gemini API key from environment, .env file, or memory/config.json."""
+        env_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if env_key:
+            return env_key
+
+        if self.env_path.exists():
+            try:
+                for line in self.env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line.startswith("GEMINI_API_KEY="):
+                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if val:
+                            return val
+            except Exception:
+                pass
+
+        if self.config_path.exists():
+            try:
+                cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+                val = cfg.get("gemini_api_key", "").strip()
+                if val:
+                    return val
+            except Exception:
+                pass
+
+        return ""
+
+    def save_api_key(self, api_key: str) -> None:
+        """Save API key to both .env and memory/config.json."""
+        api_key = api_key.strip()
+        os.environ["GEMINI_API_KEY"] = api_key
+
+        env_lines = []
+        found = False
+        if self.env_path.exists():
+            try:
+                for line in self.env_path.read_text(encoding="utf-8").splitlines():
+                    if line.strip().startswith("GEMINI_API_KEY="):
+                        env_lines.append(f'GEMINI_API_KEY="{api_key}"')
+                        found = True
+                    else:
+                        env_lines.append(line)
+            except Exception:
+                pass
+        if not found:
+            env_lines.append(f'GEMINI_API_KEY="{api_key}"')
+        try:
+            self.env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not update .env: %s", err)
+
+        cfg = {}
+        if self.config_path.exists():
+            try:
+                cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        cfg["gemini_api_key"] = api_key
+        try:
+            self.config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not update config.json: %s", err)
+
+    def get_long_term_facts(self) -> str:
+        """Read facts.json to inject into system prompt."""
+        if self.facts_path.exists():
+            try:
+                facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
+                lines = []
+                if "user_name" in facts:
+                    lines.append(f"- User preferred name: {facts['user_name']}")
+                if "notes" in facts and isinstance(facts["notes"], list):
+                    for n in facts["notes"]:
+                        lines.append(f"- {n}")
+                return "\n".join(lines)
+            except Exception:
+                pass
+        return ""
+
+    def record_turn(self, user_text: str, pink_response: str, anim: str, had_screen: bool = False) -> None:
+        """Record turn in history and persist to session file."""
+        turn = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "user": user_text,
+            "pink": pink_response,
+            "anim": anim,
+            "had_screen": had_screen,
+        }
+        self.history.append(turn)
+
+        try:
+            data = json.loads(self.session_file.read_text(encoding="utf-8"))
+            data["messages"].append(turn)
+            self.session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not record turn to session file: %s", err)
+
+    def clear_current_session(self) -> None:
+        """Reset current in-memory history and start a fresh session file."""
+        self.history.clear()
+        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
+        self._init_session_file()
+
+
+class GeminiWorkerThread(QThread):
+    response_ready = pyqtSignal(str, str)  # (spoken_text, anim_name)
+    error_occurred = pyqtSignal(str)       # (error_message)
+
+    def __init__(
+        self,
+        api_key: str,
+        user_prompt: str,
+        system_instruction: str,
+        history: list[dict[str, any]],
+        screenshot_b64: str | None = None,
+        model_name: str = GEMINI_MODEL,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.api_key = api_key
+        self.user_prompt = user_prompt
+        self.system_instruction = system_instruction
+        self.history = history
+        self.screenshot_b64 = screenshot_b64
+        self.model_name = model_name
+
+    def run(self) -> None:
+        models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
+        last_error = ""
+
+        for model in models_to_try:
+            try:
+                spoken_text, anim = self._call_gemini(model)
+                self.response_ready.emit(spoken_text, anim)
+                return
+            except requests.exceptions.HTTPError as http_err:
+                status_code = http_err.response.status_code if http_err.response is not None else 0
+                resp_text = http_err.response.text if http_err.response is not None else str(http_err)
+                if status_code in (404, 400) and model != models_to_try[-1]:
+                    log.info("Model %s returned HTTP %s, trying fallback...", model, status_code)
+                    last_error = resp_text
+                    continue
+                else:
+                    self.error_occurred.emit(f"HTTP {status_code}: {resp_text[:120]}")
+                    return
+            except requests.exceptions.Timeout:
+                self.error_occurred.emit("Request timed out. Google Gemini servers might be busy!")
+                return
+            except Exception as err:
+                self.error_occurred.emit(f"Network error: {err}")
+                return
+
+        self.error_occurred.emit(f"All models failed. Last error: {last_error[:120]}")
+
+    def _call_gemini(self, model: str) -> tuple[str, str]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        headers = {"Content-Type": "application/json"}
+
+        contents = []
+
+        # Recent conversation turns (last 6 turns, text only)
+        for turn in self.history[-6:]:
+            u_text = turn.get("user", "")
+            p_text = turn.get("pink", "")
+            if u_text:
+                contents.append({"role": "user", "parts": [{"text": u_text}]})
+            if p_text:
+                contents.append({"role": "model", "parts": [{"text": p_text}]})
+
+        # Current user turn
+        current_parts = [{"text": self.user_prompt}]
+        if self.screenshot_b64:
+            current_parts.append({
+                "inlineData": {
+                    "mimeType": "image/jpeg",
+                    "data": self.screenshot_b64,
+                }
+            })
+        contents.append({"role": "user", "parts": current_parts})
+
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": self.system_instruction}]
+            },
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0.85,
+                "maxOutputTokens": 200,
+            }
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=GEMINI_TIMEOUT_S)
+        resp.raise_for_status()
+
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise ValueError("No response generated by Gemini.")
+
+        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+        if not raw_text:
+            raise ValueError("Empty response received from Gemini.")
+
+        # Parse animation tag e.g. [anim: peace_sign]
+        anim = "peace_sign"
+        anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", raw_text)
+        if anim_match:
+            anim = anim_match.group(1).lower()
+            clean_text = raw_text[:anim_match.start()] + raw_text[anim_match.end():]
+        else:
+            clean_text = raw_text
+
+        clean_text = clean_text.strip()
+        # Clean any markdown bolding like **text** into clean text for pixel font
+        clean_text = re.sub(r"\*\*(.*?)\*\*", r"\1", clean_text)
+
+        # Ensure Deltarune formatting: if it doesn't start with "* ", prefix it
+        lines = []
+        for line in clean_text.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if not line_str.startswith("*"):
+                lines.append("* " + line_str)
+            elif line_str.startswith("*") and not line_str.startswith("* "):
+                lines.append("* " + line_str[1:].lstrip())
+            else:
+                lines.append(line_str)
+
+        formatted_text = "\n".join(lines) if lines else ("* " + clean_text)
+        return formatted_text, anim
+
+
 @dataclass
 class Bomb:
     x: float
@@ -2576,6 +3174,11 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_overlay = BombLaserOverlay(bank)
         self._dialogue_overlay = DialogueOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._dialogue_overlay.dismissed.connect(self._on_dialogue_dismissed)
+        self._chat_input = ChatInputOverlay(self._font_family, DIALOGUE_BOX_PATH)
+        self._chat_input.submitted.connect(self._on_chat_submitted)
+        self._chat_input.cancelled.connect(self._on_chat_cancelled)
+        self._memory = MemoryManager(_base_dir)
+        self._gemini_thread: GeminiWorkerThread | None = None
         self._is_ghost_talking: bool = False
         self._ghost_aura_cache: dict[int, QPixmap] = {}
         self._dialogue_enabled: bool = DIALOGUE_ENABLED
@@ -2687,6 +3290,7 @@ class YellowsPixelBuddies(QWidget):
         self._tray_icon: QSystemTrayIcon | None = None
         self._startup_action: QAction | None = None
         self._bring_action: QAction | None = None
+        self._talk_tray_action: QAction | None = None
         self._bomb_action: QAction | None = None
         self._bomb_force_action: QAction | None = None
         self._bomb_chance_action: QWidgetAction | None = None
@@ -2760,6 +3364,8 @@ class YellowsPixelBuddies(QWidget):
             self._show_overlay_frame(self._overlay_pixmap)
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.update_position(self._x, self._y)
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.update_position(self._x, self._y)
 
     def _say(self, category_or_text: str, force: bool = False, extra_queue: list[str] | None = None, skippable: bool = True) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
@@ -2866,6 +3472,154 @@ class YellowsPixelBuddies(QWidget):
                 self._pause_elapsed = False
                 self._brain_timer.start(AFTER_SPECIAL_REST_MS)
         self.update()
+
+    def _open_chat_input(self) -> None:
+        """Open the interactive chat text input bar to talk to Pink."""
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+        self._in_angry_spam = False
+        self._click_times.clear()
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if self.state in MOVE_VELOCITY_PX_S:
+            self._play("idle")
+        if hasattr(self, "_chat_input"):
+            self._chat_input.open_at(self._x, self._y)
+
+    def _on_chat_cancelled(self) -> None:
+        """Resume normal behavior if user closes the chat box without sending."""
+        if self._phase == Phase.PAUSE:
+            self._pause_elapsed = False
+            self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+
+    def _on_chat_submitted(self, text: str, see_screen: bool = False) -> None:
+        """Process user text input from the chat overlay and call Gemini AI in background."""
+        if hasattr(self, "_chat_input"):
+            self._chat_input.hide()
+
+        if not text:
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self._can_play("angry"):
+                self._play("angry")
+            self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True)
+            return
+
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self._can_play("shocked"):
+                self._play("shocked")
+            self._say("* MEW?! I don't have a Gemini API key yet!\n* Enter your key in the popup to awaken my brain!", force=True)
+            QTimer.singleShot(600, self._prompt_api_key_dialog)
+            return
+
+        if self._gemini_thread is not None and self._gemini_thread.isRunning():
+            self._say("* Hold your horses, minion! I'm already thinking about your last question!", force=True)
+            return
+
+        screenshot_b64 = None
+        if see_screen:
+            # Briefly hide Pink and speech bubble so she doesn't screenshot herself
+            if hasattr(self, "_dialogue_overlay"):
+                self._dialogue_overlay.hide()
+            self.hide()
+            QApplication.processEvents()
+            screenshot_b64 = capture_screen_base64()
+            self.show()
+
+        # Enter thinking state
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+
+        thinking_anim = "behind" if self._can_play("behind") else "idle"
+        self._play(thinking_anim)
+        self._say("* (Inspecting your screen...)" if see_screen else "* ...", force=True, skippable=False)
+
+        # Build prompt & system instruction
+        system_inst = PINK_SYSTEM_INSTRUCTION
+        if see_screen:
+            system_inst += "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop. Accurately comment on what they have open or what they asked about their screen!"
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nThings you remember about this user across sessions:\n{facts}"
+
+        # Spawn background worker thread
+        self._gemini_thread = GeminiWorkerThread(
+            api_key=api_key,
+            user_prompt=text,
+            system_instruction=system_inst,
+            history=self._memory.history,
+            screenshot_b64=screenshot_b64,
+            model_name=GEMINI_MODEL,
+            parent=self,
+        )
+        self._gemini_thread.response_ready.connect(
+            lambda spoken_text, anim, u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s)
+        )
+        self._gemini_thread.error_occurred.connect(self._on_gemini_error)
+        self._gemini_thread.start()
+
+    def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool) -> None:
+        """Handle response generated by Gemini AI."""
+        self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen)
+
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        if anim and self._can_play(anim):
+            self._play(anim)
+        self._say(spoken_text, force=True)
+
+    def _on_gemini_error(self, error_msg: str) -> None:
+        """Handle error from Gemini AI."""
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        if self._can_play("shocked"):
+            self._play("shocked")
+        self._say(f"* Mew?! My magic brain stumbled:\n* {error_msg[:90]}", force=True)
+
+    def _prompt_api_key_dialog(self) -> None:
+        """Open modal dialog to enter or update the Gemini API key."""
+        current_key = self._memory.get_api_key()
+        masked = (current_key[:6] + "..." + current_key[-4:]) if len(current_key) > 10 else (current_key or "Not configured")
+
+        key, ok = QInputDialog.getText(
+            None,
+            "Google Gemini API Key",
+            f"Enter your Google Gemini API Key:\n(Current: {masked})\n\nStored locally on your device in .env and memory/config.json.",
+            QLineEdit.Normal,
+            current_key,
+        )
+        if ok:
+            clean_key = key.strip()
+            self._memory.save_api_key(clean_key)
+            if clean_key:
+                self._say("* Gemini API key saved to local storage! My magic brain is online, mew!", force=True)
+                if self._can_play("peace_sign"):
+                    self._play("peace_sign")
+            else:
+                self._say("* Cleared Gemini API key! Back in offline mode, mew.", force=True)
+
+    def _open_memory_folder(self) -> None:
+        """Open the local memory storage folder in Windows Explorer."""
+        try:
+            os.startfile(str(self._memory.memory_dir))
+        except Exception as err:
+            log.warning("Could not open memory folder: %s", err)
+
+    def _reset_session_memory(self) -> None:
+        """Clear recent in-memory conversation history and start a new session file."""
+        self._memory.clear_current_session()
+        self._say("* Session memory cleared! A clean slate for our chats, mew!", force=True)
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
 
     def _on_song_started(self, title: str, artist: str) -> None:
         """React to newly started music playback via Windows GSMTC."""
@@ -3508,6 +4262,8 @@ class YellowsPixelBuddies(QWidget):
             return
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_chat_input"):
+            self._chat_input.cancel()
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._reset_jump_state()
@@ -4192,6 +4948,16 @@ class YellowsPixelBuddies(QWidget):
             else:
                 self._start_pause(roll_special=False, forced="shocked")
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        """Double left-click opens the chat input overlay to talk to Pink."""
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+        if event.button() == Qt.LeftButton:
+            self._open_chat_input()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def _begin_drag(self) -> None:
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""
         self._dragging = True
@@ -4203,6 +4969,8 @@ class YellowsPixelBuddies(QWidget):
         self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_chat_input"):
+            self._chat_input.cancel()
         self._play("shocked", loop=True)          # loop it for as long as it is held
         self.setCursor(Qt.ClosedHandCursor)
 
@@ -4227,6 +4995,9 @@ class YellowsPixelBuddies(QWidget):
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
         menu = QMenu(self)
+        talk_action = menu.addAction("Talk to Pink 💬")
+        api_key_action = menu.addAction("Set Gemini API Key 🔑")
+        menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
@@ -4244,6 +5015,10 @@ class YellowsPixelBuddies(QWidget):
             self._quit()
         elif chosen is hide_action:
             self._start_hide_sequence()
+        elif chosen is talk_action:
+            self._open_chat_input()
+        elif chosen is api_key_action:
+            self._prompt_api_key_dialog()
         elif jump_action is not None and chosen is jump_action:
             self._schedule_debug_jump()
 
@@ -4382,6 +5157,18 @@ class YellowsPixelBuddies(QWidget):
         self._bring_action = tray_menu.addAction("Call Pink 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
         self._bring_action.triggered.connect(self._reset_to_taskbar)
 
+        self._talk_tray_action = tray_menu.addAction("Talk to Pink 💬")
+        self._talk_tray_action.triggered.connect(self._open_chat_input)
+
+        self._key_tray_action = tray_menu.addAction("Set Gemini API Key 🔑")
+        self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)
+
+        memory_menu = tray_menu.addMenu("Memory Storage 🧠")
+        open_mem_action = memory_menu.addAction("Open Memory Folder 📂")
+        open_mem_action.triggered.connect(self._open_memory_folder)
+        reset_mem_action = memory_menu.addAction("Clear Current Session 🧹")
+        reset_mem_action.triggered.connect(self._reset_session_memory)
+
         self._hide_tray_action = tray_menu.addAction("Hide Pink 🐾")
         self._hide_tray_action.triggered.connect(self._start_hide_sequence)
 
@@ -4426,6 +5213,8 @@ class YellowsPixelBuddies(QWidget):
                 self._bring_action.setText("Bring to Taskbar")
         if self._hide_tray_action is not None:
             self._hide_tray_action.setVisible(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
+        if hasattr(self, "_talk_tray_action") and self._talk_tray_action is not None:
+            self._talk_tray_action.setEnabled(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -4546,6 +5335,11 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.dismiss(clear_queue=True)
             self._dialogue_overlay.close()
+        if hasattr(self, "_chat_input"):
+            self._chat_input.close()
+        if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
+            self._gemini_thread.terminate()
+            self._gemini_thread.wait(500)
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()

@@ -38,6 +38,8 @@ venv.bak/
 .env
 .env.local
 .env.*.local
+config.json
+memory/
 
 # IDEs and editors
 .cursor/
