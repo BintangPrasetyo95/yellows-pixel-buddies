@@ -453,6 +453,7 @@ SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milli
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
+DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between interactive questions
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -2133,8 +2134,8 @@ class ChatInputOverlay(QWidget):
         self._cached_bg: QPixmap | None = None
         self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
 
-        self._base_w = round(270 * self._scale)
-        self._base_h = round(34 * self._scale)
+        self._base_w = round(320 * self._scale)
+        self._base_h = round(36 * self._scale)
         self._last_pet_x: float | None = None
         self._last_pet_y: float | None = None
 
@@ -2231,7 +2232,8 @@ class ChatInputOverlay(QWidget):
         self._text_edit = ChatTextEdit(self)
         self._line_edit = self._text_edit  # alias
         self._text_edit.setFont(font)
-        self._text_edit.setPlaceholderText("Talk to Pink... (Enter to send)")
+        self._text_edit.setPlaceholderText("Talk to Pink...")
+        self._text_edit.setToolTip("Press Enter to send (Shift+Enter for newline)")
         pal = self._text_edit.palette()
         pal.setColor(QPalette.PlaceholderText, QColor(140, 140, 140))
         self._text_edit.setPalette(pal)
@@ -3358,6 +3360,7 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_action: QAction | None = None
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
+        self._last_question_dialogue_time: float = -9999.0
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -3608,9 +3611,15 @@ class YellowsPixelBuddies(QWidget):
                 or getattr(self, "_dragging", False)):
             return
         if category_or_text in ("idle", "question"):
+            now = time.perf_counter()
+            can_ask_question = (now - getattr(self, "_last_question_dialogue_time", -9999.0) >= DIALOGUE_QUESTION_COOLDOWN_S)
             is_question = (category_or_text == "question"
-                           or (category_or_text == "idle" and random.random() < DIALOGUE_QUESTION_CHANCE and bool(QUESTION_ITEMS)))
+                           or (category_or_text == "idle"
+                               and can_ask_question
+                               and random.random() < DIALOGUE_QUESTION_CHANCE
+                               and bool(QUESTION_ITEMS)))
             if is_question and QUESTION_ITEMS:
+                self._last_question_dialogue_time = now
                 candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]
                 q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
                 self._last_dialogue = q_item.question
@@ -3680,6 +3689,7 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_question_answered(self, reaction_text: str, reaction_anim: str | None) -> None:
         """Handle player's answer to Pink's question: play reaction animation and speak response."""
+        self._last_question_dialogue_time = time.perf_counter()
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if reaction_anim and self._can_play(reaction_anim):
@@ -5316,7 +5326,6 @@ class YellowsPixelBuddies(QWidget):
             self._fall_after_jump(None)
         menu = QMenu(self)
         talk_action = menu.addAction("Talk to Pink 💬")
-        api_key_action = menu.addAction("Set Gemini API Key 🔑")
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -5337,8 +5346,6 @@ class YellowsPixelBuddies(QWidget):
             self._start_hide_sequence()
         elif chosen is talk_action:
             self._open_chat_input()
-        elif chosen is api_key_action:
-            self._prompt_api_key_dialog()
         elif jump_action is not None and chosen is jump_action:
             self._schedule_debug_jump()
 
