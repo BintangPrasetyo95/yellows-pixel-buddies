@@ -432,6 +432,7 @@ DIALOGUE_TONGUE_COOLDOWN_S = 2.0      # Cooldown in seconds between :P tongue di
 DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
+DIALOGUE_QUESTION_HOLD_S = 18.0       # Seconds to wait for player to answer question choices
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
 DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
 DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
@@ -443,6 +444,7 @@ SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC 
 SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
+DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
 
 # --- Ghost Takeover Lines ----------------------------------------------------
 # Speaking any of these lines triggers the ghost takeover visual effect
@@ -462,6 +464,8 @@ GHOST_DIALOGUE_LINES: set[str] = {
     "* Time for a dramatic scream!",
     "* Someday I will unleash a tantrum so loud your speakers crack!",
     "* Look at my battle scowl! Scared yet?!",
+    "* Is that deadline breathing down your neck?! Need me to throw a cat bomb at it?!",
+    "* Put some boiling fury into your work! Smash through that task like a boss!",
 }
 
 # --- Idle Dialogue Variants (7 daily rotating sets, no parentheses) ----------
@@ -649,9 +653,314 @@ def get_daily_idle_lines(d: datetime.date | None = None) -> list[str]:
     return IDLE_DIALOGUE_VARIANTS[variant_idx]
 
 
+@dataclass
+class QuestionItem:
+    question: str
+    choices: list[tuple[str, str, str | None]]  # [(choice_label, reaction_text, reaction_anim)]
+    category: str = "general"
+
+
+# --- Question Dialogue Variant (Desktop, Work, Fun Stuff, Advices, Motivations) ---
+QUESTION_ITEMS: list[QuestionItem] = [
+    # Desktop
+    QuestionItem(
+        question="* Why do you have thirty browser tabs open?! Are you trying to melt this PC?!",
+        choices=[
+            ("I need all of them!", "* LIES! You haven't looked at twenty-five of them all week, mew!", "angry"),
+            ("I'll close some...", "* Good! Purge the digital clutter before this PC combusts!", "peace_sign"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Is your desktop always this chaotic?! Where do you even find your files, mew?!",
+        choices=[
+            ("Organized chaos!", "* 'Organized chaos' is an excuse made by amateurs!", "tongue"),
+            ("I'll clean it...", "* Hah! You better! My paws need clean runway to strut on!", "overjoyed"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Who is that on your wallpaper?! They're not cooler than me, are they?!",
+        choices=[
+            ("No one is cooler!", "* Hmph! Obviously! At least you know your place, minion!", "peace_sign"),
+            ("Actually, they are.", "* WHAT?! BLASPHEMY! Cat bombs incoming directly at your head!!", "angry"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* What's hidden in your Recycle Bin?! Don't tell me cursed spirits live in there?!",
+        choices=[
+            ("Just old files.", "* Good... ghosts like me prefer luxury plush bodies, not trash bins!", "idle"),
+            ("Full of ghosts!", "* WHAT?! Are my lazy cousins squatting in there?! EMPTY IT NOW!!", "shocked"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Why are there so many icons on this taskbar?! Give my feet some walking room!",
+        choices=[
+            ("I'll unpin some!", "* Excellent! Clear the stage for the ultimate magical superstar!", "overjoyed"),
+            ("Deal with it, doll.", "* DOLL?! I am an ethereal warrior trapped in cotton! SHOW RESPECT!!", "angry"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Do you ever shut down this computer, or does it run on pure stubbornness like me?!",
+        choices=[
+            ("Pure stubbornness!", "* Ha! A fellow creature of unrelenting spite! I can respect that!", "laughing"),
+            ("I restart regularly.", "* Phew... even ghost-infused PCs need beauty sleep once in a while!", "peace_sign"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Are you hiding secret windows behind that one?! Show me, mew!",
+        choices=[
+            ("Nothing secret!", "* Suspicious... but I'll let it slide. For now!", "behind"),
+            ("Top secret stuff!", "* Ooh! Is it a rival magical girl conspiracy?! Let me inspect!!", "shocked"),
+        ],
+        category="desktop",
+    ),
+
+    # Work
+    QuestionItem(
+        question="* Hey, are you actually making progress, or just clicking back and forth?!",
+        choices=[
+            ("Working hard!", "* That's what I like to hear! Keep that momentum going, mew!", "peace_sign"),
+            ("Procrastinating...", "* UNACCEPTABLE!! Stop dawdling or I'll fire ocular lasers at you!!", "angry"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* What kind of project is this anyway?! Does it have a dramatic tournament arc?!",
+        choices=[
+            ("Full of drama!", "* YES!! High stakes, explosive climaxes! That's the only way to work!", "overjoyed"),
+            ("Just normal work.", "* Ugh, boring?! Add some glitter fireworks to your documents then!", "tongue"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Are you typing important documents, or secretly writing fanfiction?!",
+        choices=[
+            ("Important work!", "* Hmph! Make sure there are zero typos, or I'll grade it with red ink!", "idle"),
+            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! Let me proofread it!!", "shocked"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Is that deadline breathing down your neck?! Need me to throw a cat bomb at it?!",
+        choices=[
+            ("Yes, destroy it!", "* FUSE IGNITED! KA-BOOM!! Deadline annihilated! Now finish the work anyway!!", "angry"),
+            ("Under control!", "* Oho! Look at you being all competent! Don't let your guard down!", "peace_sign"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* How long have you been staring at that screen?! Did a bug steal your soul?!",
+        choices=[
+            ("Found the bug!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "overjoyed"),
+            ("Still stuck...", "* Grrr! Step back, take a breath, and strike again with boiling rage!", "kneeling"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Finished your tasks for today?! Or are you planning to procrastinate forever?!",
+        choices=[
+            ("All finished!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "overjoyed"),
+            ("Not even close...", "* Then why are your hands off the keyboard?! Back to the battlefield!!", "angry"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Why are you glaring at that window like it challenged you to a duel?!",
+        choices=[
+            ("It challenged me!", "* THEN FIGHT! Unleash your ultimate combo and claim victory!!", "laughing"),
+            ("Just frustrated.", "* Don't let a bunch of pixels bully you! You're stronger than that, mew!", "peace_sign"),
+        ],
+        category="work",
+    ),
+
+    # Fun stuff
+    QuestionItem(
+        question="* Have you watched Mew Mew Kissy Cutie yet?! ...WHAT DO YOU MEAN 'NO'?!",
+        choices=[
+            ("I love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!!", "overjoyed"),
+            ("Never seen it.", "* TRAVESTY! Binge all four seasons right now or face my wrath!!", "angry"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* If we fought an epic final boss right now, what weapon would you bring?!",
+        choices=[
+            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!!", "overjoyed"),
+            ("A sturdy shield.", "* Defensive?! BORING! Offense is the greatest defense, mew!!", "tongue"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* Do you think giant sparkly explosions count as high art?! (Hint: YES!)",
+        choices=[
+            ("Pure masterpiece!", "* FINALLY someone understands true aesthetics!! More explosions for all!!", "laughing"),
+            ("Too loud and bright.", "* GAH! You have zero taste in theatrical pyrotechnics!!", "angry"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* What's the battle theme song playing in your head right now?! Sing it loud!",
+        choices=[
+            ("Something epic!", "* Ooh, I hear the trumpets and bass drops from here!! Rock on, mew!!", "singing"),
+            ("Pure silence.", "* Silence?! How do you even fight without background hype music?!", "shocked"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* If you were a ghost, which plushie body would you possess?! Choose wisely!",
+        choices=[
+            ("A cute cat doll!", "* Hey! Don't steal my look! Though feline aesthetics are supreme!", "peace_sign"),
+            ("Giant teddy bear.", "* Haha! Big, slow, and squishy! You'd make a great shield for me!", "laughing"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* Video games or anime tonight?! You better pick something with high drama!",
+        choices=[
+            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!!", "overjoyed"),
+            ("Anime marathon!", "* Stock up on popcorn and get ready to cry during the emotional climax!!", "peace_sign"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* Do you think heart-shaped glitter bombs should be standard issue?! I do!",
+        choices=[
+            ("Mandatory worldwide!", "* YES! When I rule the world, everyone gets glitter ordnance!", "laughing"),
+            ("Too much mess.", "* You can NEVER have too much glitter! It builds character!!", "tongue"),
+        ],
+        category="fun",
+    ),
+
+    # Advices
+    QuestionItem(
+        question="* Hey, dummy! Have you had any water today?! Dehydrated minions are useless!",
+        choices=[
+            ("Just drank some!", "* Good! Hydrated minions work with peak efficiency, mew!", "peace_sign"),
+            ("Oops, forgot...", "* GO DRINK SOME RIGHT NOW! Don't make me splash you with lasers!!", "angry"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Check your posture right now! Sit up straight like a fierce warrior, mew!",
+        choices=[
+            ("Straightened up!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
+            ("I like slouching.", "* Stop curling like a boiled shrimp! Your spine is crying for mercy!!", "shocked"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Blink your eyes! Staring at the screen like a zombie will fry your retinas!",
+        choices=[
+            ("Blinked three times!", "* Good! Retinas preserved for another grueling battle!", "peace_sign"),
+            ("My eyes are fine.", "* They look like dry marbles! Blink before they roll out of your skull!!", "angry"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Have you stretched your shoulders yet?! Don't stiffen up like a wooden dummy!",
+        choices=[
+            ("Just stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "overjoyed"),
+            ("Too stiff to move.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* When was the last time you ate something healthy?! Candy doesn't count!",
+        choices=[
+            ("Ate a good meal!", "* Excellent! Fuel the vessel so you can fight another day!", "peace_sign"),
+            ("Surviving on snacks.", "* Junk food?! Even my plush stomach is churning in horror! Go eat!!", "shocked"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Go look away from the monitor for twenty seconds! Rest those peepers!",
+        choices=[
+            ("Looking away now!", "* Good! Let the distant horizon refresh your optical sensors, mew!", "wistful"),
+            ("Too glued to work!", "* The screen isn't going anywhere, dummy! Twenty seconds won't kill you!!", "tongue"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Are you taking enough breaks?! Overworking ruins your battle readiness!",
+        choices=[
+            ("Taking breaks!", "* Smart! Rest is a tactical component of supreme victory!", "peace_sign"),
+            ("Nonstop grind!", "* Burnout is for rookies! Rest five minutes or face a tactical timeout!!", "angry"),
+        ],
+        category="advices",
+    ),
+
+    # Motivations
+    QuestionItem(
+        question="* Feeling overwhelmed?! Remember: a true magical girl NEVER surrenders!",
+        choices=[
+            ("I won't give up!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "overjoyed"),
+            ("It's pretty tough...", "* Tough times build elite warriors! I believe in you... don't make me repeat it!!", "embarrassed"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* You're not thinking of quitting now, are you?! Not on my watch, dummy!",
+        choices=[
+            ("Still fighting!", "* HAW! That's the determination I expect from my number one minion!!", "laughing"),
+            ("Losing motivation...", "* Borrow some of my boiling fury then! Stand tall and finish it!!", "angry"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Put some boiling fury into your work! Smash through that task like a boss!",
+        choices=[
+            ("Fired up now!!", "* YES!! Burn with passion and obliterate every obstacle in your path!!", "overjoyed"),
+            ("Need some calm.", "* Then channel cool focus! A master swordsman strikes with precision!", "wistful"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Take a deep breath! You've got this... not that I'm cheering for you or anything!",
+        choices=[
+            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot!!", "embarrassed"),
+            ("Needed that breath.", "* Hmph! See? A clear mind makes quick work of any enemy!", "peace_sign"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Even if today is exhausting, you're doing great! Keep your chin up, mew!",
+        choices=[
+            ("Doing my best!", "* And your best is more than enough! Keep walking forward proudly!!", "peace_sign"),
+            ("Feeling exhausted.", "* Rest when you're done, champion. You've earned every bit of peace!", "wistful"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Channel your inner boss monster! Show this day who's really in charge!",
+        choices=[
+            ("I am in charge!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
+            ("The day is winning.", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "overjoyed"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Every mistake is just training for the final battle! Keep pushing, mew!",
+        choices=[
+            ("Learning & growing!", "* That's how legends are born! Every setback is just XP in disguise!!", "peace_sign"),
+            ("Hate making mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "overjoyed"),
+        ],
+        category="motivations",
+    ),
+]
+
+QUESTION_DIALOGUE_LINES: list[str] = [item.question for item in QUESTION_ITEMS]
+
+
 DIALOGUE_LINES: dict[str, list[str]] = {
     # Idle / general thoughts during resting pauses (defaults to Variant 1; dynamically chosen by day)
     "idle": IDLE_DIALOGUE_VARIANTS[0],
+    # Question / advice / motivation variant pool
+    "question": QUESTION_DIALOGUE_LINES,
     # Startled by a click
     "shocked": [
         "* MEW!?",
@@ -1234,6 +1543,7 @@ class DialogueOverlay(QWidget):
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setMouseTracking(True)
 
         self._font_family = font_family
         self._box_src: QImage | None = None
@@ -1259,6 +1569,13 @@ class DialogueOverlay(QWidget):
         self._last_pet_x: float = 0.0
         self._last_pet_y: float = 0.0
 
+        # Choices / question answering state
+        self._choices: list[tuple[str, str, str | None]] = []
+        self._choice_rects: list[QRect] = []
+        self._hovered_choice_idx: int | None = None
+        self._on_chosen_callback = None
+        self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
+
         self._font = QFont(self._font_family)
         self._font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
         self._font.setStyleStrategy(QFont.NoAntialias)
@@ -1272,6 +1589,32 @@ class DialogueOverlay(QWidget):
         self._hold_timer.timeout.connect(self.dismiss)
         self._skippable = True
 
+    def _create_soul_heart_pixmap(self) -> QPixmap:
+        """Create a crisp pixel-art Deltarune red soul heart pixmap."""
+        grid = [
+            " 11   11 ",
+            "1111 1111",
+            "111111111",
+            "111111111",
+            " 1111111 ",
+            "  11111  ",
+            "   111   ",
+            "    1    ",
+        ]
+        h = len(grid)
+        w = len(grid[0])
+        scale = max(1, round(self._scale))
+        img = QImage(w * scale, h * scale, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        red = QColor(255, 0, 64, 255).rgba()
+        for y, row in enumerate(grid):
+            for x, c in enumerate(row):
+                if c == '1':
+                    for sy in range(scale):
+                        for sx in range(scale):
+                            img.setPixel(x * scale + sx, y * scale + sy, red)
+        return QPixmap.fromImage(img)
+
     def is_active(self) -> bool:
         """True if a dialogue line is actively being displayed or typed."""
         return self._active
@@ -1280,12 +1623,29 @@ class DialogueOverlay(QWidget):
         """True if the dialogue bubble can be fast-forwarded or dismissed by clicks."""
         return self._skippable
 
+    def ask(self, text: str, choices: list[tuple[str, str, str | None]], pet_x: float, pet_y: float,
+            on_chosen) -> None:
+        """Start a new question dialogue bubble with interactive choices."""
+        self._skippable = True
+        self._queue.clear()
+        self._choices = list(choices)
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self._on_chosen_callback = on_chosen
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+        self._display_text(text, pet_x, pet_y)
+
     def say(self, text: str, pet_x: float, pet_y: float, queue: list[str] | None = None, skippable: bool = True) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
         queue: optional list of additional messages to display sequentially after this one.
         skippable: whether clicking can advance or dismiss this dialogue.
         """
+        self._choices.clear()
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self._on_chosen_callback = None
         self._skippable = skippable
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
@@ -1337,8 +1697,29 @@ class DialogueOverlay(QWidget):
         base_inner_w = round(84 * scale)
         base_inner_h = round(19 * scale)
 
-        req_inner_w = max_text_w + pad_x * 2
-        req_inner_h = total_text_h + pad_y * 2
+        # Calculate choice block dimensions
+        choices_w = 0
+        choices_h = 0
+        pad_choices_top = round(5 * scale) if self._choices else 0
+        self._choice_rects.clear()
+
+        if self._choices:
+            heart_w = self._soul_heart_pix.width() if self._soul_heart_pix else 12
+            heart_gap = 4
+            prefix_w = heart_w + heart_gap
+            choice_widths = [prefix_w + fm.horizontalAdvance(c[0]) for c in self._choices]
+            choice_gap = 14
+            total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
+
+            if total_inline_w <= DIALOGUE_MAX_WIDTH_PX + 20:
+                choices_w = total_inline_w
+                choices_h = self._line_h
+            else:
+                choices_w = max(choice_widths, default=0)
+                choices_h = self._line_h * len(self._choices) + 2 * (len(self._choices) - 1)
+
+        req_inner_w = max(max_text_w, choices_w) + pad_x * 2
+        req_inner_h = total_text_h + (choices_h + pad_choices_top if self._choices else 0) + pad_y * 2
 
         extra_w = max(0, req_inner_w - base_inner_w)
         extra_h = max(0, req_inner_h - base_inner_h)
@@ -1378,8 +1759,31 @@ class DialogueOverlay(QWidget):
         p.end()
 
         actual_inner_h = box_h - round(14 * scale)
-        self._text_start_y = round(7 * scale) + (actual_inner_h - total_text_h) // 2 + fm.ascent()
+        total_content_h = total_text_h + (choices_h + pad_choices_top if self._choices else 0)
+        self._text_start_y = round(7 * scale) + (actual_inner_h - total_content_h) // 2 + fm.ascent()
         self._text_start_x = round(12 * scale) + pad_x
+
+        # Compute choice rects relative to text
+        if self._choices:
+            heart_w = self._soul_heart_pix.width() if self._soul_heart_pix else 12
+            heart_gap = 4
+            prefix_w = heart_w + heart_gap
+            choice_widths = [prefix_w + fm.horizontalAdvance(c[0]) for c in self._choices]
+            choice_gap = 14
+            total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
+
+            last_text_baseline_y = self._text_start_y + (len(self._lines) - 1) * self._line_h
+            cy = last_text_baseline_y + fm.descent() + pad_choices_top
+
+            if total_inline_w <= DIALOGUE_MAX_WIDTH_PX + 20:
+                cx = self._text_start_x
+                for i, cw in enumerate(choice_widths):
+                    self._choice_rects.append(QRect(cx, cy, cw + 4, self._line_h))
+                    cx += cw + choice_gap
+            else:
+                for i, cw in enumerate(choice_widths):
+                    row_y = cy + i * (self._line_h + 2)
+                    self._choice_rects.append(QRect(self._text_start_x, row_y, cw + 4, self._line_h))
 
         self._cached_bg = QPixmap.fromImage(bg_img)
         self.setFixedSize(box_w, box_h)
@@ -1457,13 +1861,23 @@ class DialogueOverlay(QWidget):
             self.update()
         else:
             self._type_timer.stop()
-            hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-            self._hold_timer.start(round(hold_s * 1000))
+            if self._choices:
+                self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
+            else:
+                hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                self._hold_timer.start(round(hold_s * 1000))
+            self.update()
 
     def dismiss(self, clear_queue: bool = False) -> None:
         """Hide and clear the dialogue overlay, or advance to the next queued message."""
         if clear_queue:
             self._queue.clear()
+
+        self._choices.clear()
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self._on_chosen_callback = None
+        self.setCursor(Qt.ArrowCursor)
 
         if self._queue:
             next_text = self._queue.pop(0)
@@ -1485,20 +1899,79 @@ class DialogueOverlay(QWidget):
             self._visible_chars = self._total_chars
             self._char_delay_ticks = 0
             self._type_timer.stop()
-            hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-            self._hold_timer.start(round(hold_s * 1000))
+            if self._choices:
+                self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
+            else:
+                hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                self._hold_timer.start(round(hold_s * 1000))
             self.update()
-        else:
+        elif not self._choices:
             self.dismiss()
 
+    def _choose_option(self, idx: int) -> None:
+        """Player clicked a choice option: invoke callback with reaction text and anim."""
+        if not self._choices or idx < 0 or idx >= len(self._choices):
+            return
+        choice_label, reaction_text, reaction_anim = self._choices[idx]
+        self._choices.clear()
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self.setCursor(Qt.ArrowCursor)
+        callback = self._on_chosen_callback
+        self._on_chosen_callback = None
+        if callback:
+            callback(reaction_text, reaction_anim)
+
+    def mouseMoveEvent(self, event) -> None:
+        """Track mouse hover across choice options to highlight selection with Deltarune soul heart."""
+        if not self._active or not self._choices or self._visible_chars < self._total_chars:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.pos()
+        hovered = None
+        for i, r in enumerate(self._choice_rects):
+            if r.contains(pos):
+                hovered = i
+                break
+        if hovered != self._hovered_choice_idx:
+            self._hovered_choice_idx = hovered
+            if hovered is not None:
+                self.setCursor(Qt.PointingHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+            self.update()
+        event.accept()
+
+    def leaveEvent(self, event) -> None:
+        """Reset choice hover and cursor when mouse leaves the dialogue bubble."""
+        if self._hovered_choice_idx is not None:
+            self._hovered_choice_idx = None
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:
-        """Left-click fast-forwards typewriter or dismisses dialogue."""
-        if not self._skippable:
+        """Left-click fast-forwards typewriter or selects a choice option."""
+        if not self._skippable or not self._active:
             event.accept()
             return
-        if event.button() == Qt.LeftButton and DIALOGUE_CLICK_TO_DISMISS:
-            self.advance_or_dismiss()
-            event.accept()
+        if event.button() == Qt.LeftButton:
+            if self._visible_chars < self._total_chars:
+                self.advance_or_dismiss()
+                event.accept()
+                return
+            if self._choices:
+                pos = event.pos()
+                for i, r in enumerate(self._choice_rects):
+                    if r.contains(pos):
+                        self._choose_option(i)
+                        event.accept()
+                        return
+                event.accept()
+                return
+            if DIALOGUE_CLICK_TO_DISMISS:
+                self.advance_or_dismiss()
+                event.accept()
         else:
             super().mousePressEvent(event)
 
@@ -1529,6 +2002,36 @@ class DialogueOverlay(QWidget):
                 painter.drawText(self._text_start_x, ty, line[:chars_left])
                 chars_left = 0
             ty += self._line_h
+
+        # Draw choices if question typing is complete
+        if self._choices and self._visible_chars >= self._total_chars:
+            fm = QFontMetrics(self._font)
+            heart_w = self._soul_heart_pix.width() if self._soul_heart_pix else 12
+            heart_h = self._soul_heart_pix.height() if self._soul_heart_pix else 10
+            heart_gap = 4
+            prefix_w = heart_w + heart_gap
+
+            for i, (label, _, _) in enumerate(self._choices):
+                if i >= len(self._choice_rects):
+                    break
+                rect = self._choice_rects[i]
+                is_hovered = (self._hovered_choice_idx == i)
+
+                # Deltarune soul heart on hovered option
+                if is_hovered and self._soul_heart_pix:
+                    hx = rect.x()
+                    hy = rect.y() + (rect.height() - heart_h) // 2
+                    painter.drawPixmap(hx, hy, self._soul_heart_pix)
+
+                # Yellow highlight on hovered, white on unhovered
+                if is_hovered:
+                    painter.setPen(QColor(255, 255, 0))
+                else:
+                    painter.setPen(QColor(255, 255, 255))
+
+                tx = rect.x() + prefix_w
+                ty_choice = rect.y() + fm.ascent()
+                painter.drawText(tx, ty_choice, label)
 
         painter.end()
 
@@ -2268,20 +2771,37 @@ class YellowsPixelBuddies(QWidget):
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
-        if category_or_text == "idle":
-            today_idx = get_idle_variant_for_date()
-            if random.random() < DIALOGUE_IDLE_STEAL_CHANCE and len(IDLE_DIALOGUE_VARIANTS) > 1:
-                other_indices = [i for i in range(len(IDLE_DIALOGUE_VARIANTS)) if i != today_idx]
-                chosen_idx = random.choice(other_indices)
-            else:
-                chosen_idx = today_idx
-            lines = IDLE_DIALOGUE_VARIANTS[chosen_idx]
-            if not lines:
+        if category_or_text in ("idle", "question"):
+            is_question = (category_or_text == "question"
+                           or (category_or_text == "idle" and random.random() < DIALOGUE_QUESTION_CHANCE and bool(QUESTION_ITEMS)))
+            if is_question and QUESTION_ITEMS:
+                candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]
+                q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
+                self._last_dialogue = q_item.question
+                if q_item.question in GHOST_DIALOGUE_LINES:
+                    self._start_ghost_speech()
+                self._dialogue_overlay.ask(
+                    q_item.question,
+                    q_item.choices,
+                    self._x,
+                    self._y,
+                    on_chosen=self._on_question_answered,
+                )
                 return
-            choices = [l for l in lines if l != self._last_dialogue] if len(lines) > 1 else lines
-            line = random.choice(choices)
-            if line in GHOST_DIALOGUE_LINES:
-                self._start_ghost_speech()
+            else:
+                today_idx = get_idle_variant_for_date()
+                if random.random() < DIALOGUE_IDLE_STEAL_CHANCE and len(IDLE_DIALOGUE_VARIANTS) > 1:
+                    other_indices = [i for i in range(len(IDLE_DIALOGUE_VARIANTS)) if i != today_idx]
+                    chosen_idx = random.choice(other_indices)
+                else:
+                    chosen_idx = today_idx
+                lines = IDLE_DIALOGUE_VARIANTS[chosen_idx]
+                if not lines:
+                    return
+                choices = [l for l in lines if l != self._last_dialogue] if len(lines) > 1 else lines
+                line = random.choice(choices)
+                if line in GHOST_DIALOGUE_LINES:
+                    self._start_ghost_speech()
         elif category_or_text in DIALOGUE_LINES:
             lines = DIALOGUE_LINES[category_or_text]
             if not lines:
@@ -2313,6 +2833,14 @@ class YellowsPixelBuddies(QWidget):
         self._last_dialogue = line
         self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue, skippable=skippable)
 
+    def _on_question_answered(self, reaction_text: str, reaction_anim: str | None) -> None:
+        """Handle player's answer to Pink's question: play reaction animation and speak response."""
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        if reaction_anim and self._can_play(reaction_anim):
+            self._play(reaction_anim)
+        self._say(reaction_text, force=True)
+
     def _start_ghost_speech(self) -> None:
         """Ghost takes over the vessel with angry animation and spectral aura."""
         self._is_ghost_talking = True
@@ -2331,8 +2859,8 @@ class YellowsPixelBuddies(QWidget):
             if self._phase is Phase.PAUSE and self.state == "angry":
                 self._play("idle")
         if self._phase is Phase.PAUSE:
-            if not getattr(self, "_in_angry_spam", False) and self.state != "angry":
-                if self.state in ("shocked",) or not self._loop:
+            if not getattr(self, "_in_angry_spam", False):
+                if self.state in ("shocked", "angry") or not self._loop:
                     self._play("idle")
             if self._pause_elapsed or not self._brain_timer.isActive():
                 self._pause_elapsed = False
