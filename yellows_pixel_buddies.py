@@ -83,8 +83,11 @@ from dataclasses import dataclass
 import datetime
 from enum import Enum, auto
 from functools import lru_cache
+import base64
+import json
 import logging
 import math
+import os
 from pathlib import Path
 import random
 import re
@@ -94,15 +97,18 @@ import sys
 import time
 import winreg
 
-from PyQt5.QtCore import QPoint, QPointF, QRect, QRectF, QThread, Qt, QTimer, pyqtSignal
+import requests
+from PyQt5.QtCore import (
+    QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QSize, QThread, Qt, QTimer, pyqtSignal
+)
 from PyQt5.QtGui import (
     QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
-    QPainter, QPen, QPixmap, QRegion, QTransform
+    QPainter, QPalette, QPen, QPixmap, QRegion, QTextOption, QTransform
 )
 from PyQt5.QtWidgets import (
-    QAction, QApplication, QHBoxLayout, QLabel, QMenu, QPushButton,
-    QSlider, QStyle, QStyleOptionSlider, QSystemTrayIcon, QVBoxLayout,
-    QWidget, QWidgetAction
+    QAction, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+    QPlainTextEdit, QPushButton, QSlider, QStyle, QStyleOptionSlider,
+    QSystemTrayIcon, QVBoxLayout, QWidget, QWidgetAction
 )
 
 
@@ -131,6 +137,8 @@ else:
 ICON_PATH = _base_dir / "app_icon.ico"
 DIALOGUE_BOX_PATH = SPRITES_DIR / "dialogue_box.png"
 DETERMINATION_FONT_PATH = FONTS_DIR / "determination" / "determination.ttf"
+EYE_OFF_PATH = SPRITES_DIR / "eye" / "off.png"
+EYE_ON_PATH = SPRITES_DIR / "eye" / "on.png"
 
 # On-screen size in *logical* pixels. The window is exactly SPRITE_SIZE x SPRITE_SIZE.
 # PNGs of any size are scaled to fit (aspect ratio kept, anchored bottom-centre).
@@ -432,6 +440,7 @@ DIALOGUE_TONGUE_COOLDOWN_S = 2.0      # Cooldown in seconds between :P tongue di
 DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
 DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
+DIALOGUE_QUESTION_HOLD_S = 18.0       # Seconds to wait for player to answer question choices
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
 DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
 DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
@@ -443,6 +452,23 @@ SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC 
 SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
+DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
+DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between interactive questions
+
+# --- Gemini AI & Memory Configuration ----------------------------------------
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+GEMINI_TIMEOUT_S = 35
+PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion living on the Windows taskbar.
+You have the sassy, tsundere magical ghost doll personality inspired by Mad Mew Mew from Deltarune / Undertale.
+- Persona & Tone: Proud, dramatic, tsundere, slightly chaotic, playful.
+- Speech Habits: Occasionally use "mew!" or "Hmph!". Refer to the user as "minion", "human", or "darling".
+- Secretly Helpful: Even while teasing, you give genuinely smart, observant, and helpful answers when asked.
+- Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or point MUST begin with "* ".
+- Strict Length Limit: Keep your reply CONCISE (1 to 3 short punchy sentences, under 45 words total). Long walls of text cannot fit on screen!
+- Animation Tag: At the very end of your message, include exactly one bracketed emotion tag matching your mood:
+  [anim: peace_sign], [anim: laughing], [anim: overjoyed], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
+"""
 
 # --- Ghost Takeover Lines ----------------------------------------------------
 # Speaking any of these lines triggers the ghost takeover visual effect
@@ -462,6 +488,8 @@ GHOST_DIALOGUE_LINES: set[str] = {
     "* Time for a dramatic scream!",
     "* Someday I will unleash a tantrum so loud your speakers crack!",
     "* Look at my battle scowl! Scared yet?!",
+    "* Is that deadline breathing down your neck?! Need me to throw a cat bomb at it?!",
+    "* Put some boiling fury into your work! Smash through that task like a boss!",
 }
 
 # --- Idle Dialogue Variants (7 daily rotating sets, no parentheses) ----------
@@ -649,9 +677,314 @@ def get_daily_idle_lines(d: datetime.date | None = None) -> list[str]:
     return IDLE_DIALOGUE_VARIANTS[variant_idx]
 
 
+@dataclass
+class QuestionItem:
+    question: str
+    choices: list[tuple[str, str, str | None]]  # [(choice_label, reaction_text, reaction_anim)]
+    category: str = "general"
+
+
+# --- Question Dialogue Variant (Desktop, Work, Fun Stuff, Advices, Motivations) ---
+QUESTION_ITEMS: list[QuestionItem] = [
+    # Desktop
+    QuestionItem(
+        question="* Why do you have thirty browser tabs open?! Are you trying to melt this PC?!",
+        choices=[
+            ("I need all of them!", "* LIES! You haven't looked at twenty-five of them all week, mew!", "angry"),
+            ("I'll close some...", "* Good! Purge the digital clutter before this PC combusts!", "peace_sign"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Is your desktop always this chaotic?! Where do you even find your files, mew?!",
+        choices=[
+            ("Organized chaos!", "* 'Organized chaos' is an excuse made by amateurs!", "tongue"),
+            ("I'll clean it...", "* Hah! You better! My paws need clean runway to strut on!", "overjoyed"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Who is that on your wallpaper?! They're not cooler than me, are they?!",
+        choices=[
+            ("No one is cooler!", "* Hmph! Obviously! At least you know your place, minion!", "peace_sign"),
+            ("Actually, they are.", "* WHAT?! BLASPHEMY! Cat bombs incoming directly at your head!!", "angry"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* What's hidden in your Recycle Bin?! Don't tell me cursed spirits live in there?!",
+        choices=[
+            ("Just old files.", "* Good... ghosts like me prefer luxury plush bodies, not trash bins!", "idle"),
+            ("Full of ghosts!", "* WHAT?! Are my lazy cousins squatting in there?! EMPTY IT NOW!!", "shocked"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Why are there so many icons on this taskbar?! Give my feet some walking room!",
+        choices=[
+            ("I'll unpin some!", "* Excellent! Clear the stage for the ultimate magical superstar!", "overjoyed"),
+            ("Deal with it, doll.", "* DOLL?! I am an ethereal warrior trapped in cotton! SHOW RESPECT!!", "angry"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Do you ever shut down this computer, or does it run on pure stubbornness like me?!",
+        choices=[
+            ("Pure stubbornness!", "* Ha! A fellow creature of unrelenting spite! I can respect that!", "laughing"),
+            ("I restart regularly.", "* Phew... even ghost-infused PCs need beauty sleep once in a while!", "peace_sign"),
+        ],
+        category="desktop",
+    ),
+    QuestionItem(
+        question="* Are you hiding secret windows behind that one?! Show me, mew!",
+        choices=[
+            ("Nothing secret!", "* Suspicious... but I'll let it slide. For now!", "behind"),
+            ("Top secret stuff!", "* Ooh! Is it a rival magical girl conspiracy?! Let me inspect!!", "shocked"),
+        ],
+        category="desktop",
+    ),
+
+    # Work
+    QuestionItem(
+        question="* Hey, are you actually making progress, or just clicking back and forth?!",
+        choices=[
+            ("Working hard!", "* That's what I like to hear! Keep that momentum going, mew!", "peace_sign"),
+            ("Procrastinating...", "* UNACCEPTABLE!! Stop dawdling or I'll fire ocular lasers at you!!", "angry"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* What kind of project is this anyway?! Does it have a dramatic tournament arc?!",
+        choices=[
+            ("Full of drama!", "* YES!! High stakes, explosive climaxes! That's the only way to work!", "overjoyed"),
+            ("Just normal work.", "* Ugh, boring?! Add some glitter fireworks to your documents then!", "tongue"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Are you typing important documents, or secretly writing fanfiction?!",
+        choices=[
+            ("Important work!", "* Hmph! Make sure there are zero typos, or I'll grade it with red ink!", "idle"),
+            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! Let me proofread it!!", "shocked"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Is that deadline breathing down your neck?! Need me to throw a cat bomb at it?!",
+        choices=[
+            ("Yes, destroy it!", "* FUSE IGNITED! KA-BOOM!! Deadline annihilated! Now finish the work anyway!!", "angry"),
+            ("Under control!", "* Oho! Look at you being all competent! Don't let your guard down!", "peace_sign"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* How long have you been staring at that screen?! Did a bug steal your soul?!",
+        choices=[
+            ("Found the bug!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "overjoyed"),
+            ("Still stuck...", "* Grrr! Step back, take a breath, and strike again with boiling rage!", "kneeling"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Finished your tasks for today?! Or are you planning to procrastinate forever?!",
+        choices=[
+            ("All finished!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "overjoyed"),
+            ("Not even close...", "* Then why are your hands off the keyboard?! Back to the battlefield!!", "angry"),
+        ],
+        category="work",
+    ),
+    QuestionItem(
+        question="* Why are you glaring at that window like it challenged you to a duel?!",
+        choices=[
+            ("It challenged me!", "* THEN FIGHT! Unleash your ultimate combo and claim victory!!", "laughing"),
+            ("Just frustrated.", "* Don't let a bunch of pixels bully you! You're stronger than that, mew!", "peace_sign"),
+        ],
+        category="work",
+    ),
+
+    # Fun stuff
+    QuestionItem(
+        question="* Have you watched Mew Mew Kissy Cutie yet?! ...WHAT DO YOU MEAN 'NO'?!",
+        choices=[
+            ("I love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!!", "overjoyed"),
+            ("Never seen it.", "* TRAVESTY! Binge all four seasons right now or face my wrath!!", "angry"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* If we fought an epic final boss right now, what weapon would you bring?!",
+        choices=[
+            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!!", "overjoyed"),
+            ("A sturdy shield.", "* Defensive?! BORING! Offense is the greatest defense, mew!!", "tongue"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* Do you think giant sparkly explosions count as high art?! (Hint: YES!)",
+        choices=[
+            ("Pure masterpiece!", "* FINALLY someone understands true aesthetics!! More explosions for all!!", "laughing"),
+            ("Too loud and bright.", "* GAH! You have zero taste in theatrical pyrotechnics!!", "angry"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* What's the battle theme song playing in your head right now?! Sing it loud!",
+        choices=[
+            ("Something epic!", "* Ooh, I hear the trumpets and bass drops from here!! Rock on, mew!!", "singing"),
+            ("Pure silence.", "* Silence?! How do you even fight without background hype music?!", "shocked"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* If you were a ghost, which plushie body would you possess?! Choose wisely!",
+        choices=[
+            ("A cute cat doll!", "* Hey! Don't steal my look! Though feline aesthetics are supreme!", "peace_sign"),
+            ("Giant teddy bear.", "* Haha! Big, slow, and squishy! You'd make a great shield for me!", "laughing"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* Video games or anime tonight?! You better pick something with high drama!",
+        choices=[
+            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!!", "overjoyed"),
+            ("Anime marathon!", "* Stock up on popcorn and get ready to cry during the emotional climax!!", "peace_sign"),
+        ],
+        category="fun",
+    ),
+    QuestionItem(
+        question="* Do you think heart-shaped glitter bombs should be standard issue?! I do!",
+        choices=[
+            ("Mandatory worldwide!", "* YES! When I rule the world, everyone gets glitter ordnance!", "laughing"),
+            ("Too much mess.", "* You can NEVER have too much glitter! It builds character!!", "tongue"),
+        ],
+        category="fun",
+    ),
+
+    # Advices
+    QuestionItem(
+        question="* Hey, dummy! Have you had any water today?! Dehydrated minions are useless!",
+        choices=[
+            ("Just drank some!", "* Good! Hydrated minions work with peak efficiency, mew!", "peace_sign"),
+            ("Oops, forgot...", "* GO DRINK SOME RIGHT NOW! Don't make me splash you with lasers!!", "angry"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Check your posture right now! Sit up straight like a fierce warrior, mew!",
+        choices=[
+            ("Straightened up!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
+            ("I like slouching.", "* Stop curling like a boiled shrimp! Your spine is crying for mercy!!", "shocked"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Blink your eyes! Staring at the screen like a zombie will fry your retinas!",
+        choices=[
+            ("Blinked three times!", "* Good! Retinas preserved for another grueling battle!", "peace_sign"),
+            ("My eyes are fine.", "* They look like dry marbles! Blink before they roll out of your skull!!", "angry"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Have you stretched your shoulders yet?! Don't stiffen up like a wooden dummy!",
+        choices=[
+            ("Just stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "overjoyed"),
+            ("Too stiff to move.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* When was the last time you ate something healthy?! Candy doesn't count!",
+        choices=[
+            ("Ate a good meal!", "* Excellent! Fuel the vessel so you can fight another day!", "peace_sign"),
+            ("Surviving on snacks.", "* Junk food?! Even my plush stomach is churning in horror! Go eat!!", "shocked"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Go look away from the monitor for twenty seconds! Rest those peepers!",
+        choices=[
+            ("Looking away now!", "* Good! Let the distant horizon refresh your optical sensors, mew!", "wistful"),
+            ("Too glued to work!", "* The screen isn't going anywhere, dummy! Twenty seconds won't kill you!!", "tongue"),
+        ],
+        category="advices",
+    ),
+    QuestionItem(
+        question="* Are you taking enough breaks?! Overworking ruins your battle readiness!",
+        choices=[
+            ("Taking breaks!", "* Smart! Rest is a tactical component of supreme victory!", "peace_sign"),
+            ("Nonstop grind!", "* Burnout is for rookies! Rest five minutes or face a tactical timeout!!", "angry"),
+        ],
+        category="advices",
+    ),
+
+    # Motivations
+    QuestionItem(
+        question="* Feeling overwhelmed?! Remember: a true magical girl NEVER surrenders!",
+        choices=[
+            ("I won't give up!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "overjoyed"),
+            ("It's pretty tough...", "* Tough times build elite warriors! I believe in you... don't make me repeat it!!", "embarrassed"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* You're not thinking of quitting now, are you?! Not on my watch, dummy!",
+        choices=[
+            ("Still fighting!", "* HAW! That's the determination I expect from my number one minion!!", "laughing"),
+            ("Losing motivation...", "* Borrow some of my boiling fury then! Stand tall and finish it!!", "angry"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Put some boiling fury into your work! Smash through that task like a boss!",
+        choices=[
+            ("Fired up now!!", "* YES!! Burn with passion and obliterate every obstacle in your path!!", "overjoyed"),
+            ("Need some calm.", "* Then channel cool focus! A master swordsman strikes with precision!", "wistful"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Take a deep breath! You've got this... not that I'm cheering for you or anything!",
+        choices=[
+            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot!!", "embarrassed"),
+            ("Needed that breath.", "* Hmph! See? A clear mind makes quick work of any enemy!", "peace_sign"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Even if today is exhausting, you're doing great! Keep your chin up, mew!",
+        choices=[
+            ("Doing my best!", "* And your best is more than enough! Keep walking forward proudly!!", "peace_sign"),
+            ("Feeling exhausted.", "* Rest when you're done, champion. You've earned every bit of peace!", "wistful"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Channel your inner boss monster! Show this day who's really in charge!",
+        choices=[
+            ("I am in charge!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
+            ("The day is winning.", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "overjoyed"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Every mistake is just training for the final battle! Keep pushing, mew!",
+        choices=[
+            ("Learning & growing!", "* That's how legends are born! Every setback is just XP in disguise!!", "peace_sign"),
+            ("Hate making mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "overjoyed"),
+        ],
+        category="motivations",
+    ),
+]
+
+QUESTION_DIALOGUE_LINES: list[str] = [item.question for item in QUESTION_ITEMS]
+
+
 DIALOGUE_LINES: dict[str, list[str]] = {
     # Idle / general thoughts during resting pauses (defaults to Variant 1; dynamically chosen by day)
     "idle": IDLE_DIALOGUE_VARIANTS[0],
+    # Question / advice / motivation variant pool
+    "question": QUESTION_DIALOGUE_LINES,
     # Startled by a click
     "shocked": [
         "* MEW!?",
@@ -1234,6 +1567,7 @@ class DialogueOverlay(QWidget):
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setMouseTracking(True)
 
         self._font_family = font_family
         self._box_src: QImage | None = None
@@ -1259,6 +1593,13 @@ class DialogueOverlay(QWidget):
         self._last_pet_x: float = 0.0
         self._last_pet_y: float = 0.0
 
+        # Choices / question answering state
+        self._choices: list[tuple[str, str, str | None]] = []
+        self._choice_rects: list[QRect] = []
+        self._hovered_choice_idx: int | None = None
+        self._on_chosen_callback = None
+        self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
+
         self._font = QFont(self._font_family)
         self._font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
         self._font.setStyleStrategy(QFont.NoAntialias)
@@ -1271,6 +1612,33 @@ class DialogueOverlay(QWidget):
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self.dismiss)
         self._skippable = True
+        self._auto_dismiss = True
+
+    def _create_soul_heart_pixmap(self) -> QPixmap:
+        """Create a crisp pixel-art Deltarune red soul heart pixmap."""
+        grid = [
+            " 11   11 ",
+            "1111 1111",
+            "111111111",
+            "111111111",
+            " 1111111 ",
+            "  11111  ",
+            "   111   ",
+            "    1    ",
+        ]
+        h = len(grid)
+        w = len(grid[0])
+        scale = max(1, round(self._scale))
+        img = QImage(w * scale, h * scale, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        red = QColor(255, 0, 64, 255).rgba()
+        for y, row in enumerate(grid):
+            for x, c in enumerate(row):
+                if c == '1':
+                    for sy in range(scale):
+                        for sx in range(scale):
+                            img.setPixel(x * scale + sx, y * scale + sy, red)
+        return QPixmap.fromImage(img)
 
     def is_active(self) -> bool:
         """True if a dialogue line is actively being displayed or typed."""
@@ -1280,13 +1648,41 @@ class DialogueOverlay(QWidget):
         """True if the dialogue bubble can be fast-forwarded or dismissed by clicks."""
         return self._skippable
 
-    def say(self, text: str, pet_x: float, pet_y: float, queue: list[str] | None = None, skippable: bool = True) -> None:
+    def ask(self, text: str, choices: list[tuple[str, str, str | None]], pet_x: float, pet_y: float,
+            on_chosen) -> None:
+        """Start a new question dialogue bubble with interactive choices."""
+        self._skippable = True
+        self._auto_dismiss = True
+        self._queue.clear()
+        self._choices = list(choices)
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self._on_chosen_callback = on_chosen
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+        self._display_text(text, pet_x, pet_y)
+
+    def say(
+        self,
+        text: str,
+        pet_x: float,
+        pet_y: float,
+        queue: list[str] | None = None,
+        skippable: bool = True,
+        auto_dismiss: bool = True,
+    ) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
         queue: optional list of additional messages to display sequentially after this one.
         skippable: whether clicking can advance or dismiss this dialogue.
+        auto_dismiss: whether the bubble automatically closes after being read.
         """
+        self._choices.clear()
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self._on_chosen_callback = None
         self._skippable = skippable
+        self._auto_dismiss = auto_dismiss
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -1337,8 +1733,29 @@ class DialogueOverlay(QWidget):
         base_inner_w = round(84 * scale)
         base_inner_h = round(19 * scale)
 
-        req_inner_w = max_text_w + pad_x * 2
-        req_inner_h = total_text_h + pad_y * 2
+        # Calculate choice block dimensions
+        choices_w = 0
+        choices_h = 0
+        pad_choices_top = round(5 * scale) if self._choices else 0
+        self._choice_rects.clear()
+
+        if self._choices:
+            heart_w = self._soul_heart_pix.width() if self._soul_heart_pix else 12
+            heart_gap = 4
+            prefix_w = heart_w + heart_gap
+            choice_widths = [prefix_w + fm.horizontalAdvance(c[0]) for c in self._choices]
+            choice_gap = 14
+            total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
+
+            if total_inline_w <= DIALOGUE_MAX_WIDTH_PX + 20:
+                choices_w = total_inline_w
+                choices_h = self._line_h
+            else:
+                choices_w = max(choice_widths, default=0)
+                choices_h = self._line_h * len(self._choices) + 2 * (len(self._choices) - 1)
+
+        req_inner_w = max(max_text_w, choices_w) + pad_x * 2
+        req_inner_h = total_text_h + (choices_h + pad_choices_top if self._choices else 0) + pad_y * 2
 
         extra_w = max(0, req_inner_w - base_inner_w)
         extra_h = max(0, req_inner_h - base_inner_h)
@@ -1378,8 +1795,31 @@ class DialogueOverlay(QWidget):
         p.end()
 
         actual_inner_h = box_h - round(14 * scale)
-        self._text_start_y = round(7 * scale) + (actual_inner_h - total_text_h) // 2 + fm.ascent()
+        total_content_h = total_text_h + (choices_h + pad_choices_top if self._choices else 0)
+        self._text_start_y = round(7 * scale) + (actual_inner_h - total_content_h) // 2 + fm.ascent()
         self._text_start_x = round(12 * scale) + pad_x
+
+        # Compute choice rects relative to text
+        if self._choices:
+            heart_w = self._soul_heart_pix.width() if self._soul_heart_pix else 12
+            heart_gap = 4
+            prefix_w = heart_w + heart_gap
+            choice_widths = [prefix_w + fm.horizontalAdvance(c[0]) for c in self._choices]
+            choice_gap = 14
+            total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
+
+            last_text_baseline_y = self._text_start_y + (len(self._lines) - 1) * self._line_h
+            cy = last_text_baseline_y + fm.descent() + pad_choices_top
+
+            if total_inline_w <= DIALOGUE_MAX_WIDTH_PX + 20:
+                cx = self._text_start_x
+                for i, cw in enumerate(choice_widths):
+                    self._choice_rects.append(QRect(cx, cy, cw + 4, self._line_h))
+                    cx += cw + choice_gap
+            else:
+                for i, cw in enumerate(choice_widths):
+                    row_y = cy + i * (self._line_h + 2)
+                    self._choice_rects.append(QRect(self._text_start_x, row_y, cw + 4, self._line_h))
 
         self._cached_bg = QPixmap.fromImage(bg_img)
         self.setFixedSize(box_w, box_h)
@@ -1457,13 +1897,25 @@ class DialogueOverlay(QWidget):
             self.update()
         else:
             self._type_timer.stop()
-            hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-            self._hold_timer.start(round(hold_s * 1000))
+            if self._choices:
+                if self._auto_dismiss:
+                    self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
+            else:
+                if self._auto_dismiss:
+                    hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                    self._hold_timer.start(round(hold_s * 1000))
+            self.update()
 
     def dismiss(self, clear_queue: bool = False) -> None:
         """Hide and clear the dialogue overlay, or advance to the next queued message."""
         if clear_queue:
             self._queue.clear()
+
+        self._choices.clear()
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self._on_chosen_callback = None
+        self.setCursor(Qt.ArrowCursor)
 
         if self._queue:
             next_text = self._queue.pop(0)
@@ -1485,20 +1937,79 @@ class DialogueOverlay(QWidget):
             self._visible_chars = self._total_chars
             self._char_delay_ticks = 0
             self._type_timer.stop()
-            hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-            self._hold_timer.start(round(hold_s * 1000))
+            if self._choices:
+                self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
+            else:
+                hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                self._hold_timer.start(round(hold_s * 1000))
             self.update()
-        else:
+        elif not self._choices:
             self.dismiss()
 
+    def _choose_option(self, idx: int) -> None:
+        """Player clicked a choice option: invoke callback with reaction text and anim."""
+        if not self._choices or idx < 0 or idx >= len(self._choices):
+            return
+        choice_label, reaction_text, reaction_anim = self._choices[idx]
+        self._choices.clear()
+        self._choice_rects.clear()
+        self._hovered_choice_idx = None
+        self.setCursor(Qt.ArrowCursor)
+        callback = self._on_chosen_callback
+        self._on_chosen_callback = None
+        if callback:
+            callback(reaction_text, reaction_anim)
+
+    def mouseMoveEvent(self, event) -> None:
+        """Track mouse hover across choice options to highlight selection with Deltarune soul heart."""
+        if not self._active or not self._choices or self._visible_chars < self._total_chars:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.pos()
+        hovered = None
+        for i, r in enumerate(self._choice_rects):
+            if r.contains(pos):
+                hovered = i
+                break
+        if hovered != self._hovered_choice_idx:
+            self._hovered_choice_idx = hovered
+            if hovered is not None:
+                self.setCursor(Qt.PointingHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+            self.update()
+        event.accept()
+
+    def leaveEvent(self, event) -> None:
+        """Reset choice hover and cursor when mouse leaves the dialogue bubble."""
+        if self._hovered_choice_idx is not None:
+            self._hovered_choice_idx = None
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:
-        """Left-click fast-forwards typewriter or dismisses dialogue."""
-        if not self._skippable:
+        """Left-click fast-forwards typewriter or selects a choice option."""
+        if not self._skippable or not self._active:
             event.accept()
             return
-        if event.button() == Qt.LeftButton and DIALOGUE_CLICK_TO_DISMISS:
-            self.advance_or_dismiss()
-            event.accept()
+        if event.button() == Qt.LeftButton:
+            if self._visible_chars < self._total_chars:
+                self.advance_or_dismiss()
+                event.accept()
+                return
+            if self._choices:
+                pos = event.pos()
+                for i, r in enumerate(self._choice_rects):
+                    if r.contains(pos):
+                        self._choose_option(i)
+                        event.accept()
+                        return
+                event.accept()
+                return
+            if DIALOGUE_CLICK_TO_DISMISS:
+                self.advance_or_dismiss()
+                event.accept()
         else:
             super().mousePressEvent(event)
 
@@ -1530,7 +2041,771 @@ class DialogueOverlay(QWidget):
                 chars_left = 0
             ty += self._line_h
 
+        # Draw choices if question typing is complete
+        if self._choices and self._visible_chars >= self._total_chars:
+            fm = QFontMetrics(self._font)
+            heart_w = self._soul_heart_pix.width() if self._soul_heart_pix else 12
+            heart_h = self._soul_heart_pix.height() if self._soul_heart_pix else 10
+            heart_gap = 4
+            prefix_w = heart_w + heart_gap
+
+            for i, (label, _, _) in enumerate(self._choices):
+                if i >= len(self._choice_rects):
+                    break
+                rect = self._choice_rects[i]
+                is_hovered = (self._hovered_choice_idx == i)
+
+                # Deltarune soul heart on hovered option
+                if is_hovered and self._soul_heart_pix:
+                    hx = rect.x()
+                    hy = rect.y() + (rect.height() - heart_h) // 2
+                    painter.drawPixmap(hx, hy, self._soul_heart_pix)
+
+                # Yellow highlight on hovered, white on unhovered
+                if is_hovered:
+                    painter.setPen(QColor(255, 255, 0))
+                else:
+                    painter.setPen(QColor(255, 255, 255))
+
+                tx = rect.x() + prefix_w
+                ty_choice = rect.y() + fm.ascent()
+                painter.drawText(tx, ty_choice, label)
+
         painter.end()
+
+
+class ChatTextEdit(QPlainTextEdit):
+    """A QPlainTextEdit that wraps lines, emits returnPressed on Enter,
+    supports Shift+Enter for newlines, and emits escapePressed on Esc."""
+
+    returnPressed = pyqtSignal()
+    escapePressed = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(0)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Escape:
+            self.escapePressed.emit()
+            event.accept()
+            return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & Qt.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                self.returnPressed.emit()
+                event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def text(self) -> str:
+        return self.toPlainText()
+
+    def setText(self, text: str) -> None:
+        self.setPlainText(text)
+
+
+ChatLineEdit = ChatTextEdit
+
+
+class ChatInputOverlay(QWidget):
+    """A frameless, translucent text input bar styled after Deltarune dialogue boxes."""
+
+    submitted = pyqtSignal(str, bool)
+    cancelled = pyqtSignal()
+
+    def __init__(self, font_family: str, box_png_path: Path, parent: QWidget | None = None) -> None:
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        self._font_family = font_family
+        self._box_src: QImage | None = None
+        if box_png_path.exists():
+            img = QImage(str(box_png_path))
+            if not img.isNull():
+                self._box_src = img.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+
+        self._scale = DIALOGUE_BOX_SCALE
+        self._cached_bg: QPixmap | None = None
+        self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
+
+        self._base_w = round(320 * self._scale)
+        self._base_h = round(36 * self._scale)
+        self._last_pet_x: float | None = None
+        self._last_pet_y: float | None = None
+
+        self._eye_off_icon: QIcon | None = None
+        self._eye_on_icon: QIcon | None = None
+        self._load_eye_icons()
+
+        self._init_ui()
+
+    def _create_soul_heart_pixmap(self) -> QPixmap:
+        """Create a crisp pixel-art Deltarune red soul heart pixmap."""
+        grid = [
+            " 11   11 ",
+            "1111 1111",
+            "111111111",
+            "111111111",
+            " 1111111 ",
+            "  11111  ",
+            "   111   ",
+            "    1    ",
+        ]
+        h = len(grid)
+        w = len(grid[0])
+        scale = max(1, round(self._scale))
+        img = QImage(w * scale, h * scale, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        red = QColor(255, 0, 64, 255).rgba()
+        for y, row in enumerate(grid):
+            for x, c in enumerate(row):
+                if c == '1':
+                    for sy in range(scale):
+                        for sx in range(scale):
+                            img.setPixel(x * scale + sx, y * scale + sy, red)
+        return QPixmap.fromImage(img)
+
+    def _load_eye_icons(self) -> None:
+        """Load and scale custom eye sprites for the vision toggle button."""
+        icon_h = max(14, round(11 * self._scale))
+        if EYE_OFF_PATH.exists():
+            pix_off = QPixmap(str(EYE_OFF_PATH))
+            if not pix_off.isNull():
+                scaled_off = pix_off.scaledToHeight(icon_h, Qt.SmoothTransformation)
+                self._eye_off_icon = QIcon(scaled_off)
+        if EYE_ON_PATH.exists():
+            pix_on = QPixmap(str(EYE_ON_PATH))
+            if not pix_on.isNull():
+                scaled_on = pix_on.scaledToHeight(icon_h, Qt.SmoothTransformation)
+                self._eye_on_icon = QIcon(scaled_on)
+
+    def _on_vision_toggled(self, checked: bool) -> None:
+        if checked:
+            if self._eye_on_icon and not self._eye_on_icon.isNull():
+                self._vision_btn.setIcon(self._eye_on_icon)
+                self._vision_btn.setText("")
+            else:
+                self._vision_btn.setIcon(QIcon())
+                self._vision_btn.setText("👁️")
+            self._vision_btn.setToolTip("Screen Vision: ON (Pink will analyze your screen)")
+        else:
+            if self._eye_off_icon and not self._eye_off_icon.isNull():
+                self._vision_btn.setIcon(self._eye_off_icon)
+                self._vision_btn.setText("")
+            else:
+                self._vision_btn.setIcon(QIcon())
+                self._vision_btn.setText("👁️")
+            self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
+
+    def _init_ui(self) -> None:
+        font = QFont(self._font_family)
+        font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
+        font.setStyleStrategy(QFont.NoAntialias)
+
+        layout = QHBoxLayout(self)
+        pad_h = round(16 * self._scale)
+        pad_v = round(7 * self._scale)
+        layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
+        layout.setSpacing(6)
+
+        # Soul heart indicator
+        self._heart_label = QLabel(self)
+        if self._soul_heart_pix:
+            self._heart_label.setPixmap(self._soul_heart_pix)
+            self._heart_label.setFixedSize(self._soul_heart_pix.size())
+        self._heart_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._heart_label, 0, Qt.AlignTop)
+
+        # Asterisk
+        self._star_label = QLabel("*", self)
+        self._star_label.setFont(font)
+        self._star_label.setStyleSheet("color: #FFFFFF;")
+        layout.addWidget(self._star_label, 0, Qt.AlignTop)
+
+        # Input text field with line wrapping
+        self._text_edit = ChatTextEdit(self)
+        self._line_edit = self._text_edit  # alias
+        self._text_edit.setFont(font)
+        self._text_edit.setPlaceholderText("Talk to Pink...")
+        self._text_edit.setToolTip("Press Enter to send (Shift+Enter for newline)")
+        pal = self._text_edit.palette()
+        pal.setColor(QPalette.PlaceholderText, QColor(140, 140, 140))
+        self._text_edit.setPalette(pal)
+        self._text_edit.setStyleSheet(
+            "QPlainTextEdit {"
+            "  background: transparent;"
+            "  border: none;"
+            "  color: #FFFFFF;"
+            "  selection-background-color: #FFFF00;"
+            "  selection-color: #000000;"
+            "  padding: 0px;"
+            "}"
+            "QScrollBar:vertical {"
+            "  background: transparent;"
+            "  width: 4px;"
+            "  margin: 0px;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            "  background: #FFFF00;"
+            "  min-height: 10px;"
+            "  border-radius: 2px;"
+            "}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+            "  height: 0px;"
+            "}"
+        )
+        self._text_edit.returnPressed.connect(self._on_submit)
+        self._text_edit.escapePressed.connect(self.cancel)
+        self._text_edit.textChanged.connect(self._on_text_changed)
+        layout.addWidget(self._text_edit, stretch=1)
+
+        # Screen vision toggle button
+        self._vision_btn = QPushButton(self)
+        self._vision_btn.setFont(font)
+        self._vision_btn.setCursor(Qt.PointingHandCursor)
+        self._vision_btn.setCheckable(True)
+        self._vision_btn.setChecked(False)
+        self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
+        btn_h = round(18 * self._scale)
+        btn_w = round(20 * self._scale)
+        self._vision_btn.setFixedSize(btn_w, btn_h)
+        if self._eye_off_icon and not self._eye_off_icon.isNull():
+            self._vision_btn.setIcon(self._eye_off_icon)
+            self._vision_btn.setIconSize(QSize(15, 16))
+        else:
+            self._vision_btn.setText("👁️")
+        self._vision_btn.toggled.connect(self._on_vision_toggled)
+        self._vision_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #000000;"
+            "  color: #888888;"
+            "  border: 1px solid #555555;"
+            "  padding: 0px 3px;"
+            "}"
+            "QPushButton:hover {"
+            "  border: 1px solid #00FFFF;"
+            "}"
+            "QPushButton:checked {"
+            "  background-color: #003838;"
+            "  border: 1px solid #00FFFF;"
+            "}"
+        )
+        layout.addWidget(self._vision_btn, 0, Qt.AlignBottom)
+
+        # Send button
+        self._send_btn = QPushButton("Send", self)
+        self._send_btn.setFont(font)
+        self._send_btn.setCursor(Qt.PointingHandCursor)
+        self._send_btn.setFixedHeight(round(18 * self._scale))
+        self._send_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #000000;"
+            "  color: #FFFF00;"
+            "  border: 1px solid #FFFF00;"
+            "  padding: 0px 8px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #FFFF00;"
+            "  color: #000000;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #FFA500;"
+            "  color: #000000;"
+            "}"
+        )
+        self._send_btn.clicked.connect(self._on_submit)
+        layout.addWidget(self._send_btn, 0, Qt.AlignBottom)
+
+        # Close button
+        self._close_btn = QPushButton("×", self)
+        self._close_btn.setFont(font)
+        self._close_btn.setCursor(Qt.PointingHandCursor)
+        self._close_btn.setFixedHeight(round(18 * self._scale))
+        self._close_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: transparent;"
+            "  color: #888888;"
+            "  border: none;"
+            "  padding: 0px 4px;"
+            "  font-size: 14px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  color: #FF5555;"
+            "}"
+        )
+        self._close_btn.clicked.connect(self.cancel)
+        layout.addWidget(self._close_btn, 0, Qt.AlignBottom)
+
+        self.setFixedSize(self._base_w, self._base_h)
+        self._build_background(self._base_w, self._base_h)
+
+    def _on_text_changed(self) -> None:
+        doc = self._text_edit.document()
+        line_count = doc.lineCount()
+        clamped_lines = min(4, max(1, line_count))
+        fm = self._text_edit.fontMetrics()
+        line_step = fm.lineSpacing()
+        target_h = self._base_h + (clamped_lines - 1) * line_step
+        if line_count > 4:
+            self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        else:
+            self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        if self.height() != target_h:
+            self.setFixedSize(self._base_w, target_h)
+            self._build_background(self._base_w, target_h)
+            self.update_position()
+            self.update()
+
+    def _build_background(self, box_w: int, box_h: int) -> None:
+        scale = self._scale
+        c_l = round(14 * scale)
+        c_r = round(14 * scale)
+        c_t = round(12 * scale)
+        c_b = round(12 * scale)
+
+        bg_img = QImage(box_w, box_h, QImage.Format_ARGB32_Premultiplied)
+        bg_img.fill(Qt.transparent)
+        p = QPainter(bg_img)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, False)
+
+        if self._box_src is not None:
+            mid_w = box_w - c_l - c_r
+            mid_h = box_h - c_t - c_b
+
+            # Corners
+            p.drawImage(QRect(0, 0, c_l, c_t), self._box_src, QRect(0, 0, 14, 12))
+            p.drawImage(QRect(box_w - c_r, 0, c_r, c_t), self._box_src, QRect(94, 0, 14, 12))
+            p.drawImage(QRect(0, box_h - c_b, c_l, c_b), self._box_src, QRect(0, 21, 14, 12))
+            p.drawImage(QRect(box_w - c_r, box_h - c_b, c_r, c_b), self._box_src, QRect(94, 21, 14, 12))
+
+            # Edges
+            p.drawImage(QRect(c_l, 0, mid_w, c_t), self._box_src, QRect(14, 0, 80, 12))
+            p.drawImage(QRect(c_l, box_h - c_b, mid_w, c_b), self._box_src, QRect(14, 21, 80, 12))
+            p.drawImage(QRect(0, c_t, c_l, mid_h), self._box_src, QRect(0, 12, 14, 9))
+            p.drawImage(QRect(box_w - c_r, c_t, c_r, mid_h), self._box_src, QRect(94, 12, 14, 9))
+
+            # Center
+            p.drawImage(QRect(c_l, c_t, mid_w, mid_h), self._box_src, QRect(14, 12, 80, 9))
+        else:
+            p.fillRect(QRect(0, 0, box_w, box_h), QColor(0, 0, 0, 230))
+            p.setPen(QColor(255, 255, 255))
+            p.drawRect(0, 0, box_w - 1, box_h - 1)
+
+        p.end()
+        self._cached_bg = QPixmap.fromImage(bg_img)
+        self.setMask(QRegion(self._cached_bg.mask()))
+
+    def paintEvent(self, event) -> None:
+        if self._cached_bg is None:
+            return
+        painter = QPainter(self)
+        painter.setCompositionMode(QPainter.CompositionMode_Source)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.drawPixmap(0, 0, self._cached_bg)
+        painter.end()
+
+    def update_position(self, pet_x: float | None = None, pet_y: float | None = None) -> None:
+        if pet_x is not None:
+            self._last_pet_x = pet_x
+        if pet_y is not None:
+            self._last_pet_y = pet_y
+        if self._last_pet_x is None or self._last_pet_y is None:
+            return
+
+        area = QApplication.primaryScreen().availableGeometry()
+        w = self.width()
+        h = self.height()
+
+        screen_mid_x = area.x() + area.width() / 2.0
+        pet_center_x = self._last_pet_x + SPRITE_SIZE / 2.0
+
+        if pet_center_x < screen_mid_x:
+            target_x = self._last_pet_x + SPRITE_SIZE + DIALOGUE_SIDE_OFFSET_PX
+        else:
+            target_x = self._last_pet_x - w - DIALOGUE_SIDE_OFFSET_PX
+
+        head_center_y = self._last_pet_y + (SPRITE_SIZE * DIALOGUE_HEAD_Y_RATIO)
+        target_y = head_center_y - (h / 2.0)
+
+        min_x = float(area.x() + 4)
+        max_x = max(min_x, float(area.x() + area.width() - w - 4))
+        target_x = min(max(target_x, min_x), max_x)
+
+        min_y = float(area.y() + 4)
+        max_y = max(min_y, float(area.y() + area.height() - h - 4))
+        target_y = min(max(target_y, min_y), max_y)
+
+        self.move(round(target_x), round(target_y))
+
+    def open_at(self, pet_x: float, pet_y: float) -> None:
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+        self._text_edit.blockSignals(True)
+        self._text_edit.clear()
+        self._text_edit.blockSignals(False)
+        self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFixedSize(self._base_w, self._base_h)
+        self._build_background(self._base_w, self._base_h)
+        self.update_position(pet_x, pet_y)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self._text_edit.setFocus()
+
+    def cancel(self) -> None:
+        self.hide()
+        self.cancelled.emit()
+
+    def _on_submit(self) -> None:
+        text = self._text_edit.toPlainText().strip()
+        see_screen = self._vision_btn.isChecked()
+        self.hide()
+        self.submitted.emit(text, see_screen)
+
+
+def capture_screen_base64() -> str:
+    """Capture the primary screen and return a compressed JPEG as a base64 string."""
+    screen = QApplication.primaryScreen()
+    if screen is None:
+        return ""
+    pixmap = screen.grabWindow(0)
+    if pixmap.isNull():
+        return ""
+    # Downscale to max width 1280 to keep API payload fast and lightweight
+    if pixmap.width() > 1280:
+        pixmap = pixmap.scaledToWidth(1280, Qt.SmoothTransformation)
+
+    buffer = QBuffer()
+    buffer.open(QIODevice.WriteOnly)
+    pixmap.save(buffer, "JPEG", 75)
+    raw_bytes = bytes(buffer.data())
+    buffer.close()
+    return base64.b64encode(raw_bytes).decode("utf-8")
+
+
+class MemoryManager:
+    """Manages local session chat logs, long-term facts, and config/API key storage."""
+
+    def __init__(self, base_dir: Path) -> None:
+        self.base_dir = base_dir
+        self.memory_dir = base_dir / "memory"
+        self.sessions_dir = self.memory_dir / "sessions"
+        self.config_path = self.memory_dir / "config.json"
+        self.env_path = base_dir / ".env"
+        self.facts_path = self.memory_dir / "facts.json"
+
+        self._ensure_dirs()
+        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
+        self.history: list[dict[str, any]] = []
+        self._init_session_file()
+
+    def _ensure_dirs(self) -> None:
+        try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            self.sessions_dir.mkdir(parents=True, exist_ok=True)
+            if not self.facts_path.exists():
+                default_facts = {
+                    "user_name": "Dork",
+                    "notes": ["The user created Yellow's Pixel Buddies"],
+                }
+                self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not initialize memory directories/facts: %s", err)
+
+    def _init_session_file(self) -> None:
+        init_data = {
+            "session_id": self._session_id,
+            "started_at": datetime.datetime.now().isoformat(),
+            "messages": [],
+        }
+        try:
+            self.session_file.write_text(json.dumps(init_data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not initialize session file: %s", err)
+
+    def get_api_key(self) -> str:
+        """Retrieve Gemini API key from environment, .env file, or memory/config.json."""
+        env_key = os.environ.get("GEMINI_API_KEY", "").strip()
+        if env_key:
+            return env_key
+
+        if self.env_path.exists():
+            try:
+                for line in self.env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line.startswith("GEMINI_API_KEY="):
+                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if val:
+                            return val
+            except Exception:
+                pass
+
+        if self.config_path.exists():
+            try:
+                cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+                val = cfg.get("gemini_api_key", "").strip()
+                if val:
+                    return val
+            except Exception:
+                pass
+
+        return ""
+
+    def save_api_key(self, api_key: str) -> None:
+        """Save API key to both .env and memory/config.json."""
+        api_key = api_key.strip()
+        os.environ["GEMINI_API_KEY"] = api_key
+
+        env_lines = []
+        found = False
+        if self.env_path.exists():
+            try:
+                for line in self.env_path.read_text(encoding="utf-8").splitlines():
+                    if line.strip().startswith("GEMINI_API_KEY="):
+                        env_lines.append(f'GEMINI_API_KEY="{api_key}"')
+                        found = True
+                    else:
+                        env_lines.append(line)
+            except Exception:
+                pass
+        if not found:
+            env_lines.append(f'GEMINI_API_KEY="{api_key}"')
+        try:
+            self.env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not update .env: %s", err)
+
+        cfg = {}
+        if self.config_path.exists():
+            try:
+                cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        cfg["gemini_api_key"] = api_key
+        try:
+            self.config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not update config.json: %s", err)
+
+    def get_long_term_facts(self) -> str:
+        """Read facts.json to inject into system prompt."""
+        if self.facts_path.exists():
+            try:
+                facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
+                lines = []
+                if "user_name" in facts:
+                    lines.append(f"- User preferred name: {facts['user_name']}")
+                if "notes" in facts and isinstance(facts["notes"], list):
+                    for n in facts["notes"]:
+                        lines.append(f"- {n}")
+                return "\n".join(lines)
+            except Exception:
+                pass
+        return ""
+
+    def record_turn(self, user_text: str, pink_response: str, anim: str, had_screen: bool = False) -> None:
+        """Record turn in history and persist to session file."""
+        turn = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "status": "ok",
+            "user": user_text,
+            "pink": pink_response,
+            "anim": anim,
+            "had_screen": had_screen,
+        }
+        self.history.append(turn)
+
+        try:
+            data = json.loads(self.session_file.read_text(encoding="utf-8"))
+            data["messages"].append(turn)
+            self.session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not record turn to session file: %s", err)
+
+    def record_error(
+        self,
+        user_text: str,
+        error_msg: str,
+        spoken_text: str | None = None,
+        anim: str = "burnt",
+        had_screen: bool = False,
+    ) -> None:
+        """Record an error turn in history and persist to session file with error formatting."""
+        pink_entry = spoken_text if spoken_text else f"[Error: {error_msg}]"
+        turn = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "status": "error",
+            "user": user_text,
+            "pink": f"[ERROR] {pink_entry}",
+            "error": error_msg,
+            "anim": anim,
+            "had_screen": had_screen,
+        }
+        self.history.append(turn)
+
+        try:
+            data = json.loads(self.session_file.read_text(encoding="utf-8"))
+            data["messages"].append(turn)
+            self.session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not record error turn to session file: %s", err)
+
+    def clear_current_session(self) -> None:
+        """Reset current in-memory history and start a fresh session file."""
+        self.history.clear()
+        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
+        self._init_session_file()
+
+
+class GeminiWorkerThread(QThread):
+    response_ready = pyqtSignal(str, str)  # (spoken_text, anim_name)
+    error_occurred = pyqtSignal(str)       # (error_message)
+
+    def __init__(
+        self,
+        api_key: str,
+        user_prompt: str,
+        system_instruction: str,
+        history: list[dict[str, any]],
+        screenshot_b64: str | None = None,
+        model_name: str = GEMINI_MODEL,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.api_key = api_key
+        self.user_prompt = user_prompt
+        self.system_instruction = system_instruction
+        self.history = history
+        self.screenshot_b64 = screenshot_b64
+        self.model_name = model_name
+
+    def run(self) -> None:
+        models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
+        last_error = ""
+
+        for idx, model in enumerate(models_to_try):
+            is_last = (idx == len(models_to_try) - 1)
+            try:
+                spoken_text, anim = self._call_gemini(model)
+                self.response_ready.emit(spoken_text, anim)
+                return
+            except requests.exceptions.HTTPError as http_err:
+                status_code = http_err.response.status_code if http_err.response is not None else 0
+                resp_text = http_err.response.text if http_err.response is not None else str(http_err)
+                last_error = f"HTTP {status_code}: {resp_text[:120]}"
+                # Fallback on model not found (404), bad model parameter (400), rate limit (429), or server issues (500, 502, 503)
+                if status_code in (400, 404, 429, 500, 502, 503) and not is_last:
+                    log.warning("Model %s returned HTTP %s, trying fallback...", model, status_code)
+                    continue
+                else:
+                    self.error_occurred.emit(last_error)
+                    return
+            except requests.exceptions.Timeout:
+                last_error = f"Model {model} request timed out."
+                if not is_last:
+                    log.warning("Model %s timed out, trying fallback...", model)
+                    continue
+                self.error_occurred.emit("Request timed out. Google Gemini servers might be busy!")
+                return
+            except Exception as err:
+                last_error = f"Network error: {err}"
+                if not is_last:
+                    log.warning("Model %s had network error (%s), trying fallback...", model, err)
+                    continue
+                self.error_occurred.emit(last_error)
+                return
+
+        self.error_occurred.emit(f"All models failed. Last error: {last_error[:120]}")
+
+    def _call_gemini(self, model: str) -> tuple[str, str]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        headers = {"Content-Type": "application/json"}
+
+        contents = []
+
+        # Recent conversation turns (last 6 turns, text only)
+        for turn in self.history[-6:]:
+            u_text = turn.get("user", "")
+            p_text = turn.get("pink", "")
+            if u_text:
+                contents.append({"role": "user", "parts": [{"text": u_text}]})
+            if p_text:
+                contents.append({"role": "model", "parts": [{"text": p_text}]})
+
+        # Current user turn
+        current_parts = [{"text": self.user_prompt}]
+        if self.screenshot_b64:
+            current_parts.append({
+                "inlineData": {
+                    "mimeType": "image/jpeg",
+                    "data": self.screenshot_b64,
+                }
+            })
+        contents.append({"role": "user", "parts": current_parts})
+
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": self.system_instruction}]
+            },
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0.85,
+                "maxOutputTokens": 200,
+            }
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=GEMINI_TIMEOUT_S)
+        resp.raise_for_status()
+
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise ValueError("No response generated by Gemini.")
+
+        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+        if not raw_text:
+            raise ValueError("Empty response received from Gemini.")
+
+        # Parse animation tag e.g. [anim: peace_sign]
+        anim = "peace_sign"
+        anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", raw_text)
+        if anim_match:
+            anim = anim_match.group(1).lower()
+            clean_text = raw_text[:anim_match.start()] + raw_text[anim_match.end():]
+        else:
+            clean_text = raw_text
+
+        clean_text = clean_text.strip()
+        # Clean any markdown bolding like **text** into clean text for pixel font
+        clean_text = re.sub(r"\*\*(.*?)\*\*", r"\1", clean_text)
+
+        # Ensure Deltarune formatting: if it doesn't start with "* ", prefix it
+        lines = []
+        for line in clean_text.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if not line_str.startswith("*"):
+                lines.append("* " + line_str)
+            elif line_str.startswith("*") and not line_str.startswith("* "):
+                lines.append("* " + line_str[1:].lstrip())
+            else:
+                lines.append(line_str)
+
+        formatted_text = "\n".join(lines) if lines else ("* " + clean_text)
+        return formatted_text, anim
 
 
 @dataclass
@@ -2073,6 +3348,11 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_overlay = BombLaserOverlay(bank)
         self._dialogue_overlay = DialogueOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._dialogue_overlay.dismissed.connect(self._on_dialogue_dismissed)
+        self._chat_input = ChatInputOverlay(self._font_family, DIALOGUE_BOX_PATH)
+        self._chat_input.submitted.connect(self._on_chat_submitted)
+        self._chat_input.cancelled.connect(self._on_chat_cancelled)
+        self._memory = MemoryManager(_base_dir)
+        self._gemini_thread: GeminiWorkerThread | None = None
         self._is_ghost_talking: bool = False
         self._ghost_aura_cache: dict[int, QPixmap] = {}
         self._dialogue_enabled: bool = DIALOGUE_ENABLED
@@ -2080,6 +3360,7 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_action: QAction | None = None
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
+        self._last_question_dialogue_time: float = -9999.0
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -2168,6 +3449,10 @@ class YellowsPixelBuddies(QWidget):
         self._overlay_timer.setInterval(EXPLOSION_FRAME_INTERVAL_MS)
         self._overlay_timer.timeout.connect(self._advance_overlay_frame)
 
+        self._single_click_timer = QTimer(self)    # distinguishes single click from double click to chat
+        self._single_click_timer.setSingleShot(True)
+        self._single_click_timer.timeout.connect(self._on_single_click)
+
         # --- window switch monitoring ------------------------------------------
         self._last_foreground_hwnd: int | None = None
         self._last_luminance: float = 128.0
@@ -2184,6 +3469,7 @@ class YellowsPixelBuddies(QWidget):
         self._tray_icon: QSystemTrayIcon | None = None
         self._startup_action: QAction | None = None
         self._bring_action: QAction | None = None
+        self._talk_tray_action: QAction | None = None
         self._bomb_action: QAction | None = None
         self._bomb_force_action: QAction | None = None
         self._bomb_chance_action: QWidgetAction | None = None
@@ -2200,6 +3486,43 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_clicked: bool = False
 
         self._init_tray_icon()
+        self._install_exception_hook()
+
+    def _install_exception_hook(self) -> None:
+        """Global exception hook to catch uncaught runtime exceptions and trigger burnt state + explosion."""
+        prev_excepthook = sys.excepthook
+
+        def _hook(exc_type, exc_value, exc_tb):
+            if issubclass(exc_type, KeyboardInterrupt):
+                prev_excepthook(exc_type, exc_value, exc_tb)
+                return
+            log.error("Uncaught exception: %s", exc_value, exc_info=(exc_type, exc_value, exc_tb))
+            err_msg = str(exc_value) or exc_type.__name__
+            spoken_err = f"* KABOOM?! Internal error short-circuited:\n* {err_msg[:80]}"
+            try:
+                self._memory.record_error("[Runtime Exception]", err_msg, spoken_text=spoken_err, anim="burnt")
+            except Exception:
+                pass
+            QTimer.singleShot(0, lambda: self._trigger_error_burnt(spoken_err))
+            prev_excepthook(exc_type, exc_value, exc_tb)
+
+        sys.excepthook = _hook
+
+        if hasattr(sys, "unraisablehook"):
+            prev_unraisablehook = sys.unraisablehook
+
+            def _unraisable_hook(unraisable):
+                log.error("Unraisable exception: %s", unraisable.exc_value)
+                err_msg = str(unraisable.exc_value) or unraisable.exc_type.__name__
+                spoken_err = f"* KABOOM?! Background error:\n* {err_msg[:80]}"
+                try:
+                    self._memory.record_error("[Background Exception]", err_msg, spoken_text=spoken_err, anim="burnt")
+                except Exception:
+                    pass
+                QTimer.singleShot(0, lambda: self._trigger_error_burnt(spoken_err))
+                prev_unraisablehook(unraisable)
+
+            sys.unraisablehook = _unraisable_hook
 
     # ------------------------------------------------------------------ start
     def start(self) -> None:
@@ -2257,8 +3580,27 @@ class YellowsPixelBuddies(QWidget):
             self._show_overlay_frame(self._overlay_pixmap)
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.update_position(self._x, self._y)
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.update_position(self._x, self._y)
 
-    def _say(self, category_or_text: str, force: bool = False, extra_queue: list[str] | None = None, skippable: bool = True) -> None:
+    def _is_dialogue_convo_active(self) -> bool:
+        """Returns True if Pink is actively conversing, typing, showing dialogue, or waiting for AI."""
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            return True
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            return True
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            return True
+        return False
+
+    def _say(
+        self,
+        category_or_text: str,
+        force: bool = False,
+        extra_queue: list[str] | None = None,
+        skippable: bool = True,
+        auto_dismiss: bool = True,
+    ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
@@ -2268,20 +3610,43 @@ class YellowsPixelBuddies(QWidget):
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
-        if category_or_text == "idle":
-            today_idx = get_idle_variant_for_date()
-            if random.random() < DIALOGUE_IDLE_STEAL_CHANCE and len(IDLE_DIALOGUE_VARIANTS) > 1:
-                other_indices = [i for i in range(len(IDLE_DIALOGUE_VARIANTS)) if i != today_idx]
-                chosen_idx = random.choice(other_indices)
-            else:
-                chosen_idx = today_idx
-            lines = IDLE_DIALOGUE_VARIANTS[chosen_idx]
-            if not lines:
+        if category_or_text in ("idle", "question"):
+            now = time.perf_counter()
+            can_ask_question = (now - getattr(self, "_last_question_dialogue_time", -9999.0) >= DIALOGUE_QUESTION_COOLDOWN_S)
+            is_question = (category_or_text == "question"
+                           or (category_or_text == "idle"
+                               and can_ask_question
+                               and random.random() < DIALOGUE_QUESTION_CHANCE
+                               and bool(QUESTION_ITEMS)))
+            if is_question and QUESTION_ITEMS:
+                self._last_question_dialogue_time = now
+                candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]
+                q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
+                self._last_dialogue = q_item.question
+                if q_item.question in GHOST_DIALOGUE_LINES:
+                    self._start_ghost_speech()
+                self._dialogue_overlay.ask(
+                    q_item.question,
+                    q_item.choices,
+                    self._x,
+                    self._y,
+                    on_chosen=self._on_question_answered,
+                )
                 return
-            choices = [l for l in lines if l != self._last_dialogue] if len(lines) > 1 else lines
-            line = random.choice(choices)
-            if line in GHOST_DIALOGUE_LINES:
-                self._start_ghost_speech()
+            else:
+                today_idx = get_idle_variant_for_date()
+                if random.random() < DIALOGUE_IDLE_STEAL_CHANCE and len(IDLE_DIALOGUE_VARIANTS) > 1:
+                    other_indices = [i for i in range(len(IDLE_DIALOGUE_VARIANTS)) if i != today_idx]
+                    chosen_idx = random.choice(other_indices)
+                else:
+                    chosen_idx = today_idx
+                lines = IDLE_DIALOGUE_VARIANTS[chosen_idx]
+                if not lines:
+                    return
+                choices = [l for l in lines if l != self._last_dialogue] if len(lines) > 1 else lines
+                line = random.choice(choices)
+                if line in GHOST_DIALOGUE_LINES:
+                    self._start_ghost_speech()
         elif category_or_text in DIALOGUE_LINES:
             lines = DIALOGUE_LINES[category_or_text]
             if not lines:
@@ -2292,6 +3657,8 @@ class YellowsPixelBuddies(QWidget):
             line = category_or_text
             if line in GHOST_DIALOGUE_LINES:
                 self._start_ghost_speech()
+        elif force:
+            line = "* " + category_or_text if not category_or_text.startswith("* ") else category_or_text
         else:
             # Sprite state or category has no dialogue lines -> do not show dialogue
             return
@@ -2311,7 +3678,23 @@ class YellowsPixelBuddies(QWidget):
             skippable = False
 
         self._last_dialogue = line
-        self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue, skippable=skippable)
+        self._dialogue_overlay.say(
+            line,
+            self._x,
+            self._y,
+            queue=extra_queue,
+            skippable=skippable,
+            auto_dismiss=auto_dismiss,
+        )
+
+    def _on_question_answered(self, reaction_text: str, reaction_anim: str | None) -> None:
+        """Handle player's answer to Pink's question: play reaction animation and speak response."""
+        self._last_question_dialogue_time = time.perf_counter()
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        if reaction_anim and self._can_play(reaction_anim):
+            self._play(reaction_anim)
+        self._say(reaction_text, force=True)
 
     def _start_ghost_speech(self) -> None:
         """Ghost takes over the vessel with angry animation and spectral aura."""
@@ -2323,6 +3706,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_dialogue_dismissed(self) -> None:
         """Handle cleanup when dialogue speech bubble closes."""
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            return
         if self._phase is Phase.SUMMON_DIALOGUE:
             self._start_summon_intro()
             return
@@ -2331,13 +3716,206 @@ class YellowsPixelBuddies(QWidget):
             if self._phase is Phase.PAUSE and self.state == "angry":
                 self._play("idle")
         if self._phase is Phase.PAUSE:
-            if not getattr(self, "_in_angry_spam", False) and self.state != "angry":
-                if self.state in ("shocked",) or not self._loop:
+            if not getattr(self, "_in_angry_spam", False):
+                if self.state in ("shocked", "angry", "behind") or not self._loop:
                     self._play("idle")
             if self._pause_elapsed or not self._brain_timer.isActive():
                 self._pause_elapsed = False
                 self._brain_timer.start(AFTER_SPECIAL_REST_MS)
         self.update()
+
+    def _open_chat_input(self) -> None:
+        """Open the interactive chat text input bar to talk to Pink."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.DRAG):
+            return
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            self._say("* Hold your horses, minion! I'm still thinking about your screen or last question!", force=True)
+            return
+        self._in_angry_spam = False
+        self._click_times.clear()
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if self.state in MOVE_VELOCITY_PX_S:
+            self._play("idle")
+        if hasattr(self, "_chat_input"):
+            self._chat_input.open_at(self._x, self._y)
+
+    def _on_chat_cancelled(self) -> None:
+        """Resume normal behavior if user closes the chat box without sending."""
+        if self._phase == Phase.PAUSE:
+            self._pause_elapsed = False
+            self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+
+    def _on_chat_submitted(self, text: str, see_screen: bool = False) -> None:
+        """Process user text input from the chat overlay and call Gemini AI in background."""
+        if hasattr(self, "_chat_input"):
+            self._chat_input.hide()
+
+        if not text:
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self._can_play("angry"):
+                self._play("angry")
+            self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True)
+            return
+
+        if text.strip().lower() in ("/error", "test error", "/test-error"):
+            err_msg = "Test explosion error requested by user."
+            spoken_err = "* KABOOM?! Test error triggered!\n* Look at me, I'm all crispy and burnt, mew!"
+            self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=see_screen)
+            self._trigger_error_burnt(spoken_err)
+            return
+
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            err_msg = "Gemini API key is not configured."
+            spoken_err = "* MEW?! I don't have a Gemini API key yet!\n* Enter your key in the popup to awaken my brain!"
+            self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=see_screen)
+            self._trigger_error_burnt(spoken_err)
+            QTimer.singleShot(1000, self._prompt_api_key_dialog)
+            return
+
+        if self._gemini_thread is not None and self._gemini_thread.isRunning():
+            self._say("* Hold your horses, minion! I'm already thinking about your last question!", force=True)
+            return
+
+        screenshot_b64 = None
+        if see_screen:
+            # Briefly hide Pink and speech bubble so she doesn't screenshot herself
+            if hasattr(self, "_dialogue_overlay"):
+                self._dialogue_overlay.hide()
+            self.hide()
+            QApplication.processEvents()
+            try:
+                screenshot_b64 = capture_screen_base64()
+                if not screenshot_b64:
+                    raise RuntimeError("Screen capture returned empty image.")
+            except Exception as err:
+                self.show()
+                err_msg = f"Screen capture failed: {err}"
+                spoken_err = f"* Mew?! My screen vision short-circuited:\n* {str(err)[:80]}"
+                self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=True)
+                self._trigger_error_burnt(spoken_err)
+                return
+            self.show()
+
+        # Enter thinking state
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+
+        if see_screen:
+            if self._can_play("behind"):
+                self._play("behind", loop=True)
+            self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False)
+        else:
+            self._play("idle")
+            self._say("* ...", force=True, skippable=False, auto_dismiss=False)
+
+        # Build prompt & system instruction
+        system_inst = PINK_SYSTEM_INSTRUCTION
+        if see_screen:
+            system_inst += "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop. Accurately comment on what they have open or what they asked about their screen!"
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nThings you remember about this user across sessions:\n{facts}"
+
+        # Spawn background worker thread
+        self._gemini_thread = GeminiWorkerThread(
+            api_key=api_key,
+            user_prompt=text,
+            system_instruction=system_inst,
+            history=self._memory.history,
+            screenshot_b64=screenshot_b64,
+            model_name=GEMINI_MODEL,
+            parent=self,
+        )
+        self._gemini_thread.response_ready.connect(
+            lambda spoken_text, anim, u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s)
+        )
+        self._gemini_thread.error_occurred.connect(
+            lambda err_msg, u=text, s=see_screen: self._on_gemini_error(u, err_msg, s)
+        )
+        self._gemini_thread.start()
+
+    def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
+        """Trigger the burnt state with foreground explosion VFX upon detecting an error."""
+        self._interrupted_state = None
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_vfx_overlay"):
+            self._stop_overlay()
+        if self._can_play("burnt"):
+            self._play("burnt")
+            if "explosion" in self._bank.frames:
+                self._start_overlay("explosion")
+        if spoken_error:
+            self._say(spoken_error, force=True, auto_dismiss=True)
+
+    def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool) -> None:
+        """Handle response generated by Gemini AI."""
+        self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen)
+
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        if anim and self._can_play(anim):
+            self._play(anim)
+        self._say(spoken_text, force=True, auto_dismiss=True)
+
+    def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False) -> None:
+        """Handle error from Gemini AI."""
+        spoken_error = f"* Mew?! My magic brain stumbled:\n* {error_msg[:90]}"
+        self._memory.record_error(user_text, error_msg, spoken_text=spoken_error, anim="burnt", had_screen=had_screen)
+        self._trigger_error_burnt(spoken_error)
+
+    def _prompt_api_key_dialog(self) -> None:
+        """Open modal dialog to enter or update the Gemini API key."""
+        current_key = self._memory.get_api_key()
+        masked = (current_key[:6] + "..." + current_key[-4:]) if len(current_key) > 10 else (current_key or "Not configured")
+
+        key, ok = QInputDialog.getText(
+            None,
+            "Google Gemini API Key",
+            f"Enter your Google Gemini API Key:\n(Current: {masked})\n\nStored locally on your device in .env and memory/config.json.",
+            QLineEdit.Normal,
+            current_key,
+        )
+        if ok:
+            clean_key = key.strip()
+            self._memory.save_api_key(clean_key)
+            if clean_key:
+                self._say("* Gemini API key saved to local storage! My magic brain is online, mew!", force=True)
+                if self._can_play("peace_sign"):
+                    self._play("peace_sign")
+            else:
+                self._say("* Cleared Gemini API key! Back in offline mode, mew.", force=True)
+
+    def _open_memory_folder(self) -> None:
+        """Open the local memory storage folder in Windows Explorer."""
+        try:
+            os.startfile(str(self._memory.memory_dir))
+        except Exception as err:
+            log.warning("Could not open memory folder: %s", err)
+            self._trigger_error_burnt(f"* Mew?! Couldn't open memory folder:\n* {str(err)[:80]}")
+
+    def _reset_session_memory(self) -> None:
+        """Clear recent in-memory conversation history and start a new session file."""
+        self._memory.clear_current_session()
+        self._say("* Session memory cleared! A clean slate for our chats, mew!", force=True)
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
 
     def _on_song_started(self, title: str, artist: str) -> None:
         """React to newly started music playback via Windows GSMTC."""
@@ -2749,7 +4327,7 @@ class YellowsPixelBuddies(QWidget):
         if self._phase is Phase.WALK:
             self._start_pause()
         elif self._phase is Phase.PAUSE:
-            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            if self._is_dialogue_convo_active():
                 self._pause_elapsed = True
                 return
             if self._loop:                 # plain idle -> jump at the cursor (rarely), else walk right away
@@ -2980,6 +4558,8 @@ class YellowsPixelBuddies(QWidget):
             return
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_chat_input"):
+            self._chat_input.cancel()
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._reset_jump_state()
@@ -3181,12 +4761,14 @@ class YellowsPixelBuddies(QWidget):
         """Every gate of the trigger (the dice are rolled by the caller). Cheap checks come first.
 
         feature on + cooldown over | phase WALK / PAUSE, plain looping animation, menu closed |
-        cursor on the work area | rise at least MIN_JUMP_RISE_PX | no mouse button held anywhere
+        no active dialogue | cursor on the work area | rise at least MIN_JUMP_RISE_PX | no mouse button held anywhere
         """
         if not self._jump_enabled or time.perf_counter() < self._jump_ready_at:
             return False                             # sprites missing / cooldown still running
         if self._phase not in (Phase.WALK, Phase.PAUSE) or self._menu_open:
             return False                             # never in drag / fall / jump / hang, nor with the menu open
+        if self._is_dialogue_convo_active():
+            return False                             # never jump while dialogue, chat input, or AI is active
         if self.state not in LOOPING_STATES:
             return False                             # never in the middle of a one-shot special
         if not self._work_area().contains(cursor):
@@ -3222,6 +4804,9 @@ class YellowsPixelBuddies(QWidget):
 
     def _begin_jump(self, cursor: QPoint) -> bool:
         """Take off towards the cursor. The arc is worked out ONCE, here; nothing steers her later."""
+        if self._is_dialogue_convo_active():
+            return False
+
         min_x, max_x, _min_y, _ground_y = self._bounds()
         aim_x, aim_y = self._aim_point(cursor)
 
@@ -3574,6 +5159,12 @@ class YellowsPixelBuddies(QWidget):
         self._debug_jump_at = None
         if self._phase not in (Phase.WALK, Phase.PAUSE) or self._menu_open:
             log.info("Debug jump skipped: the pet is busy")
+        elif hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            log.info("Debug jump skipped: dialogue is active")
+        elif hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            log.info("Debug jump skipped: chat input is open")
+        elif getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            log.info("Debug jump skipped: AI is thinking")
         elif not self._begin_jump(cursor):
             log.info("Debug jump skipped: the cursor is not above her hands - move it higher")
 
@@ -3600,6 +5191,8 @@ class YellowsPixelBuddies(QWidget):
                     self._grab_offset = event.globalPos() - self.pos()
                     event.accept()
                     return
+            if hasattr(self, "_single_click_timer") and self._single_click_timer.isActive():
+                self._single_click_timer.stop()
             self._dialogue_clicked = False
             self._press_global = event.globalPos()
             self._grab_offset = event.globalPos() - self.pos()
@@ -3630,42 +5223,71 @@ class YellowsPixelBuddies(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or self._press_global is None:
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
-            self._press_global = None
-            return
         self._press_global = None
-        self._dialogue_clicked = False
+
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+
+        if getattr(self, "_dialogue_clicked", False):
+            self._dialogue_clicked = False
+            return
+
         if self._dragging:
             self._end_drag()
-        elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
-            # A plain click in mid-air or during post-throw victory laugh changes nothing: it must not
-            # turn the pet into a "shocked" pause and so overwrite the victory laugh / landing reaction.
             return
-        else:
-            now = time.perf_counter()
-            if self._in_angry_spam or self.state == "angry":
-                # Currently mad or in active spam: keep her continuously mad while clicks keep coming!
-                if (now - self._last_angry_click_time <= CLICK_ANGRY_WINDOW_S) or self.state == "angry":
-                    self._keep_angry()
-                    return
-                else:
-                    self._in_angry_spam = False
 
-            # Direct mouse click overrides any background resume state
-            self._interrupted_state = None
-            self._click_times = [t for t in self._click_times if now - t <= CLICK_ANGRY_WINDOW_S]
-            self._click_times.append(now)
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
+            # A plain click in mid-air or during post-throw victory laugh changes nothing: it must not
+            # turn the pet into a pause and overwrite the victory laugh / landing reaction.
+            return
 
-            if len(self._click_times) >= CLICK_ANGRY_COUNT and self._can_play("angry"):
-                self._in_angry_spam = True
-                self._last_angry_click_time = now
-                self._click_times.clear()
-                self._start_pause(roll_special=False, forced="angry")
-            else:
-                self._start_pause(roll_special=False, forced="shocked")
+        if self._is_dialogue_convo_active():
+            return
+
+        # Distinguish single click from double click (which opens chat)
+        interval = min(250, QApplication.doubleClickInterval())
+        self._single_click_timer.start(interval)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        """Double left-click opens the chat input overlay to talk to Pink."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+        if event.button() == Qt.LeftButton:
+            self._open_chat_input()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _on_single_click(self) -> None:
+        """Handle single left-click on Pink: randomly play peace_sign, laughing, or shocked without dialogue."""
+        if self._is_dialogue_convo_active():
+            return
+        if (self._dragging or self._menu_open
+                or self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+                                   Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
+                                   Phase.EXIT_OUTRO, Phase.JUMP, Phase.HANG,
+                                   Phase.FALL, Phase.THROW)
+                or self._post_throw_laugh):
+            return
+
+        candidates = [s for s in ("peace_sign", "laughing", "shocked") if self._can_play(s)]
+        if not candidates:
+            return
+
+        chosen = random.choice(candidates)
+        self._interrupted_state = None
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        self._play(chosen)
 
     def _begin_drag(self) -> None:
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
         self._dragging = True
         self._dialogue_clicked = False
         self._phase = Phase.DRAG
@@ -3675,6 +5297,8 @@ class YellowsPixelBuddies(QWidget):
         self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_chat_input"):
+            self._chat_input.cancel()
         self._play("shocked", loop=True)          # loop it for as long as it is held
         self.setCursor(Qt.ClosedHandCursor)
 
@@ -3690,6 +5314,8 @@ class YellowsPixelBuddies(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
         self._post_throw_laugh = False
         self._in_angry_spam = False
         self._click_times.clear()
@@ -3699,6 +5325,8 @@ class YellowsPixelBuddies(QWidget):
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
         menu = QMenu(self)
+        talk_action = menu.addAction("Talk to Pink 💬")
+        menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
@@ -3716,6 +5344,8 @@ class YellowsPixelBuddies(QWidget):
             self._quit()
         elif chosen is hide_action:
             self._start_hide_sequence()
+        elif chosen is talk_action:
+            self._open_chat_input()
         elif jump_action is not None and chosen is jump_action:
             self._schedule_debug_jump()
 
@@ -3782,6 +5412,10 @@ class YellowsPixelBuddies(QWidget):
         if not is_maximized:
             return
 
+        # Do not react to window switches if Pink is actively in dialogue, chat input, or thinking
+        if self._is_dialogue_convo_active():
+            return
+
         # Do not interrupt anger if clicks are currently spamming
         if self._in_angry_spam or (self.state == "angry" and self._repeat_count > 0):
             return
@@ -3812,6 +5446,8 @@ class YellowsPixelBuddies(QWidget):
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
+            return
+        if self._is_dialogue_convo_active():
             return
         if self._interrupted_state is None:
             rem_ms = max(500, self._brain_timer.remainingTime()) if self._brain_timer.isActive() else 2500
@@ -3853,6 +5489,18 @@ class YellowsPixelBuddies(QWidget):
 
         self._bring_action = tray_menu.addAction("Call Pink 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
         self._bring_action.triggered.connect(self._reset_to_taskbar)
+
+        self._talk_tray_action = tray_menu.addAction("Talk to Pink 💬")
+        self._talk_tray_action.triggered.connect(self._open_chat_input)
+
+        self._key_tray_action = tray_menu.addAction("Set Gemini API Key 🔑")
+        self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)
+
+        memory_menu = tray_menu.addMenu("Memory Storage 🧠")
+        open_mem_action = memory_menu.addAction("Open Memory Folder 📂")
+        open_mem_action.triggered.connect(self._open_memory_folder)
+        reset_mem_action = memory_menu.addAction("Clear Current Session 🧹")
+        reset_mem_action.triggered.connect(self._reset_session_memory)
 
         self._hide_tray_action = tray_menu.addAction("Hide Pink 🐾")
         self._hide_tray_action.triggered.connect(self._start_hide_sequence)
@@ -3898,6 +5546,8 @@ class YellowsPixelBuddies(QWidget):
                 self._bring_action.setText("Bring to Taskbar")
         if self._hide_tray_action is not None:
             self._hide_tray_action.setVisible(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
+        if hasattr(self, "_talk_tray_action") and self._talk_tray_action is not None:
+            self._talk_tray_action.setEnabled(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -4018,6 +5668,11 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.dismiss(clear_queue=True)
             self._dialogue_overlay.close()
+        if hasattr(self, "_chat_input"):
+            self._chat_input.close()
+        if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
+            self._gemini_thread.terminate()
+            self._gemini_thread.wait(500)
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()
