@@ -99,16 +99,16 @@ import winreg
 
 import requests
 from PyQt5.QtCore import (
-    QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QThread, Qt, QTimer, pyqtSignal
+    QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QSize, QThread, Qt, QTimer, pyqtSignal
 )
 from PyQt5.QtGui import (
     QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
-    QPainter, QPalette, QPen, QPixmap, QRegion, QTransform
+    QPainter, QPalette, QPen, QPixmap, QRegion, QTextOption, QTransform
 )
 from PyQt5.QtWidgets import (
-    QAction, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QPushButton,
-    QSlider, QStyle, QStyleOptionSlider, QSystemTrayIcon, QVBoxLayout,
-    QWidget, QWidgetAction
+    QAction, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+    QPlainTextEdit, QPushButton, QSlider, QStyle, QStyleOptionSlider,
+    QSystemTrayIcon, QVBoxLayout, QWidget, QWidgetAction
 )
 
 
@@ -137,6 +137,8 @@ else:
 ICON_PATH = _base_dir / "app_icon.ico"
 DIALOGUE_BOX_PATH = SPRITES_DIR / "dialogue_box.png"
 DETERMINATION_FONT_PATH = FONTS_DIR / "determination" / "determination.ttf"
+EYE_OFF_PATH = SPRITES_DIR / "eye" / "off.png"
+EYE_ON_PATH = SPRITES_DIR / "eye" / "on.png"
 
 # On-screen size in *logical* pixels. The window is exactly SPRITE_SIZE x SPRITE_SIZE.
 # PNGs of any size are scaled to fit (aspect ratio kept, anchored bottom-centre).
@@ -453,9 +455,9 @@ DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from anot
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
-GEMINI_MODEL = "gemini-3.1-flash-lite"
-GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-GEMINI_TIMEOUT_S = 20
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+GEMINI_TIMEOUT_S = 35
 PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion living on the Windows taskbar.
 You have the sassy, tsundere magical ghost doll personality inspired by Mad Mew Mew from Deltarune / Undertale.
 - Persona & Tone: Proud, dramatic, tsundere, slightly chaotic, playful.
@@ -1609,6 +1611,7 @@ class DialogueOverlay(QWidget):
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self.dismiss)
         self._skippable = True
+        self._auto_dismiss = True
 
     def _create_soul_heart_pixmap(self) -> QPixmap:
         """Create a crisp pixel-art Deltarune red soul heart pixmap."""
@@ -1648,6 +1651,7 @@ class DialogueOverlay(QWidget):
             on_chosen) -> None:
         """Start a new question dialogue bubble with interactive choices."""
         self._skippable = True
+        self._auto_dismiss = True
         self._queue.clear()
         self._choices = list(choices)
         self._choice_rects.clear()
@@ -1657,17 +1661,27 @@ class DialogueOverlay(QWidget):
         self._last_pet_y = pet_y
         self._display_text(text, pet_x, pet_y)
 
-    def say(self, text: str, pet_x: float, pet_y: float, queue: list[str] | None = None, skippable: bool = True) -> None:
+    def say(
+        self,
+        text: str,
+        pet_x: float,
+        pet_y: float,
+        queue: list[str] | None = None,
+        skippable: bool = True,
+        auto_dismiss: bool = True,
+    ) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
         queue: optional list of additional messages to display sequentially after this one.
         skippable: whether clicking can advance or dismiss this dialogue.
+        auto_dismiss: whether the bubble automatically closes after being read.
         """
         self._choices.clear()
         self._choice_rects.clear()
         self._hovered_choice_idx = None
         self._on_chosen_callback = None
         self._skippable = skippable
+        self._auto_dismiss = auto_dismiss
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -1883,10 +1897,12 @@ class DialogueOverlay(QWidget):
         else:
             self._type_timer.stop()
             if self._choices:
-                self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
+                if self._auto_dismiss:
+                    self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
             else:
-                hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-                self._hold_timer.start(round(hold_s * 1000))
+                if self._auto_dismiss:
+                    hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                    self._hold_timer.start(round(hold_s * 1000))
             self.update()
 
     def dismiss(self, clear_queue: bool = False) -> None:
@@ -2057,17 +2073,43 @@ class DialogueOverlay(QWidget):
         painter.end()
 
 
-class ChatLineEdit(QLineEdit):
-    """A QLineEdit that emits escapePressed when the Esc key is hit."""
+class ChatTextEdit(QPlainTextEdit):
+    """A QPlainTextEdit that wraps lines, emits returnPressed on Enter,
+    supports Shift+Enter for newlines, and emits escapePressed on Esc."""
 
+    returnPressed = pyqtSignal()
     escapePressed = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self.setWordWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(0)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape:
             self.escapePressed.emit()
             event.accept()
             return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if event.modifiers() & Qt.ShiftModifier:
+                super().keyPressEvent(event)
+            else:
+                self.returnPressed.emit()
+                event.accept()
+            return
         super().keyPressEvent(event)
+
+    def text(self) -> str:
+        return self.toPlainText()
+
+    def setText(self, text: str) -> None:
+        self.setPlainText(text)
+
+
+ChatLineEdit = ChatTextEdit
 
 
 class ChatInputOverlay(QWidget):
@@ -2090,6 +2132,15 @@ class ChatInputOverlay(QWidget):
         self._scale = DIALOGUE_BOX_SCALE
         self._cached_bg: QPixmap | None = None
         self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
+
+        self._base_w = round(270 * self._scale)
+        self._base_h = round(34 * self._scale)
+        self._last_pet_x: float | None = None
+        self._last_pet_y: float | None = None
+
+        self._eye_off_icon: QIcon | None = None
+        self._eye_on_icon: QIcon | None = None
+        self._load_eye_icons()
 
         self._init_ui()
 
@@ -2119,6 +2170,38 @@ class ChatInputOverlay(QWidget):
                             img.setPixel(x * scale + sx, y * scale + sy, red)
         return QPixmap.fromImage(img)
 
+    def _load_eye_icons(self) -> None:
+        """Load and scale custom eye sprites for the vision toggle button."""
+        icon_h = max(14, round(11 * self._scale))
+        if EYE_OFF_PATH.exists():
+            pix_off = QPixmap(str(EYE_OFF_PATH))
+            if not pix_off.isNull():
+                scaled_off = pix_off.scaledToHeight(icon_h, Qt.SmoothTransformation)
+                self._eye_off_icon = QIcon(scaled_off)
+        if EYE_ON_PATH.exists():
+            pix_on = QPixmap(str(EYE_ON_PATH))
+            if not pix_on.isNull():
+                scaled_on = pix_on.scaledToHeight(icon_h, Qt.SmoothTransformation)
+                self._eye_on_icon = QIcon(scaled_on)
+
+    def _on_vision_toggled(self, checked: bool) -> None:
+        if checked:
+            if self._eye_on_icon and not self._eye_on_icon.isNull():
+                self._vision_btn.setIcon(self._eye_on_icon)
+                self._vision_btn.setText("")
+            else:
+                self._vision_btn.setIcon(QIcon())
+                self._vision_btn.setText("👁️")
+            self._vision_btn.setToolTip("Screen Vision: ON (Pink will analyze your screen)")
+        else:
+            if self._eye_off_icon and not self._eye_off_icon.isNull():
+                self._vision_btn.setIcon(self._eye_off_icon)
+                self._vision_btn.setText("")
+            else:
+                self._vision_btn.setIcon(QIcon())
+                self._vision_btn.setText("👁️")
+            self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
+
     def _init_ui(self) -> None:
         font = QFont(self._font_family)
         font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
@@ -2136,61 +2219,82 @@ class ChatInputOverlay(QWidget):
             self._heart_label.setPixmap(self._soul_heart_pix)
             self._heart_label.setFixedSize(self._soul_heart_pix.size())
         self._heart_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._heart_label)
+        layout.addWidget(self._heart_label, 0, Qt.AlignTop)
 
         # Asterisk
         self._star_label = QLabel("*", self)
         self._star_label.setFont(font)
         self._star_label.setStyleSheet("color: #FFFFFF;")
-        layout.addWidget(self._star_label)
+        layout.addWidget(self._star_label, 0, Qt.AlignTop)
 
-        # Input text field
-        self._line_edit = ChatLineEdit(self)
-        self._line_edit.setFont(font)
-        self._line_edit.setPlaceholderText("Talk to Pink... (Enter to send)")
-        pal = self._line_edit.palette()
+        # Input text field with line wrapping
+        self._text_edit = ChatTextEdit(self)
+        self._line_edit = self._text_edit  # alias
+        self._text_edit.setFont(font)
+        self._text_edit.setPlaceholderText("Talk to Pink... (Enter to send)")
+        pal = self._text_edit.palette()
         pal.setColor(QPalette.PlaceholderText, QColor(140, 140, 140))
-        self._line_edit.setPalette(pal)
-        self._line_edit.setStyleSheet(
-            "QLineEdit {"
+        self._text_edit.setPalette(pal)
+        self._text_edit.setStyleSheet(
+            "QPlainTextEdit {"
             "  background: transparent;"
             "  border: none;"
             "  color: #FFFFFF;"
             "  selection-background-color: #FFFF00;"
             "  selection-color: #000000;"
+            "  padding: 0px;"
+            "}"
+            "QScrollBar:vertical {"
+            "  background: transparent;"
+            "  width: 4px;"
+            "  margin: 0px;"
+            "}"
+            "QScrollBar::handle:vertical {"
+            "  background: #FFFF00;"
+            "  min-height: 10px;"
+            "  border-radius: 2px;"
+            "}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+            "  height: 0px;"
             "}"
         )
-        self._line_edit.returnPressed.connect(self._on_submit)
-        self._line_edit.escapePressed.connect(self.cancel)
-        layout.addWidget(self._line_edit, stretch=1)
+        self._text_edit.returnPressed.connect(self._on_submit)
+        self._text_edit.escapePressed.connect(self.cancel)
+        self._text_edit.textChanged.connect(self._on_text_changed)
+        layout.addWidget(self._text_edit, stretch=1)
 
         # Screen vision toggle button
-        self._vision_btn = QPushButton("👁️", self)
+        self._vision_btn = QPushButton(self)
         self._vision_btn.setFont(font)
         self._vision_btn.setCursor(Qt.PointingHandCursor)
         self._vision_btn.setCheckable(True)
         self._vision_btn.setChecked(False)
-        self._vision_btn.setToolTip("Toggle Screen Vision (Let Pink see your screen)")
-        self._vision_btn.setFixedHeight(round(18 * self._scale))
+        self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
+        btn_h = round(18 * self._scale)
+        btn_w = round(20 * self._scale)
+        self._vision_btn.setFixedSize(btn_w, btn_h)
+        if self._eye_off_icon and not self._eye_off_icon.isNull():
+            self._vision_btn.setIcon(self._eye_off_icon)
+            self._vision_btn.setIconSize(QSize(15, 16))
+        else:
+            self._vision_btn.setText("👁️")
+        self._vision_btn.toggled.connect(self._on_vision_toggled)
         self._vision_btn.setStyleSheet(
             "QPushButton {"
             "  background-color: #000000;"
             "  color: #888888;"
             "  border: 1px solid #555555;"
-            "  padding: 0px 5px;"
-            "  font-size: 11px;"
+            "  padding: 0px 3px;"
             "}"
             "QPushButton:hover {"
-            "  color: #00FFFF;"
             "  border: 1px solid #00FFFF;"
             "}"
             "QPushButton:checked {"
-            "  background-color: #00FFFF;"
-            "  color: #000000;"
+            "  background-color: #003838;"
             "  border: 1px solid #00FFFF;"
             "}"
         )
-        layout.addWidget(self._vision_btn)
+        layout.addWidget(self._vision_btn, 0, Qt.AlignBottom)
 
         # Send button
         self._send_btn = QPushButton("Send", self)
@@ -2215,7 +2319,7 @@ class ChatInputOverlay(QWidget):
             "}"
         )
         self._send_btn.clicked.connect(self._on_submit)
-        layout.addWidget(self._send_btn)
+        layout.addWidget(self._send_btn, 0, Qt.AlignBottom)
 
         # Close button
         self._close_btn = QPushButton("×", self)
@@ -2236,12 +2340,27 @@ class ChatInputOverlay(QWidget):
             "}"
         )
         self._close_btn.clicked.connect(self.cancel)
-        layout.addWidget(self._close_btn)
+        layout.addWidget(self._close_btn, 0, Qt.AlignBottom)
 
-        box_w = round(270 * self._scale)
-        box_h = round(34 * self._scale)
-        self.setFixedSize(box_w, box_h)
-        self._build_background(box_w, box_h)
+        self.setFixedSize(self._base_w, self._base_h)
+        self._build_background(self._base_w, self._base_h)
+
+    def _on_text_changed(self) -> None:
+        doc = self._text_edit.document()
+        line_count = doc.lineCount()
+        clamped_lines = min(4, max(1, line_count))
+        fm = self._text_edit.fontMetrics()
+        line_step = fm.lineSpacing()
+        target_h = self._base_h + (clamped_lines - 1) * line_step
+        if line_count > 4:
+            self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        else:
+            self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        if self.height() != target_h:
+            self.setFixedSize(self._base_w, target_h)
+            self._build_background(self._base_w, target_h)
+            self.update_position()
+            self.update()
 
     def _build_background(self, box_w: int, box_h: int) -> None:
         scale = self._scale
@@ -2293,20 +2412,27 @@ class ChatInputOverlay(QWidget):
         painter.drawPixmap(0, 0, self._cached_bg)
         painter.end()
 
-    def update_position(self, pet_x: float, pet_y: float) -> None:
+    def update_position(self, pet_x: float | None = None, pet_y: float | None = None) -> None:
+        if pet_x is not None:
+            self._last_pet_x = pet_x
+        if pet_y is not None:
+            self._last_pet_y = pet_y
+        if self._last_pet_x is None or self._last_pet_y is None:
+            return
+
         area = QApplication.primaryScreen().availableGeometry()
         w = self.width()
         h = self.height()
 
         screen_mid_x = area.x() + area.width() / 2.0
-        pet_center_x = pet_x + SPRITE_SIZE / 2.0
+        pet_center_x = self._last_pet_x + SPRITE_SIZE / 2.0
 
         if pet_center_x < screen_mid_x:
-            target_x = pet_x + SPRITE_SIZE + DIALOGUE_SIDE_OFFSET_PX
+            target_x = self._last_pet_x + SPRITE_SIZE + DIALOGUE_SIDE_OFFSET_PX
         else:
-            target_x = pet_x - w - DIALOGUE_SIDE_OFFSET_PX
+            target_x = self._last_pet_x - w - DIALOGUE_SIDE_OFFSET_PX
 
-        head_center_y = pet_y + (SPRITE_SIZE * DIALOGUE_HEAD_Y_RATIO)
+        head_center_y = self._last_pet_y + (SPRITE_SIZE * DIALOGUE_HEAD_Y_RATIO)
         target_y = head_center_y - (h / 2.0)
 
         min_x = float(area.x() + 4)
@@ -2320,19 +2446,26 @@ class ChatInputOverlay(QWidget):
         self.move(round(target_x), round(target_y))
 
     def open_at(self, pet_x: float, pet_y: float) -> None:
+        self._last_pet_x = pet_x
+        self._last_pet_y = pet_y
+        self._text_edit.blockSignals(True)
+        self._text_edit.clear()
+        self._text_edit.blockSignals(False)
+        self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setFixedSize(self._base_w, self._base_h)
+        self._build_background(self._base_w, self._base_h)
         self.update_position(pet_x, pet_y)
-        self._line_edit.clear()
         self.show()
         self.raise_()
         self.activateWindow()
-        self._line_edit.setFocus()
+        self._text_edit.setFocus()
 
     def cancel(self) -> None:
         self.hide()
         self.cancelled.emit()
 
     def _on_submit(self) -> None:
-        text = self._line_edit.text().strip()
+        text = self._text_edit.toPlainText().strip()
         see_screen = self._vision_btn.isChecked()
         self.hide()
         self.submitted.emit(text, see_screen)
@@ -2483,6 +2616,7 @@ class MemoryManager:
         """Record turn in history and persist to session file."""
         turn = {
             "timestamp": datetime.datetime.now().isoformat(),
+            "status": "ok",
             "user": user_text,
             "pink": pink_response,
             "anim": anim,
@@ -2496,6 +2630,34 @@ class MemoryManager:
             self.session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception as err:
             log.warning("Could not record turn to session file: %s", err)
+
+    def record_error(
+        self,
+        user_text: str,
+        error_msg: str,
+        spoken_text: str | None = None,
+        anim: str = "burnt",
+        had_screen: bool = False,
+    ) -> None:
+        """Record an error turn in history and persist to session file with error formatting."""
+        pink_entry = spoken_text if spoken_text else f"[Error: {error_msg}]"
+        turn = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "status": "error",
+            "user": user_text,
+            "pink": f"[ERROR] {pink_entry}",
+            "error": error_msg,
+            "anim": anim,
+            "had_screen": had_screen,
+        }
+        self.history.append(turn)
+
+        try:
+            data = json.loads(self.session_file.read_text(encoding="utf-8"))
+            data["messages"].append(turn)
+            self.session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not record error turn to session file: %s", err)
 
     def clear_current_session(self) -> None:
         """Reset current in-memory history and start a fresh session file."""
@@ -2531,7 +2693,8 @@ class GeminiWorkerThread(QThread):
         models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
         last_error = ""
 
-        for model in models_to_try:
+        for idx, model in enumerate(models_to_try):
+            is_last = (idx == len(models_to_try) - 1)
             try:
                 spoken_text, anim = self._call_gemini(model)
                 self.response_ready.emit(spoken_text, anim)
@@ -2539,18 +2702,27 @@ class GeminiWorkerThread(QThread):
             except requests.exceptions.HTTPError as http_err:
                 status_code = http_err.response.status_code if http_err.response is not None else 0
                 resp_text = http_err.response.text if http_err.response is not None else str(http_err)
-                if status_code in (404, 400) and model != models_to_try[-1]:
-                    log.info("Model %s returned HTTP %s, trying fallback...", model, status_code)
-                    last_error = resp_text
+                last_error = f"HTTP {status_code}: {resp_text[:120]}"
+                # Fallback on model not found (404), bad model parameter (400), rate limit (429), or server issues (500, 502, 503)
+                if status_code in (400, 404, 429, 500, 502, 503) and not is_last:
+                    log.warning("Model %s returned HTTP %s, trying fallback...", model, status_code)
                     continue
                 else:
-                    self.error_occurred.emit(f"HTTP {status_code}: {resp_text[:120]}")
+                    self.error_occurred.emit(last_error)
                     return
             except requests.exceptions.Timeout:
+                last_error = f"Model {model} request timed out."
+                if not is_last:
+                    log.warning("Model %s timed out, trying fallback...", model)
+                    continue
                 self.error_occurred.emit("Request timed out. Google Gemini servers might be busy!")
                 return
             except Exception as err:
-                self.error_occurred.emit(f"Network error: {err}")
+                last_error = f"Network error: {err}"
+                if not is_last:
+                    log.warning("Model %s had network error (%s), trying fallback...", model, err)
+                    continue
+                self.error_occurred.emit(last_error)
                 return
 
         self.error_occurred.emit(f"All models failed. Last error: {last_error[:120]}")
@@ -3274,6 +3446,10 @@ class YellowsPixelBuddies(QWidget):
         self._overlay_timer.setInterval(EXPLOSION_FRAME_INTERVAL_MS)
         self._overlay_timer.timeout.connect(self._advance_overlay_frame)
 
+        self._single_click_timer = QTimer(self)    # distinguishes single click from double click to chat
+        self._single_click_timer.setSingleShot(True)
+        self._single_click_timer.timeout.connect(self._on_single_click)
+
         # --- window switch monitoring ------------------------------------------
         self._last_foreground_hwnd: int | None = None
         self._last_luminance: float = 128.0
@@ -3307,6 +3483,43 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_clicked: bool = False
 
         self._init_tray_icon()
+        self._install_exception_hook()
+
+    def _install_exception_hook(self) -> None:
+        """Global exception hook to catch uncaught runtime exceptions and trigger burnt state + explosion."""
+        prev_excepthook = sys.excepthook
+
+        def _hook(exc_type, exc_value, exc_tb):
+            if issubclass(exc_type, KeyboardInterrupt):
+                prev_excepthook(exc_type, exc_value, exc_tb)
+                return
+            log.error("Uncaught exception: %s", exc_value, exc_info=(exc_type, exc_value, exc_tb))
+            err_msg = str(exc_value) or exc_type.__name__
+            spoken_err = f"* KABOOM?! Internal error short-circuited:\n* {err_msg[:80]}"
+            try:
+                self._memory.record_error("[Runtime Exception]", err_msg, spoken_text=spoken_err, anim="burnt")
+            except Exception:
+                pass
+            QTimer.singleShot(0, lambda: self._trigger_error_burnt(spoken_err))
+            prev_excepthook(exc_type, exc_value, exc_tb)
+
+        sys.excepthook = _hook
+
+        if hasattr(sys, "unraisablehook"):
+            prev_unraisablehook = sys.unraisablehook
+
+            def _unraisable_hook(unraisable):
+                log.error("Unraisable exception: %s", unraisable.exc_value)
+                err_msg = str(unraisable.exc_value) or unraisable.exc_type.__name__
+                spoken_err = f"* KABOOM?! Background error:\n* {err_msg[:80]}"
+                try:
+                    self._memory.record_error("[Background Exception]", err_msg, spoken_text=spoken_err, anim="burnt")
+                except Exception:
+                    pass
+                QTimer.singleShot(0, lambda: self._trigger_error_burnt(spoken_err))
+                prev_unraisablehook(unraisable)
+
+            sys.unraisablehook = _unraisable_hook
 
     # ------------------------------------------------------------------ start
     def start(self) -> None:
@@ -3367,7 +3580,24 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_chat_input") and self._chat_input.isVisible():
             self._chat_input.update_position(self._x, self._y)
 
-    def _say(self, category_or_text: str, force: bool = False, extra_queue: list[str] | None = None, skippable: bool = True) -> None:
+    def _is_dialogue_convo_active(self) -> bool:
+        """Returns True if Pink is actively conversing, typing, showing dialogue, or waiting for AI."""
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            return True
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            return True
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            return True
+        return False
+
+    def _say(
+        self,
+        category_or_text: str,
+        force: bool = False,
+        extra_queue: list[str] | None = None,
+        skippable: bool = True,
+        auto_dismiss: bool = True,
+    ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
@@ -3418,6 +3648,8 @@ class YellowsPixelBuddies(QWidget):
             line = category_or_text
             if line in GHOST_DIALOGUE_LINES:
                 self._start_ghost_speech()
+        elif force:
+            line = "* " + category_or_text if not category_or_text.startswith("* ") else category_or_text
         else:
             # Sprite state or category has no dialogue lines -> do not show dialogue
             return
@@ -3437,7 +3669,14 @@ class YellowsPixelBuddies(QWidget):
             skippable = False
 
         self._last_dialogue = line
-        self._dialogue_overlay.say(line, self._x, self._y, queue=extra_queue, skippable=skippable)
+        self._dialogue_overlay.say(
+            line,
+            self._x,
+            self._y,
+            queue=extra_queue,
+            skippable=skippable,
+            auto_dismiss=auto_dismiss,
+        )
 
     def _on_question_answered(self, reaction_text: str, reaction_anim: str | None) -> None:
         """Handle player's answer to Pink's question: play reaction animation and speak response."""
@@ -3457,6 +3696,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_dialogue_dismissed(self) -> None:
         """Handle cleanup when dialogue speech bubble closes."""
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            return
         if self._phase is Phase.SUMMON_DIALOGUE:
             self._start_summon_intro()
             return
@@ -3466,7 +3707,7 @@ class YellowsPixelBuddies(QWidget):
                 self._play("idle")
         if self._phase is Phase.PAUSE:
             if not getattr(self, "_in_angry_spam", False):
-                if self.state in ("shocked", "angry") or not self._loop:
+                if self.state in ("shocked", "angry", "behind") or not self._loop:
                     self._play("idle")
             if self._pause_elapsed or not self._brain_timer.isActive():
                 self._pause_elapsed = False
@@ -3475,7 +3716,14 @@ class YellowsPixelBuddies(QWidget):
 
     def _open_chat_input(self) -> None:
         """Open the interactive chat text input bar to talk to Pink."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.DRAG):
+            return
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            self._say("* Hold your horses, minion! I'm still thinking about your screen or last question!", force=True)
             return
         self._in_angry_spam = False
         self._click_times.clear()
@@ -3508,14 +3756,20 @@ class YellowsPixelBuddies(QWidget):
             self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True)
             return
 
+        if text.strip().lower() in ("/error", "test error", "/test-error"):
+            err_msg = "Test explosion error requested by user."
+            spoken_err = "* KABOOM?! Test error triggered!\n* Look at me, I'm all crispy and burnt, mew!"
+            self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=see_screen)
+            self._trigger_error_burnt(spoken_err)
+            return
+
         api_key = self._memory.get_api_key()
         if not api_key:
-            self._phase = Phase.PAUSE
-            self._pause_elapsed = False
-            if self._can_play("shocked"):
-                self._play("shocked")
-            self._say("* MEW?! I don't have a Gemini API key yet!\n* Enter your key in the popup to awaken my brain!", force=True)
-            QTimer.singleShot(600, self._prompt_api_key_dialog)
+            err_msg = "Gemini API key is not configured."
+            spoken_err = "* MEW?! I don't have a Gemini API key yet!\n* Enter your key in the popup to awaken my brain!"
+            self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=see_screen)
+            self._trigger_error_burnt(spoken_err)
+            QTimer.singleShot(1000, self._prompt_api_key_dialog)
             return
 
         if self._gemini_thread is not None and self._gemini_thread.isRunning():
@@ -3529,7 +3783,17 @@ class YellowsPixelBuddies(QWidget):
                 self._dialogue_overlay.hide()
             self.hide()
             QApplication.processEvents()
-            screenshot_b64 = capture_screen_base64()
+            try:
+                screenshot_b64 = capture_screen_base64()
+                if not screenshot_b64:
+                    raise RuntimeError("Screen capture returned empty image.")
+            except Exception as err:
+                self.show()
+                err_msg = f"Screen capture failed: {err}"
+                spoken_err = f"* Mew?! My screen vision short-circuited:\n* {str(err)[:80]}"
+                self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=True)
+                self._trigger_error_burnt(spoken_err)
+                return
             self.show()
 
         # Enter thinking state
@@ -3537,9 +3801,13 @@ class YellowsPixelBuddies(QWidget):
         self._pause_elapsed = False
         self._brain_timer.stop()
 
-        thinking_anim = "behind" if self._can_play("behind") else "idle"
-        self._play(thinking_anim)
-        self._say("* (Inspecting your screen...)" if see_screen else "* ...", force=True, skippable=False)
+        if see_screen:
+            if self._can_play("behind"):
+                self._play("behind", loop=True)
+            self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False)
+        else:
+            self._play("idle")
+            self._say("* ...", force=True, skippable=False, auto_dismiss=False)
 
         # Build prompt & system instruction
         system_inst = PINK_SYSTEM_INSTRUCTION
@@ -3562,8 +3830,28 @@ class YellowsPixelBuddies(QWidget):
         self._gemini_thread.response_ready.connect(
             lambda spoken_text, anim, u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s)
         )
-        self._gemini_thread.error_occurred.connect(self._on_gemini_error)
+        self._gemini_thread.error_occurred.connect(
+            lambda err_msg, u=text, s=see_screen: self._on_gemini_error(u, err_msg, s)
+        )
         self._gemini_thread.start()
+
+    def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
+        """Trigger the burnt state with foreground explosion VFX upon detecting an error."""
+        self._interrupted_state = None
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_vfx_overlay"):
+            self._stop_overlay()
+        if self._can_play("burnt"):
+            self._play("burnt")
+            if "explosion" in self._bank.frames:
+                self._start_overlay("explosion")
+        if spoken_error:
+            self._say(spoken_error, force=True, auto_dismiss=True)
 
     def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool) -> None:
         """Handle response generated by Gemini AI."""
@@ -3574,16 +3862,13 @@ class YellowsPixelBuddies(QWidget):
 
         if anim and self._can_play(anim):
             self._play(anim)
-        self._say(spoken_text, force=True)
+        self._say(spoken_text, force=True, auto_dismiss=True)
 
-    def _on_gemini_error(self, error_msg: str) -> None:
+    def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False) -> None:
         """Handle error from Gemini AI."""
-        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
-            self._dialogue_overlay.dismiss(clear_queue=True)
-
-        if self._can_play("shocked"):
-            self._play("shocked")
-        self._say(f"* Mew?! My magic brain stumbled:\n* {error_msg[:90]}", force=True)
+        spoken_error = f"* Mew?! My magic brain stumbled:\n* {error_msg[:90]}"
+        self._memory.record_error(user_text, error_msg, spoken_text=spoken_error, anim="burnt", had_screen=had_screen)
+        self._trigger_error_burnt(spoken_error)
 
     def _prompt_api_key_dialog(self) -> None:
         """Open modal dialog to enter or update the Gemini API key."""
@@ -3613,6 +3898,7 @@ class YellowsPixelBuddies(QWidget):
             os.startfile(str(self._memory.memory_dir))
         except Exception as err:
             log.warning("Could not open memory folder: %s", err)
+            self._trigger_error_burnt(f"* Mew?! Couldn't open memory folder:\n* {str(err)[:80]}")
 
     def _reset_session_memory(self) -> None:
         """Clear recent in-memory conversation history and start a new session file."""
@@ -4031,7 +4317,7 @@ class YellowsPixelBuddies(QWidget):
         if self._phase is Phase.WALK:
             self._start_pause()
         elif self._phase is Phase.PAUSE:
-            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            if self._is_dialogue_convo_active():
                 self._pause_elapsed = True
                 return
             if self._loop:                 # plain idle -> jump at the cursor (rarely), else walk right away
@@ -4465,12 +4751,14 @@ class YellowsPixelBuddies(QWidget):
         """Every gate of the trigger (the dice are rolled by the caller). Cheap checks come first.
 
         feature on + cooldown over | phase WALK / PAUSE, plain looping animation, menu closed |
-        cursor on the work area | rise at least MIN_JUMP_RISE_PX | no mouse button held anywhere
+        no active dialogue | cursor on the work area | rise at least MIN_JUMP_RISE_PX | no mouse button held anywhere
         """
         if not self._jump_enabled or time.perf_counter() < self._jump_ready_at:
             return False                             # sprites missing / cooldown still running
         if self._phase not in (Phase.WALK, Phase.PAUSE) or self._menu_open:
             return False                             # never in drag / fall / jump / hang, nor with the menu open
+        if self._is_dialogue_convo_active():
+            return False                             # never jump while dialogue, chat input, or AI is active
         if self.state not in LOOPING_STATES:
             return False                             # never in the middle of a one-shot special
         if not self._work_area().contains(cursor):
@@ -4506,6 +4794,9 @@ class YellowsPixelBuddies(QWidget):
 
     def _begin_jump(self, cursor: QPoint) -> bool:
         """Take off towards the cursor. The arc is worked out ONCE, here; nothing steers her later."""
+        if self._is_dialogue_convo_active():
+            return False
+
         min_x, max_x, _min_y, _ground_y = self._bounds()
         aim_x, aim_y = self._aim_point(cursor)
 
@@ -4858,6 +5149,12 @@ class YellowsPixelBuddies(QWidget):
         self._debug_jump_at = None
         if self._phase not in (Phase.WALK, Phase.PAUSE) or self._menu_open:
             log.info("Debug jump skipped: the pet is busy")
+        elif hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            log.info("Debug jump skipped: dialogue is active")
+        elif hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            log.info("Debug jump skipped: chat input is open")
+        elif getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            log.info("Debug jump skipped: AI is thinking")
         elif not self._begin_jump(cursor):
             log.info("Debug jump skipped: the cursor is not above her hands - move it higher")
 
@@ -4884,6 +5181,8 @@ class YellowsPixelBuddies(QWidget):
                     self._grab_offset = event.globalPos() - self.pos()
                     event.accept()
                     return
+            if hasattr(self, "_single_click_timer") and self._single_click_timer.isActive():
+                self._single_click_timer.stop()
             self._dialogue_clicked = False
             self._press_global = event.globalPos()
             self._grab_offset = event.globalPos() - self.pos()
@@ -4914,42 +5213,35 @@ class YellowsPixelBuddies(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.LeftButton or self._press_global is None:
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
-            self._press_global = None
-            return
         self._press_global = None
-        self._dialogue_clicked = False
+
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+
+        if getattr(self, "_dialogue_clicked", False):
+            self._dialogue_clicked = False
+            return
+
         if self._dragging:
             self._end_drag()
-        elif self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
-            # A plain click in mid-air or during post-throw victory laugh changes nothing: it must not
-            # turn the pet into a "shocked" pause and so overwrite the victory laugh / landing reaction.
             return
-        else:
-            now = time.perf_counter()
-            if self._in_angry_spam or self.state == "angry":
-                # Currently mad or in active spam: keep her continuously mad while clicks keep coming!
-                if (now - self._last_angry_click_time <= CLICK_ANGRY_WINDOW_S) or self.state == "angry":
-                    self._keep_angry()
-                    return
-                else:
-                    self._in_angry_spam = False
 
-            # Direct mouse click overrides any background resume state
-            self._interrupted_state = None
-            self._click_times = [t for t in self._click_times if now - t <= CLICK_ANGRY_WINDOW_S]
-            self._click_times.append(now)
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
+            # A plain click in mid-air or during post-throw victory laugh changes nothing: it must not
+            # turn the pet into a pause and overwrite the victory laugh / landing reaction.
+            return
 
-            if len(self._click_times) >= CLICK_ANGRY_COUNT and self._can_play("angry"):
-                self._in_angry_spam = True
-                self._last_angry_click_time = now
-                self._click_times.clear()
-                self._start_pause(roll_special=False, forced="angry")
-            else:
-                self._start_pause(roll_special=False, forced="shocked")
+        if self._is_dialogue_convo_active():
+            return
+
+        # Distinguish single click from double click (which opens chat)
+        interval = min(250, QApplication.doubleClickInterval())
+        self._single_click_timer.start(interval)
 
     def mouseDoubleClickEvent(self, event) -> None:
         """Double left-click opens the chat input overlay to talk to Pink."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
         if event.button() == Qt.LeftButton:
@@ -4958,8 +5250,34 @@ class YellowsPixelBuddies(QWidget):
             return
         super().mouseDoubleClickEvent(event)
 
+    def _on_single_click(self) -> None:
+        """Handle single left-click on Pink: randomly play peace_sign, laughing, or shocked without dialogue."""
+        if self._is_dialogue_convo_active():
+            return
+        if (self._dragging or self._menu_open
+                or self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+                                   Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
+                                   Phase.EXIT_OUTRO, Phase.JUMP, Phase.HANG,
+                                   Phase.FALL, Phase.THROW)
+                or self._post_throw_laugh):
+            return
+
+        candidates = [s for s in ("peace_sign", "laughing", "shocked") if self._can_play(s)]
+        if not candidates:
+            return
+
+        chosen = random.choice(candidates)
+        self._interrupted_state = None
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        self._play(chosen)
+
     def _begin_drag(self) -> None:
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
         self._dragging = True
         self._dialogue_clicked = False
         self._phase = Phase.DRAG
@@ -4986,6 +5304,8 @@ class YellowsPixelBuddies(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         """Right-click menu."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
         self._post_throw_laugh = False
         self._in_angry_spam = False
         self._click_times.clear()
@@ -5085,6 +5405,10 @@ class YellowsPixelBuddies(QWidget):
         if not is_maximized:
             return
 
+        # Do not react to window switches if Pink is actively in dialogue, chat input, or thinking
+        if self._is_dialogue_convo_active():
+            return
+
         # Do not interrupt anger if clicks are currently spamming
         if self._in_angry_spam or (self.state == "angry" and self._repeat_count > 0):
             return
@@ -5115,6 +5439,8 @@ class YellowsPixelBuddies(QWidget):
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
+            return
+        if self._is_dialogue_convo_active():
             return
         if self._interrupted_state is None:
             rem_ms = max(500, self._brain_timer.remainingTime()) if self._brain_timer.isActive() else 2500
