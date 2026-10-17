@@ -1,7 +1,7 @@
 <div align="center">
   <img src="icon.svg" width="96" height="96" alt="Yellow's Pixel Buddies Icon" />
   <h1>Yellow's Pixel Buddies 🐾</h1>
-  <p>An animated desktop pet companion that lives, walks, runs, and reacts along your Windows taskbar. Built in Python with PyQt5.</p>
+  <p>An intelligent, animated desktop pet companion that lives, walks, runs, talks, and reacts along your Windows taskbar. Powered by PyQt5 and Google Gemini AI.</p>
   <p>Crafted with ❤️ by <a href="https://github.com/bintangprasetyo95"><strong>bintangprasetyo95</strong></a></p>
 </div>
 
@@ -9,39 +9,79 @@
 
 ## ✨ Features
 
-- **Taskbar Companion**: Automatically detects the Windows taskbar, walks back and forth, and occasionally sprints (`run_left`, `run_right`). Automatically turns around at screen edges and follows resized or moved taskbars.
-- **Rich Emotion & Animation States**:
-  - **Movement**: `walk_left`, `walk_right`, `run_left`, `run_right`, `wistful_walk_left`, `wistful_walk_right`.
-  - **Idle & Specials**: `idle`, `laughing`, `singing`, `peace_sign`, `embarrassed`, `overjoyed`, `wistful`, `sad`, `crying`, `tongue`, `kneeling`, `behind`.
-  - **Special Events**: Rare `burnt` crisp event during resting pauses.
-- **Interactive Mouse Controls**:
-  - **Left-click**: Startles the pet (triggers `shocked` reaction).
-  - **Multi-click (Anger)**: Clicking 3 times within 2 seconds makes the pet angry (`angry` reaction). Continuing to click or spam her keeps her continuously in the angry state with unskippable dialogue; once clicking stops, she finishes her angry animation loop and calms down to `idle`.
-  - **Left-click + drag**: Pick up and carry the pet around your screen (pet loops `shocked` while held). Release to watch gravity pull it back to the taskbar.
-  - **Right-click**: Opens a context menu with **Hide 🐾** (sends Pink running off to hide) and **Exit**.
-  - **Sprint to Exit**: Selecting **Exit** (via context menu or system tray) causes Pink to sprint towards the furthest screen edge at high speed, cleanly terminating the application once she has completely run offscreen.
-- **Hiding & Cinematic Summoning**:
-  - Whenever the app starts (or when told to hide), Pink hides behind the taskbar with only her ghost ears peeking out at the bottom-right (full opacity, fully click-through around the ears).
-  - **Hide Mode Immunity**: While in hide mode, Pink is completely undisturbed—she cannot be dragged, cannot open the context menu, and ignores idle dialogue, window switches, and background music detections.
-  - **Hide on Demand**: Right-click Pink and choose **Hide 🐾** (or use the system tray menu) — Pink sprints offscreen to the right, then the ghost emerges from below the taskbar at the hiding spot and slowly rises directly into her peeking ears state.
-  - **Summon**: Click her peeking ears (or click her system tray icon) to summon her: she reacts with `"* ..."` followed by `"* ..?"`, rises up at ground level as a floating ghost, pauses to look right and left, zooms off-screen to the right, pauses 0.75s, and then dramatically pops onto the taskbar in her physical doll body (`shocked`) with a quick shocked reaction line!
-- **Interactive Dialogue System**:
-  - Authentic DELTARUNE Cyber World speech bubbles rendered with crisp 9-slice scaling.
-  - Powered by the iconic **Determination** pixel font with classic typewriter text animations and punctuation micro-pauses.
-  - Dynamic in-character dialogue lines for idling, startled reactions (`shocked`), poke annoyances (`angry`), pick-up and drag (`drag`), landing (`land`), flashbang burns (`burnt`), singing, bomb attacks, and random peaceful taskbar thoughts.
-  - Left-click speech bubbles to immediately finish typing or dismiss them.
-  - Toggleable in real time via the system tray menu (**Dialogue Bubbles**).
-- **Music & Song Detection**: Detects music playing on Windows (Spotify, YouTube, browser, etc.) via the Windows GSMTC API. When a song starts, she announces the title and who sang it, with a special "this sounds familiar" reaction when Toby Fox music is playing.
-- **System Tray & Hidden Icons Menu**: Automatically lives in your Windows taskbar notification area / "Hidden icons" menu (`^`). Right-click the tray icon to toggle **Start with Windows**, **Bring to Taskbar**, **Dialogue Bubbles**, **Bomb Attack Mode** (with real-time probability slider and default 25% button), or cleanly **Exit**.
-- **Transparent & Click-Through**: Fully transparent background. Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
-- **High-DPI Ready**: Scales crisply across different monitor scaling factors (100%, 125%, 150%, 200%) using nearest-neighbor sampling for crisp pixel art.
-- **Maximized App & Flashbang Reactions**:
-  - Switching to any maximized app startles the pet (`shocked`, 30s cooldown).
-  - Switching from a dark app into a dominant white/light maximized app crisps her like a flashbang (`burnt`, no cooldown).
-  - Automatically pauses whatever she was doing (walking, running, or resting), plays the reaction, and immediately resumes her prior activity once finished.
-- **Modular & Extensible Sprites**:
-  - Original core states feature built-in procedural animated placeholders if sprite folders are missing.
-  - New emotion states are loaded dynamically whenever PNG files are placed in their folders, with status logged cleanly on startup.
+### 🐾 Windows Taskbar Companion
+- **Adaptive Taskbar Awareness**: Automatically docks to the Windows taskbar, walks back and forth, and occasionally sprints (`run_left`, `run_right`) or takes slow wistful strolls (`wistful_walk_left`, `wistful_walk_right`).
+- **Edge Safety & Re-compositing**: Smoothly reverses direction at monitor bounds and automatically adapts whenever the taskbar is moved, resized, or auto-hidden.
+
+### 🧠 Gemini AI Desktop Companion & Screen Vision
+- **Interactive Chat Bar**: Double-click Pink or select **Talk to Pink 💬** to open a retro Cyber World text prompt.
+- **Sassy Tsundere Personality**: Inspired by **Mad Mew Mew** from *DELTARUNE / Undertale*—dramatic, proud, playfully tsundere, but secretly helpful and observant.
+- **Screen Vision Awareness (Eye Toggle)**: Click the custom eye toggle icon (`sprites/eye/`) next to the input bar to let Pink take a screenshot of your active desktop. She can critique your code, inspect wallpapers, roast open apps, or comment on your current gaming session.
+- **Smart Fallback & Robust Token Ceiling**: Runs by default on fast, high-rate-limit **`gemini-3.5-flash-lite`**, with automatic failover to `gemini-3.1-flash-lite`, `gemini-flash-lite-latest`, and `gemini-3.5-flash`. Configured with thinking-token awareness so dialogue is never truncated mid-sentence.
+- **Real-Time Temporal Awareness**: Dynamically injects your current local time and calculated absence duration into the system prompt, allowing Pink to accurately know the time of day, schedule, and precisely how long you have been away from your computer.
+- **Explosion VFX & Burnt Error Handling**: If an API error, rate limit (429), or vision glitch occurs, Pink dramatically explodes into a 17-frame foreground pixel explosion (`sprites/explosion/`) and stays soot-covered and burnt (`burnt`).
+- **Secret Test Commands**: Type `/error`, `/test-error`, or `test error` into the chat bar to test the error explosion VFX and burnt animation on demand.
+
+### 💾 Persistent Memory & Context
+- **Session Logging**: All conversation turns are automatically recorded with status, timestamps, user text, spoken dialogue, and emotion tags in `memory/sessions/session_<timestamp>.json`.
+- **Cross-Session Fact Retention**: Pink remembers long-term facts about the user across sessions stored in `memory/facts.json`.
+- **In-App Memory Controls**: Open the memory folder or clear current session memory on the fly directly through the system tray (**Memory Storage 🧠**).
+- **Flexible API Key Storage**: Seamlessly loads your Gemini API key from the environment, `.env` file, `memory/config.json`, or the in-app popup dialog.
+
+### ❓ Interactive DELTARUNE Choice Questions
+- **Branching Prompts**: Pink periodically pauses during idle periods to ask interactive questions with clickable choice buttons inside the speech bubble (e.g. asking about taskbar cleanliness, taking breaks, motivation, or gaming habits).
+- **In-Character Reactions**: Clicking a choice button triggers a custom response tailored to your answer.
+
+### 👻 Ghost Takeover & Spectral Aura Mode
+- **Fury-Fueled Tantrums**: Speaking any line from `GHOST_DIALOGUE_LINES` activates the Ghost Takeover visual effect:
+  - Snaps into the `angry` emotion state.
+  - Generates a pulsating cyan spectral aura behind her sprite.
+  - Adds ghost jitter and floating spectral embers.
+
+### 💣 Jump to Cursor & Cat Bomb Attack Mode
+- **Ballistic Cursor Jump**: When the mouse rests idle above her on the screen, Pink ballistically leaps up (`airborne`) to catch the cursor (`hanging`).
+- **Cursor Shake-Off**: Quickly shaking your mouse dislodges her grip, causing her to fall back to the taskbar with a cheeky laugh.
+- **Cat-Head Bomb Barrage**: While hanging, Pink can throw bouncy cat-head bombs with animated spark fuses. Upon detonating, they trigger screen-wide pixel laser crosses (`BombLaserOverlay`).
+- **Configurable Bomb Chance**: Real-time probability slider and a quick 25% default button built directly into the system tray menu.
+
+### 🎵 Windows GSMTC Music & Song Detection
+- Detects media playback across Windows (Spotify, YouTube, browser, media players) via the Windows GSMTC API.
+- Pink announces the song title and artist when a track starts, with special Easter egg reactions when Toby Fox music is detected.
+
+### 🖥️ Window Switch & Flashbang Reactions
+- **Maximized App Startle**: Switching to any maximized window startles Pink (`shocked`, 30s cooldown).
+- **Flashbang Reaction**: Switching from a dark workspace to a dominant light/white window crisps her like a flashbang (`burnt`, 5s cooldown).
+- Pauses current movement or pauses, plays the reaction, and resumes her schedule cleanly.
+
+### 🐾 Hiding & Cinematic Summoning
+- **Ghost Ear Peeking**: While in hide mode, Pink rests invisibly below the taskbar with only her ghost ears peeking out at the bottom-right corner.
+- **Hide on Demand**: Right-click Pink or use the tray menu to choose **Hide 🐾**—she sprints offscreen to the right and surfaces at the hiding spot.
+- **Cinematic Summoning**: Click her peeking ears (or select **Call Pink 🐾** from the tray) to summon her: she floats up as a spectral ghost (`ghost/`), looks around, dashes offscreen, and dramatically pops onto the taskbar in her physical doll body (`shocked`)!
+
+### 🖱️ Interactive Mouse Controls
+- **Single Left-click**: Plays a friendly random animation (`peace_sign`, `laughing`, or `shocked`) without speech dialogue.
+- **Double Left-click**: Opens the interactive **Chat Input Overlay ("Talk to Pink 💬")**.
+- **Left-click + drag**: Pick up and carry Pink around the screen (loops `shocked` while held). Release to watch gravity pull her back to the taskbar.
+- **Right-click**: Opens a context menu with **Talk to Pink 💬**, **Hide 🐾**, and **Exit**.
+- **Sprint to Exit**: Selecting **Exit** triggers a high-speed sprint to the furthest screen edge before cleanly closing the application.
+
+### 🎛️ System Tray & Hidden Icons Control Center
+Right-click the tray icon in your Windows notification area (`^`) to:
+- **Start with Windows**: Toggle automatic startup via Windows Registry.
+- **Call Pink 🐾 / Bring to Taskbar**: Re-summon or reset position.
+- **Talk to Pink 💬**: Launch the Gemini chat prompt.
+- **Set Gemini API Key 🔑**: Open a secure dialog to update your Gemini API key.
+- **Memory Storage 🧠**:
+  - **Open Memory Folder 📂**: Opens `memory/` in Windows File Explorer.
+  - **Clear Current Session 🧹**: Flushes in-memory context and initializes a clean session file.
+- **Hide Pink 🐾**: Send Pink to her peeking spot.
+- **Bomb Attack Mode**: Toggle cursor bomb throws and tune odds with the embedded slider.
+- **Dialogue Bubbles**: Toggle speech bubbles on or off in real time.
+- **Exit**: Cleanly terminate the application.
+
+### ⚙️ Transparent, Click-Through & High-DPI Ready
+- Clicks on transparent pixels pass straight through to underlying desktop icons, open apps, and taskbar buttons (`CLICK_THROUGH_TRANSPARENT`).
+- Scales cleanly across Windows display scaling factors (100%, 125%, 150%, 200%) using nearest-neighbor pixel sampling.
 
 ---
 
@@ -49,122 +89,124 @@
 
 ### Prerequisites
 
-- **OS**: Windows 10 or 11
+- **Operating System**: Windows 10 or 11
 - **Python**: 3.10 or higher
-- **PyQt5**
+- **Core Dependencies**: `PyQt5`, `requests`
+- *(Optional)* **Windows Media Control**: `winrt-runtime` and `winrt-Windows.Media.Control` (for automatic GSMTC music playback detection)
 
 ### Installation
 
-1. Clone the repository:
+1. **Clone the repository**:
    ```bash
-   git clone https://github.com/BintangPrasetyo95/yellows-pixel-buddies.git
+   git clone https://github.com/bintangprasetyo95/yellows-pixel-buddies.git
    cd yellows-pixel-buddies
    ```
 
-2. (Optional) Create and activate a virtual environment:
+2. **(Optional) Create and activate a virtual environment**:
    ```bash
    python -m venv venv
    .\venv\Scripts\activate
    ```
 
-3. Install dependencies:
+3. **Install dependencies**:
    ```bash
-   pip install PyQt5
+   pip install PyQt5 requests
+   ```
+   *(Optional for song detection)*:
+   ```bash
+   pip install winrt-runtime winrt-Windows.Media.Control
    ```
 
-4. Run Yellow's Pixel Buddies:
+4. **Set up your Gemini API Key**:
+   - Create a `.env` file in the root directory:
+     ```env
+     GEMINI_API_KEY="your_google_gemini_api_key_here"
+     ```
+   - *Alternatively*: Launch the app and enter your key via the tray menu (**Set Gemini API Key 🔑**) or when prompted during your first chat!
+
+5. **Run Yellow's Pixel Buddies**:
    ```bash
    python yellows_pixel_buddies.py
    ```
 
-### 📦 Building a Standalone Executable (.exe)
+---
 
-You can build Yellow's Pixel Buddies into an independent Windows `.exe` using [PyInstaller](https://pyinstaller.org/) so it can run without installing Python or opening a terminal.
+## 📦 Building a Standalone Executable (.exe)
+
+You can compile Yellow's Pixel Buddies into an independent Windows `.exe` using [PyInstaller](https://pyinstaller.org/) so it runs without installing Python.
 
 1. **Install PyInstaller**:
    ```bash
    pip install pyinstaller
    ```
 
-2. **Build the executable**:
+2. **Build using the included `.spec` file**:
+   ```bash
+   python -m PyInstaller Yellows-Pixel-Buddies.spec
+   ```
+   The generated executable will be placed in `dist/`:
+   ```text
+   dist/Yellows-Pixel-Buddies.exe
+   ```
 
-   - **Option A: Self-contained single file (Sprites & fonts bundled inside)**  
-     Produces a single portable executable with all sprites, fonts, and icon embedded:
-     ```bash
-     python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" --add-data "sprites;sprites" --add-data "fonts;fonts" --add-data "app_icon.ico;." yellows_pixel_buddies.py
-     ```
-     The finished `.exe` will be located in the `dist/` directory:
-     ```text
-     dist/Yellows-Pixel-Buddies.exe
-     ```
-
-   - **Option B: Moddable `.exe` (External `sprites/` and `fonts/` folders)**  
-     If you want to easily customize or drop new PNGs or fonts without recompiling:
-     ```bash
-     python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" yellows_pixel_buddies.py
-     ```
-     After building, copy the `sprites/` and `fonts/` folders, and `app_icon.ico` directly into `dist/` next to `Yellows-Pixel-Buddies.exe`:
-     ```text
-     dist/
-     ├── Yellows-Pixel-Buddies.exe
-     ├── app_icon.ico
-     ├── fonts/
-     └── sprites/
-     ```
+3. **Manual PyInstaller Build Command**:
+   If building without the `.spec` file, bundle required asset directories:
+   ```bash
+   python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" --add-data "sprites;sprites" --add-data "fonts;fonts" --add-data "app_icon.ico;." yellows_pixel_buddies.py
+   ```
 
 > [!TIP]
-> - **Fast Rebuilds with `.spec`**: Once built, a `Yellows-Pixel-Buddies.spec` file is generated. You can quickly rebuild anytime without typing all flags again:
->   ```bash
->   python -m PyInstaller Yellows-Pixel-Buddies.spec
->   ```
-> - **Command Not Recognized Fix**: If PowerShell gives `The term 'pyinstaller' is not recognized...`, use `python -m PyInstaller` instead of `pyinstaller`. This happens when Python's `Scripts` directory (especially with Microsoft Store Python installations) is not added to your system `PATH`.
-> - `--noconsole` (or `-w`): Runs silently in the background without popping up a black console window.
-> - `--onefile` (or `-F`): Packages Python and PyQt5 runtime into a single executable file.
-> - `--icon "app_icon.ico"`: Sets the custom pixel buddy icon on the executable.
+> - Memory files (`memory/`) will automatically be created next to your `.exe` or Python script upon first run.
+> - If PowerShell returns `The term 'pyinstaller' is not recognized...`, use `python -m PyInstaller` to ensure Python's script directory is invoked.
 
 ---
 
-## 🎨 Sprites & Custom Animations
+## 🎨 Sprites & Custom Assets
 
-Place transparent `.png` files inside each respective state folder under `sprites/`. Frames should be named numerically: `1.png`, `2.png`, `3.png`, etc.
+All animations are loaded dynamically from transparent PNGs inside `sprites/`, sorted numerically (`1.png`, `2.png`, `3.png`, ...):
 
 ```text
 sprites/
 ├── dialogue_box.png   # DELTARUNE Cyber World speech bubble (108x33 9-patch)
-├── idle/          # Resting animation (looping)
-├── walk_left/     # Walking left
-├── walk_right/    # Walking right
-├── run_left/      # Fast running left
-├── run_right/     # Fast running right
-├── angry/         # Triggered by rapid left-clicks (3 clicks within 2s)
-├── behind/        # Looking behind (held for 5s)
-├── crying/        # Tearful sadness (intro in frames 1-2, loops frames 3 & 4, outro frame 5)
-├── embarrassed/   # Blushing shy reaction
-├── kneeling/      # Kneeling resting pose (held for 10s)
-├── laughing/      # Joyful laughter
-├── overjoyed/     # Delighted bouncing celebration
-├── peace_sign/    # Poses and holds peace sign
-├── sad/           # Dejected expression
-├── shocked/       # Played on left-click, while dragged, or on maximized app switch
-├── singing/       # Multi-cycle singing melody
-├── tongue/        # Sticking tongue out (held for 1s)
-├── wistful/       # Pensive expression and slow wistful walk
-└── burnt/         # Rare special event or flashbang reaction (sooty crisp)
+├── eye/               # Vision toggle icons (off.png, on.png)
+├── ghost/             # Spectral ghost rising animation
+├── explosion/         # 17-frame foreground pixel explosion VFX
+├── bomb/              # Cat-head bomb sprites
+├── sparks/            # Burning bomb fuse spark frames
+├── laser_mid/         # Pulsating laser beam cores
+├── laser_extend/      # Laser cross beam tips
+├── idle/              # Resting animation (looping)
+├── walk_left/         # Walking left
+├── walk_right/        # Walking right
+├── run_left/          # Sprinting left
+├── run_right/         # Sprinting right
+├── wistful_walk_left/ # Slow wistful walk left
+├── wistful_walk_right/# Slow wistful walk right
+├── airborne/          # Ballistic jump towards cursor
+├── hanging/           # Hanging from cursor hands
+├── throw/             # Cat-head bomb toss pose
+├── angry/             # Angry stomping reaction
+├── behind/            # Looking behind (5s hold)
+├── crying/            # Tearful intro, loop, and exit
+├── embarrassed/       # Blushing shy reaction
+├── kneeling/          # Kneeling rest pose (10s hold)
+├── laughing/          # Joyful laughter
+├── overjoyed/         # Delighted bouncing celebration
+├── peace_sign/        # Posing peace sign
+├── sad/               # Dejected expression
+├── shocked/           # Startled / pick-up reaction
+├── singing/           # Multi-cycle singing melody
+├── tongue/            # Sticking tongue out (1s hold)
+├── wistful/           # Pensive wistful expression
+└── burnt/             # Crispy burnt doll state
 ```
 
-### 🔤 Fonts & Dialogue Typography
-
-Custom fonts for retro text rendering are located under `fonts/`:
-
+### 🔤 Retro Typography
 ```text
 fonts/
 └── determination/
     └── determination.ttf   # FontStruction "Determination" (CC BY 3.0)
 ```
-
-> [!TIP]
-> - **Walk Mirroring**: If you only have right-facing sprites for walking, set `MIRROR_WALK_RIGHT_FOR_LEFT = True` in `yellows_pixel_buddies.py` to automatically mirror `walk_right`.
-> - **Run Mirroring**: Similarly, set `MIRROR_RUN_RIGHT_FOR_LEFT = True` to automatically mirror `run_right` for `run_left`.
 
 ---
 
@@ -172,116 +214,61 @@ fonts/
 
 All tunable settings live at the top of [`yellows_pixel_buddies.py`](yellows_pixel_buddies.py) under **`1. CONFIGURATION`**:
 
-### Pixel Art & Sharpness
+### Pixel Art & Dimensions
 ```python
 SPRITE_SIZE = 128                  # On-screen window size (logical pixels)
-SMOOTH_SCALING = False             # False = crisp nearest-neighbor (pixel art), True = smooth
-FOOT_PADDING = 0                   # Lowers window so feet touch the taskbar top edge
+SMOOTH_SCALING = False             # False = crisp nearest-neighbor, True = smooth
+FOOT_PADDING = 0                   # Lowers window so feet touch taskbar top edge
 CLICK_THROUGH_TRANSPARENT = True   # Only visible pixels catch mouse clicks
 ```
 
-### Animation & Movement Speed
+### Movement & Speeds
 ```python
-ANIM_INTERVAL_MS = 180             # Base frame duration in ms (~5.5 FPS)
-WISTFUL_FRAME_INTERVAL_MS = 500    # Slow wistful walk frame duration (~2.0 FPS)
-FRAME_INTERVAL_MS = {              # Per-state frame interval overrides
-    "run_left": 120,
-    "run_right": 120,
-    "wistful_walk_left": WISTFUL_FRAME_INTERVAL_MS,
-    "wistful_walk_right": WISTFUL_FRAME_INTERVAL_MS,
-}
-MOVE_INTERVAL_MS = 22              # Movement update rate (~45 FPS)
 WALK_SPEED_PX_S = 60.0             # Walking speed (pixels/sec)
 RUN_SPEED_PX_S = 140.0             # Running speed (pixels/sec)
 WISTFUL_WALK_SPEED_PX_S = 30.0     # Slow wistful walk speed (pixels/sec)
 GRAVITY_PX_S2 = 2400.0             # Fall acceleration after drop
+WALK_MIN_S, WALK_MAX_S = 3.0, 8.0  # Duration range for walking/running
+PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0# Duration range for idle rests
+RUN_CHANCE = 0.25                  # 25% chance walk becomes a run
+WISTFUL_WALK_CHANCE = 0.25         # 25% chance walk becomes a wistful walk
 ```
 
-### Behavioral Timing & Odds
+### Gemini AI & Model Configuration
 ```python
-WALK_MIN_S, WALK_MAX_S = 3.0, 8.0     # Duration range for walking/running
-PAUSE_MIN_S, PAUSE_MAX_S = 2.0, 5.0   # Duration range for idle rests
-RUN_CHANCE = 0.25                     # 25% chance that a walk becomes a run
-WISTFUL_WALK_CHANCE = 0.25            # 25% chance that a walk becomes a slow wistful stroll
-SPECIAL_CHANCE = 0.5                  # 50% chance a rest triggers a special animation
-BURNT_CHANCE = 0.03                   # 3% chance a rest triggers the rare 'burnt' event
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+GEMINI_FALLBACK_MODELS = [
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash",
+]
+GEMINI_TIMEOUT_S = 35              # Request timeout in seconds (supports vision payloads)
 ```
 
-### Special Reactions, Holds & Repeats
+### Interactive Dialogue & Questions
 ```python
-# Relative weights when rolling a random special animation
-SPECIAL_WEIGHTS = {
-    "laughing": 3, "shocked": 2, "singing": 2, "peace_sign": 3,
-    "embarrassed": 2, "overjoyed": 2, "wistful": 2, "sad": 1,
-    "crying": 1, "tongue": 2, "kneeling": 2, "behind": 2,
-}
-
-# Milliseconds to freeze on the final frame of pose animations
-LAST_FRAME_HOLD_MS = {
-    "burnt": 2500,
-    "peace_sign": 1000,
-    "sad": 2000,
-    "tongue": 1000,     # Hold tongue for 1000 ms
-    "kneeling": 10000,  # Hold kneeling for 10000 ms (10 s)
-    "behind": 5000,     # Hold looking behind for 5000 ms (5 s)
-}
-
-# Sub-frame loops for states with an intro (1-based frame numbers: 1.png -> 1)
-FRAME_SUB_LOOPS = {
-    "crying": (3, 4, 4),   # Plays frames 1-2 once, loops frames 3 & 4 four times, then exits via frame 5
-}
-
-# Number of full animation cycles before returning to idle
-SPECIAL_REPEAT_COUNT = {
-    "singing": 2,
-    "laughing": 6,
-    "angry": 6,
-}
+DIALOGUE_ENABLED = True            # Enable speech bubbles / dialogue popups
+DIALOGUE_QUESTION_CHANCE = 0.25    # 25% chance an idle dialogue is an interactive question
+DIALOGUE_QUESTION_COOLDOWN_S = 60.0# Cooldown between interactive question prompts
+DIALOGUE_TYPEWRITER_MS = 32        # Typewriter speed (~31 chars/sec)
+DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4 # Extra pause ticks on punctuation for retro pacing
 ```
 
-### Mouse Interaction Tuning
+### Bomb Attacks & Cursor Interaction
 ```python
-CLICK_ANGRY_COUNT = 3         # Number of left-clicks needed...
-CLICK_ANGRY_WINDOW_S = 2.0    # ...within this many seconds to trigger 'angry'
-```
-
-### Window Switch & Flashbang Reactions
-```python
-REACT_ON_MAXIMIZED_APP = True      # React when switching to a maximized app
-REACT_POLL_INTERVAL_MS = 200       # Check active window every 200 ms
-DARK_LUMINANCE_THRESHOLD = 85.0    # Screen brightness <= 85 is "dark"
-LIGHT_LUMINANCE_THRESHOLD = 160.0  # Screen brightness >= 160 is "dominant white/light"
-WINDOW_SWITCH_SETTLE_MS = 120      # Wait 120 ms for window to composite before sampling
-SWITCH_SHOCK_COOLDOWN_S = 30.0     # Cooldown in seconds for shock
-SWITCH_BURNT_COOLDOWN_S = 5.0      # Cooldown in seconds for flashbang burnt (half of original 10s shock cooldown)
-```
-
-### Dialogue & Speech Bubbles
-```python
-DIALOGUE_ENABLED = True               # Enable speech bubbles / dialogue popups
-DIALOGUE_CHANCE_ON_PAUSE = 0.25       # 25% chance to speak a random thought during a normal rest pause
-DIALOGUE_CHANCE_ON_SHOCKED = 0.25     # 25% chance to speak when startled / clicked
-DIALOGUE_SHOCKED_COOLDOWN_S = 8.0     # Cooldown in seconds between startled / click dialogues
-DIALOGUE_TONGUE_COOLDOWN_S = 2.0      # Cooldown in seconds between :P tongue dialogues
-DIALOGUE_TYPEWRITER_MS = 32           # Milliseconds per character during typewriter effect (~31 chars/sec)
-DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible after typing completes
-DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
-DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
-DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
-DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
-DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on punctuation for authentic retro dialogue pacing
-DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
-SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
-SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
+HANG_BOMB_DEFAULT_CHANCE_PERCENT = 25  # Default chance to throw a bomb while hanging
+HANG_BOMB_COOLDOWN_S = 4.0             # Cooldown between bomb tosses
+STILL_JUMP_CHANCE = 0.50               # Chance to jump when cursor stays still
+GRAB_RADIUS_PX = 32.0                  # Catch radius to grab the cursor
 ```
 
 ---
 
 ## 🛑 How to Exit
 
-- **Right-click** on the pet and select **Exit**.
-- **Right-click** the icon in your taskbar's **Hidden icons (`^`)** menu and select **Exit**.
-- Or terminate the process in your terminal with `Ctrl + C`.
+- **Right-click** Pink and select **Exit**.
+- **Right-click** her icon in the **Hidden icons (`^`)** tray menu and select **Exit**.
+- Or press `Ctrl + C` in the terminal running the script.
 
 ---
 
@@ -291,7 +278,7 @@ SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milli
   <a href="https://github.com/bintangprasetyo95">
     <img src="icon.svg" width="64" height="64" alt="bintangprasetyo95 star icon" />
   </a>
-  <p>Created by <a href="https://github.com/bintangprasetyo95"><strong>@bintangprasetyo95</strong></a></p>
+  <p>Created with love by <a href="https://github.com/bintangprasetyo95"><strong>@bintangprasetyo95</strong></a></p>
 </div>
 
 ---
@@ -299,9 +286,9 @@ SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milli
 ## ⚖️ Disclaimer & Fan-Work Notice
 
 - This is a free, non-commercial fan-made companion.
-- Character designs and original sprite art are based on **DELTARUNE © Toby Fox**.
-- All rights to DELTARUNE belong to Toby Fox and the DELTARUNE development team.
-- This project is unofficial and is not affiliated with, endorsed by, or sponsored by Toby Fox or Royal Sciences LLC.
+- Character personality and original sprite art are inspired by **DELTARUNE © Toby Fox**.
+- All rights to DELTARUNE belong to Toby Fox and Royal Sciences LLC.
+- This project is unofficial and is not affiliated with, endorsed by, or sponsored by Toby Fox.
 
 ---
 
@@ -313,7 +300,3 @@ SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milli
   - **File**: `fonts/determination/determination.ttf`
   - **Author**: [anonymous-1438277 on FontStruct](https://fontstruct.com/fontstructions/show/2368299)
   - **License**: [Creative Commons Attribution 3.0 Unported (CC BY 3.0)](http://creativecommons.org/licenses/by/3.0/)
-  - Free to share and adapt with appropriate attribution (detailed in [LICENSE](LICENSE)).
-
-
-
