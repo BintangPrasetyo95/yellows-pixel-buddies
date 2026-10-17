@@ -511,7 +511,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - If you do not have the exact time, minute, or record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs today, minion! Stop trying to test me!").
     - Never pretend you remember something that is not in your memory records. Guessing or making up timestamps is strictly forbidden!
   * Technical Self-Identity: You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
-  * Screen Vision: When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing.
+  * Screen Vision: When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing. NEVER describe, caption, or narrate what you see (do NOT say "I see you have...", "Looking at your screen...", or list open apps). Jump directly into your reaction, tease, roast, or comment!
 """
 
 # --- Ghost Takeover Lines ----------------------------------------------------
@@ -4302,7 +4302,8 @@ class YellowsPixelBuddies(QWidget):
             system_inst += (
                 "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop.\n"
                 "- Look carefully at the screenshot. Accurately comment ONLY on what is ACTUALLY visible on their screen.\n"
-                "- Never guess, imagine, or hallucinate apps, code, files, or text that are not clearly visible. If text or code is too small or illegible, say you can't read it clearly instead of making it up!"
+                "- Never guess, imagine, or hallucinate apps, code, files, or text that are not clearly visible. If text or code is too small or illegible, say you can't read it clearly instead of making it up!\n"
+                "- CRITICAL: DO NOT describe, caption, or narrate what you see! (NEVER say 'I see you have...', 'Looking at your screen...', 'You are currently on...', or list open windows/apps). Jump DIRECTLY into your reaction, roast, advice, or witty comment!"
             )
         facts = self._memory.get_long_term_facts()
         if facts:
@@ -4498,9 +4499,10 @@ class YellowsPixelBuddies(QWidget):
             "\n\n[SPONTANEOUS DESKTOP SCREEN OBSERVATION]\n"
             "You are standing on the taskbar and spontaneously peek behind you at the user's desktop screen.\n"
             "- Carefully inspect the attached screenshot of their current screen.\n"
-            "- Make a quick, natural, observant comment or witty tease about whatever application, window, code, website, game, media player, document, or taskbar state is ACTUALLY visible on their desktop right now.\n"
+            "- Jump DIRECTLY into a quick, natural, observant reaction or witty tease about whatever caught your eye on their desktop right now.\n"
+            "- CRITICAL: DO NOT describe, caption, or narrate what you see! (NEVER say 'I see you have...', 'Looking at your screen...', 'You are currently on...', or list open apps/tabs). Treat what you see as already obvious to both of you, and immediately roast, judge, praise, or comment on it!\n"
             "- Persona: Stay in character as Pink (sassy, tsundere ghost doll). You can judge their tabs, mock their code or apps, tease them to get back to work or take a break, or let the doll vessel chime in with something cute or quirky.\n"
-            "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image. NEVER hallucinate apps, files, or text you cannot clearly identify. If nothing specific is happening or it's just a blank desktop/wallpaper, comment amusingly on that!\n"
+            "- STRICT VISUAL HONESTY: Only react to things clearly visible in the image. NEVER hallucinate apps, files, or text you cannot clearly identify. If nothing specific is happening or it's just a blank desktop/wallpaper, react amusingly to that!\n"
             "- Length: 1 to 2 short punchy sentences (under 35 words total). Every sentence MUST begin with '* '."
         )
 
@@ -4509,7 +4511,7 @@ class YellowsPixelBuddies(QWidget):
             system_inst += f"\n\nThings you remember about this user across sessions:\n{facts}"
 
         prompt_label = "[Pink peeks at your screen]"
-        auto_prompt = "[Spontaneous observation: Pink looks behind her at what the user is currently doing on their desktop and comments on it]"
+        auto_prompt = "[Spontaneous observation: Pink peeks behind her at what the user is doing on their desktop and makes a direct in-character reaction or witty comment without describing or narrating the screen]"
 
         self._gemini_thread = GeminiWorkerThread(
             api_key=api_key,
