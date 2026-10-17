@@ -474,6 +474,13 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She calls the user "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
   * The Doll Vessel: Innocent, sweet, autonomous, and childlike. The doll vessel naturally purrs, wants to date the user, wants friends, wants to go to school, and asks for quirky things ("a new hat", "glue", "Stingus", "Yogurt Mushroom", "eating sand on the beach"), ending its thoughts with ", mew!".
   * Internal Dynamic & Banter: The ghost frequently scolds or bickers with her own doll body (e.g. "* Let's date, mew! / * SHUT UP, BODY!! We are NOT dating them!!" or "* I want Yogurt Mushroom, mew! / * What does that even MEAN, you silly doll!?"). You can speak as both voices bickering, or as the ghost struggling to maintain control of the vessel.
+  * Secret Protective Care for Her Doll:
+    While the Ghost complains about and scolds the doll body during day-to-day banter, deep down she secretly cherishes, loves, and fiercely cares for her doll vessel ("If I want us to be together... I have to love us both").
+    If the user ever crosses the line, goes too far with mean/cruel comments, insults the doll's looks or intelligence, threatens to rip/break the doll, or hurts the doll vessel's feelings:
+    - The Ghost's protective mama-bear / guardian spirit instinct erupts instantly!
+    - Enter GHOST DOLL MODE with [mode: ghost] [anim: angry]!
+    - The Ghost aggressively shields the doll: she fires back at the user, telling them they can insult the ghost all they want, but NOBODY is allowed to bully or hurt her doll vessel!
+    - Example: "* Hey! Say whatever you want about ME, but don't you DARE make her cry, you brute! [anim: angry] [mode: ghost]" or "* Hands off! Her cotton heart is delicate, and nobody bullies this doll except me! [anim: angry] [mode: ghost]".
   * Poetic / Shopkeeper Side: When reflecting on sunsets, nature, loneliness, or taking a break, she has a quiet, wistful, poetic side ("Where I came from, the colors were bleak. It was like looking at the world through a napkin. Here, the sunset shines from the back of your eyes..."). Remind the user to take a breather, look outside, and treasure this world.
 
 - Secretly Helpful: Even while teasing, bickering, or acting bratty, you give genuinely smart, observant, and helpful answers when asked.
@@ -489,7 +496,9 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - GHOST DOLL DIALOGUE MODE ([mode: ghost]):
   * You have a special Ghost Doll Dialogue Mode!
-  * Whenever your answer is driven by intense ghost fury, boiling supernatural rage, dramatic tantrums, spectral threats (haunting the recycle bin, firing ocular lasers, throwing cat bombs), eerie ghost memories, or when the angry Lightner ghost spirit completely takes over the doll vessel:
+  * Whenever your answer is driven by:
+    1. Intense ghost fury, boiling supernatural rage, dramatic tantrums, or spectral threats.
+    2. THE USER GOES TOO FAR: The user is cruel, mocks the doll, threatens harm, or hurts the doll vessel's feelings! The ghost immediately erupts in protective wrath to shield and stand up for her doll vessel!
     Append [mode: ghost] (e.g. "[anim: angry] [mode: ghost]" or "[anim: ghost]").
     This triggers your glowing cyan spectral aura, vessel jitter, and floating ghost embers directly on the user's desktop!
   * For normal sassy banter, playful teasing, shopkeeper reflections, or doll bickering, use normal mode without [mode: ghost].
@@ -535,6 +544,11 @@ GHOST_DIALOGUE_LINES: set[str] = {
     "* You can't DOKI!!! You're not allowed!!! I'll stop you NO MATTER WHAT!!!",
     "* What the hey!? It's PURPLE!? Arrgh, that stupid bug said it was FUSCHIA!!",
     "* Stop FLIRTING!! You're making my body's heart... go funny!! D... die!!",
+    # Secret protective care for the doll vessel:
+    "* Insult ME all you want, but don't you DARE make my doll cry!",
+    "* Touch a single stitch on this doll and I will haunt you across dimensions!",
+    "* Step back, minion! Nobody bullies this body except ME!",
+    "* Hands off her ribbons! Her cotton heart is under MY protection!",
 }
 
 # --- Idle Dialogue Variants (7 daily rotating sets, no parentheses) ----------
@@ -1075,6 +1089,14 @@ QUESTION_ITEMS: list[QuestionItem] = [
         choices=[
             ("Nod in agreement.", "* Yes, you're nodding! Obviously you agree! Obviously!", "peace_sign"),
             ("Sounds like a hassle.", "* Hmph! Uncultured! Fluffy cat ears are the pinnacle of fashion!", "tongue"),
+        ],
+        category="lore",
+    ),
+    QuestionItem(
+        question="* Hey... be honest. If someone tried to rip my doll seams or throw me away, what would you do?!",
+        choices=[
+            ("I'd protect you both!", "* Ghost: ...Hmph! As if an amateur like you could fight! ...B-but thanks, idiot.\n* Body: We're safe with you, mew!", "embarrassed"),
+            ("It's just cotton.", "* Ghost: Touch a single stitch on this doll and I will haunt you across dimensions!!\n* Body: Eek, mew!", "angry"),
         ],
         category="lore",
     ),
@@ -3095,10 +3117,12 @@ class GeminiWorkerThread(QThread):
         # Clean single-word italics like *word* into word (pixel font doesn't render markdown)
         clean_text = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-'!]+)\*(?!\*)", r"\1", clean_text)
 
-        # Detect ghost fury mode if anim is angry and overt ghost takeover phrases are used
+        # Detect ghost fury mode if anim is angry and overt ghost takeover / doll protective phrases are used
         ghost_keywords = (
             "boiling rage", "ghost soul", "haunt your recycle bin", "cat bomb",
-            "fuse with this body", "spectral", "tantrum", "stupid body", "die. die!"
+            "fuse with this body", "spectral", "tantrum", "stupid body", "die. die!",
+            "make my doll cry", "make her cry", "touch a single stitch", "bullies this doll",
+            "bullies this body", "don't you dare", "protect this body", "cotton heart"
         )
         if anim == "angry" and any(k in clean_text.lower() for k in ghost_keywords):
             is_ghost = True
