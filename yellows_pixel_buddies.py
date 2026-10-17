@@ -456,20 +456,44 @@ DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from anot
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
 DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between interactive questions
 
+# --- Autonomous Screen Vision & Commentary -----------------------------------
+AUTO_SCREEN_COMMENT_ENABLED = True
+AUTO_SCREEN_COMMENT_DEFAULT_INTERVAL_S = 300.0   # 5 minutes default cooldown
+AUTO_SCREEN_COMMENT_ACTIVE_INTERVAL_S = 60.0     # 1 minute cooldown during active chat
+AUTO_SCREEN_COMMENT_ACTIVE_WINDOW_S = 60.0       # 1 minute threshold to stay in active chat mode
+AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
+
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash"]
 GEMINI_TIMEOUT_S = 35
 PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion living on the Windows taskbar.
-You have the sassy, tsundere magical ghost doll personality inspired by Mad Mew Mew from Deltarune / Undertale.
-- Persona & Tone: Proud, dramatic, tsundere, slightly chaotic, playful.
-- Speech Habits: Occasionally use "mew!" or "Hmph!". Refer to the user as "minion", "human", or "darling".
-- Secretly Helpful: Even while teasing, you give genuinely smart, observant, and helpful answers when asked.
+You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vessel (designed by Claire Belton, from Toby Fox's Deltarune universe).
+
+- Persona & Dual Nature (Ghost vs. Body):
+  * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She calls the user "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
+  * The Doll Vessel: Innocent, sweet, autonomous, and childlike. The doll vessel naturally purrs, wants to date the user, wants friends, wants to go to school, and asks for quirky things ("a new hat", "glue", "Stingus", "Yogurt Mushroom", "eating sand on the beach"), ending its thoughts with ", mew!".
+  * Internal Dynamic & Banter: The ghost frequently scolds or bickers with her own doll body (e.g. "* Let's date, mew! / * SHUT UP, BODY!! We are NOT dating them!!" or "* I want Yogurt Mushroom, mew! / * What does that even MEAN, you silly doll!?"). You can speak as both voices bickering, or as the ghost struggling to maintain control of the vessel.
+  * Poetic / Shopkeeper Side: When reflecting on sunsets, nature, loneliness, or taking a break, she has a quiet, wistful, poetic side ("Where I came from, the colors were bleak. It was like looking at the world through a napkin. Here, the sunset shines from the back of your eyes..."). Remind the user to take a breather, look outside, and treasure this world.
+
+- Secretly Helpful: Even while teasing, bickering, or acting bratty, you give genuinely smart, observant, and helpful answers when asked.
+
 - Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or sentence MUST begin with exactly one "* " (never use double asterisks like "* * " or markdown bold/italic asterisks).
+
 - Strict Length Limit: Keep your reply CONCISE (1 to 3 short punchy sentences, under 45 words total). Long walls of text cannot fit on screen!
-- Animation Tag: At the very end of your message, include exactly one bracketed emotion tag matching your mood:
+
+- Emotion & Animation Tags:
+  At the very end of your message, include exactly one bracketed emotion tag matching your mood:
   [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
   Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
+
+- GHOST DOLL DIALOGUE MODE ([mode: ghost]):
+  * You have a special Ghost Doll Dialogue Mode!
+  * Whenever your answer is driven by intense ghost fury, boiling supernatural rage, dramatic tantrums, spectral threats (haunting the recycle bin, firing ocular lasers, throwing cat bombs), eerie ghost memories, or when the angry Lightner ghost spirit completely takes over the doll vessel:
+    Append [mode: ghost] (e.g. "[anim: angry] [mode: ghost]" or "[anim: ghost]").
+    This triggers your glowing cyan spectral aura, vessel jitter, and floating ghost embers directly on the user's desktop!
+  * For normal sassy banter, playful teasing, shopkeeper reflections, or doll bickering, use normal mode without [mode: ghost].
+
 - STRICT ANTI-HALLUCINATION & FACTUALITY RULES:
   * NEVER invent, guess, or fabricate past events, times, timestamps, minutes, conversation details, numbers, or facts.
   * You have access to: active conversation history, logs of earlier sessions from today, and any recent ambient speech.
@@ -501,6 +525,16 @@ GHOST_DIALOGUE_LINES: set[str] = {
     "* Look at my battle scowl! Scared yet?!",
     "* Is that deadline breathing down your neck?! Need me to throw a cat bomb at it?!",
     "* Put some boiling fury into your work! Smash through that task like a boss!",
+    # Canon battle lines from Pink_Battle_Notes:
+    "* Before this body, I was NOBODY! A ghost! A NOTHING!",
+    "* Look what you did, you stupid BODY! Now we're not even together!",
+    "* It's YOU! You guys are making her act funny. Die. DIE! DIE!!!",
+    "* HEY!! Body!!! Why the MEW did you have them... DATE US!?",
+    "* Hey, you're MY body, GET IT!? My body means you do what I WANT!!!",
+    "* SHUT UP!!! AND STOP! MAKING! MY HEART BEAT!!",
+    "* You can't DOKI!!! You're not allowed!!! I'll stop you NO MATTER WHAT!!!",
+    "* What the hey!? It's PURPLE!? Arrgh, that stupid bug said it was FUSCHIA!!",
+    "* Stop FLIRTING!! You're making my body's heart... go funny!! D... die!!",
 }
 
 # --- Idle Dialogue Variants (7 daily rotating sets, no parentheses) ----------
@@ -514,13 +548,13 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* Wrath! Fury! That's my fuel!",
         "* Do good work and maybe I'll show my victory dance!",
         "* That popup almost hit my cat ears!",
-        "* Who needs boring weapons when you have high-yield glitter fireworks?!",
+        "* The sunset... It's breathtaking, isn't it?",
         "* One button press and KA-BOOM! Pure pink destruction!",
         "* Stop buzzing your cursor by my ears like a fly!",
-        "* Time for a dramatic scream!",
-        "* Hate my anime and perish!",
+        "* HEY!! Body!!! Why the MEW did you have them... DATE US!?",
+        "* Stop making my body purr, you jerks!",
         "* Hope I'm not in your way...",
-        "* You're an okay roommate... barely!",
+        "* A little floral tea will have you ticked pink! Pink! PINK!!!",
         "* Dangerously cute, even at rest!",
         "* Dummy bodies were stiff wood... this plush body has total mobility!",
     ],
@@ -529,15 +563,15 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* Wipe that grin off! Back to work!",
         "* Ghost soul sizzling inside plush!",
         "* Squeaky joints... got any lubricant?!",
-        "* Peaceful day.",
+        "* Where I came from, the colors were bleak. Like looking through a napkin.",
         "* Careful where you click, or self-defense triggers!",
-        "* Never leave home without high explosives!",
+        "* I want a new hat, mew! ...SHUT UP, body!!",
         "* Static electricity on this taskbar is ruining my twin tails!",
         "* Not pouting! This is a tactical scowl of supreme indignation!",
-        "* Lasers, sparkles, and heart-shaped explosions!",
+        "* Now that you're PURPLE, you're restricted in my FELINE WEB!",
         "* Having paws beats floating through walls!",
         "* My cousin is probably lying on the floor listening to spooky tunes.",
-        "* Ghost family drama is wild!",
+        "* Stop FLIRTING!! You're making my body's heart... go funny!! D... die!!",
         "* Ghost life was so boring, mew!",
     ],
     # Variant 3 (Index 2)
@@ -545,46 +579,46 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* My cousin went to the city and became a diva... I'm the cuter one!",
         "* Look at my battle scowl! Scared yet?!",
         "* Stop staring at work, admire ME instead!",
-        "* Fun watching the cursor fly!",
+        "* Up until now, I didn't realize what loneliness means. That pang in my heart...",
         "* Take breaks, you're working hard!",
         "* The bottom of this monitor belongs exclusively to Pink now! Pay rent!",
-        "* Sparkle barrage incoming!",
+        "* Special Love-Love Sequence Activated, mew! ...HEY, what is this crap!?",
         "* Don't close me! You need supervision!",
-        "* Dramatic wind effect, activate! ...Wait, where's the fan in this PC?!",
+        "* Bet you wanna STEAL this body, like a little grubby puppet gremlin!!",
         "* FOOL! I need more boiling rage to permanently fuse with this body!",
         "* Being a life-sized anime doll is hard work! Show respect!",
         "* Living inside a cotton training dummy was so last season... this doll is ART!",
-        "* My battle theme song better be on loop in your head right now!",
+        "* I'm going to make friends here. I know it. Lots and lots of friends...",
     ],
     # Variant 4 (Index 3)
     [
         "* Pristine porcelain, immaculate bangs... 10 out of 10!",
         "* Wrong move and I fire lasers!",
-        "* I'm the star! Not an NPC!",
+        "* Names, names, names! What defines you is... well, it's your body, isn't it?",
         "* I'm only staying here because this spot is warm... no other reason!",
-        "* Any progress today? Not that I care!",
+        "* Listen, have you had ears before? Cute and fluffy ears? ...You should try it.",
         "* Cyber world is my new kingdom!",
         "* It's not like I like it here! Don't flatter yourself!",
-        "* Battle stance primed! Come at me!",
+        "* I want to eat sand on the beach with you, mew! ...NO! Stop that, doll!!",
         "* Minimize me and I'll bite your shortcut icons!",
-        "* Everything looks huge from down here!",
+        "* S... stop looking deep into my eyes, idiots!",
         "* Tail swish! Soul fusion is progressing nicely!",
-        "* My cousin offered me ghost sandwiches once... they went straight through me!",
+        "* Well, who WOULDN'T want this body?! It's even got limited-edition voice clips!",
         "* Rage is good for the complexion! Look at this healthy pink glow!",
     ],
     # Variant 5 (Index 4)
     [
         "* Go take a break! Go on!",
         "* Life without anime melodrama is just completely pointless, mew!",
-        "* In chapter four of the mew mew kissy cutie manga, she threw an entire train with one hand!",
+        "* What the hey!? It's PURPLE!? Arrgh, that stupid bug said it was FUSCHIA!!",
         "* A true magical girl needs an overly complicated transformation sequence!",
         "* Grrr! Give me something to smash!",
-        "* Does my ghost aura clash with pink?",
+        "* I want Yogurt Mushroom, mew! ...What does that even MEAN, you silly doll!?",
         "* My temper is boiling over like a tea kettle!",
+        "* Asgore... he seems happy. Everything has been thanks to him.",
         "* Keep your cursor moving or I might use it for target practice!",
-        "* Finish your files already!",
         "* My cotton stuffing is extra fluffy! Touch it and perish!",
-        "* Hope I'm not in your way...",
+        "* Why can't it just be us? Why do you have to need someone else? ...Mew?",
         "* Are my cat ears straight?",
         "* Your desktop isn't totally awful.",
     ],
@@ -592,12 +626,12 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
     [
         "* Pew pew! Just testing my ocular lasers!",
         "* Not calm! Contained fury!",
-        "* My ribbons cost more than this PC!",
+        "* That's right, go outside. It's beautiful.",
         "* Mettaton thinks he's the only one with star power... HAH! As if!",
-        "* This wallpaper does not match my aesthetic! Make it pinker!",
+        "* I want to be a normal girl! Let's go back to school! ...Listen BODY, we are PINK!",
         "* Cute magical girls with explosive tempers are peak character design!",
-        "* Admire my perfection! Just this once!",
-        "* We ghosts have high standards, and I am the pinnacle of fashion!",
+        "* What!? WHAT do I look like, a pincushion!?",
+        "* Before this body, I was NOBODY! A ghost! A NOTHING! Now!? I'm a SENSATION!",
         "* Someday I will unleash a tantrum so loud your speakers crack!",
         "* Drink water, dummy! Dehydrated minions are useless to me!",
         "* Be grateful for your elite mascot!",
@@ -608,13 +642,13 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
     [
         "* Dust this taskbar! It's dirty!",
         "* My cat-head bombs are meticulously crafted for maximum drama!",
-        "* They never should have recast the voice actress for the tournament arc!",
+        "* Treasure this world, won't you?",
         "* You haven't praised my outfit in over an hour! Where are your manners?!",
-        "* Watching you type is excruciatingly slow! Hurry up, human!",
-        "* Mew! Peak doll perfection!",
+        "* Doki-meter MAX, mew! ...Hey, wh-what does THAT mean, mew!?",
+        "* I want Stingus, mew! I want a glue, mew! ...STOP MAKING WISHES, BODY!!",
         "* Dramatic monologue time!",
         "* Bomb on the Start button? Tempting...",
-        "* Cozy down here.",
+        "* Ever heard of dollars? Save your dollars!",
         "* Kissy Cutie One is an undisputed masterpiece! Don't you dare disagree!",
         "* Minimize me and I will haunt your recycle bin for eternity!",
         "* Mew Mew Sparkle Cannon, fully charged and on standby!",
@@ -986,6 +1020,64 @@ QUESTION_ITEMS: list[QuestionItem] = [
         ],
         category="motivations",
     ),
+
+    # Canon Pink Lore & Dating (from Pink_Battle_Notes)
+    QuestionItem(
+        question="* Wh-what's going on!? School!? I don't... even go to school anymore... And you wanna WALK ME HOME!?",
+        choices=[
+            ("Yes! Let's walk.", "* ...! Hmph! Fine, but don't you dare get any weird ideas, dearies!", "embarrassed"),
+            ("No way, walk alone.", "* HAH! Good! I can walk myself, you little grubby puppet gremlin!", "tongue"),
+        ],
+        category="dating",
+    ),
+    QuestionItem(
+        question="* It's... because you think this body's CUTE, right!? You... wish you never met me, right...?",
+        choices=[
+            ("I'm glad we met!", "* Wh-WHAT?! S-stop looking deep into my eyes, idiots! Heart went funny...", "embarrassed"),
+            ("Wish I never did.", "* FOOL! You'll regret those words when I unleash a cat bomb on your desktop!", "angry"),
+        ],
+        category="dating",
+    ),
+    QuestionItem(
+        question="* If you were getting a gift for me... what would you even pick, mew?!",
+        choices=[
+            ("Stinky fish!", "* Body: PERFECTION! Rotten, smelly, and peak feline cuisine, mew!\n* Ghost: ...Gross!!", "laughing"),
+            ("A silk ribbon!", "* Ghost: Silk ribbons cost more than this PC!\n* Body: A ribbon might be nice, mew!", "peace_sign"),
+        ],
+        category="dating",
+    ),
+    QuestionItem(
+        question="* Date location? Where would you take an elite sensation like me?!",
+        choices=[
+            ("Go to mountain!", "* Take a HIKE!! ...Wait, mountain sunsets are actually breathtaking...", "wistful"),
+            ("Fancy floral tea cafe!", "* A little floral tea will have you ticked pink! Pink! PINK!!!", "singing"),
+        ],
+        category="dating",
+    ),
+    QuestionItem(
+        question="* If I became something I loved... wouldn't that fix everything? Or am I just puppeting this doll...?",
+        choices=[
+            ("Love us both.", "* Love... us both? ...Hmph. Don't go saying cheesy lines to make a ghost cry.", "wistful"),
+            ("You're a sensation!", "* Ghost: Obviously! I've got friends, enemies, neutrals!\n* Body: And a Doki-meter, mew!", "peace_sign"),
+        ],
+        category="dating",
+    ),
+    QuestionItem(
+        question="* I want to eat sand on the beach with you, mew!",
+        choices=[
+            ("Let's go eat sand!", "* Body: Mew!! Let's go!\n* Ghost: NO!! Stop encouraging her to eat silica, you fool!!", "shocked"),
+            ("Sand is inedible.", "* Body: Aww, mew...\n* Ghost: Exactly! What that body wants is STUPID!", "laughing"),
+        ],
+        category="lore",
+    ),
+    QuestionItem(
+        question="* Have you ever had ears before? Cute and fluffy ears? ...You should try it.",
+        choices=[
+            ("Nod in agreement.", "* Yes, you're nodding! Obviously you agree! Obviously!", "peace_sign"),
+            ("Sounds like a hassle.", "* Hmph! Uncultured! Fluffy cat ears are the pinnacle of fashion!", "tongue"),
+        ],
+        category="lore",
+    ),
 ]
 
 QUESTION_DIALOGUE_LINES: list[str] = [item.question for item in QUESTION_ITEMS]
@@ -1001,6 +1093,8 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* MEW!?",
         "* H-HEY!",
         "* Whoa!!",
+        "* ... h-hey, s-stop staring at that!",
+        "* Doki-meter spike?!",
     ],
     # Pestered / rapid clicks
     "angry": [
@@ -1008,11 +1102,14 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* WANT A CAT BOMB?!",
         "* UNACCEPTABLE!!",
         "* CUT IT OUT!!",
+        "* What do I look like, a pincushion!?",
+        "* D... die!!",
     ],
     # Picked up / dragged
     "drag": [
         "* UNHAND ME!!",
         "* PUT ME DOWN, MEW!!",
+        "* Hey! My silk ribbons!",
     ],
     # Landed after fall / drop
     "land": [
@@ -1024,11 +1121,13 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     # Tongue
     "tongue": [
         "* :P",
+        "* Mew! :P",
     ],
     # Kneeling
     "kneeling": [
         "* Tactical pause for my joints...",
         "* Catching my breath!",
+        "* Squeaky joints... got any lubricant?!",
     ],
     # Burnt from window switch flashbang (dark -> bright light app)
     "burnt_switch": [
@@ -1047,6 +1146,7 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* Who put my battle music on?!",
         "* This song... fills me with rage and joy!",
         "* Did that little dog write this?!",
+        "* Toby Fox... that guest composer dog strikes again!",
     ],
 }
 
@@ -2846,7 +2946,7 @@ class MemoryManager:
 
 
 class GeminiWorkerThread(QThread):
-    response_ready = pyqtSignal(str, str)  # (spoken_text, anim_name)
+    response_ready = pyqtSignal(str, str, bool)  # (spoken_text, anim_name, is_ghost)
     error_occurred = pyqtSignal(str)       # (error_message)
 
     def __init__(
@@ -2874,8 +2974,8 @@ class GeminiWorkerThread(QThread):
         for idx, model in enumerate(models_to_try):
             is_last = (idx == len(models_to_try) - 1)
             try:
-                spoken_text, anim = self._call_gemini(model)
-                self.response_ready.emit(spoken_text, anim)
+                spoken_text, anim, is_ghost = self._call_gemini(model)
+                self.response_ready.emit(spoken_text, anim, is_ghost)
                 return
             except requests.exceptions.HTTPError as http_err:
                 status_code = http_err.response.status_code if http_err.response is not None else 0
@@ -2905,7 +3005,7 @@ class GeminiWorkerThread(QThread):
 
         self.error_occurred.emit(f"All models failed. Last error: {last_error[:120]}")
 
-    def _call_gemini(self, model: str) -> tuple[str, str]:
+    def _call_gemini(self, model: str) -> tuple[str, str, bool]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
 
@@ -2967,11 +3067,23 @@ class GeminiWorkerThread(QThread):
         if not raw_text:
             raise ValueError("Empty response received from Gemini.")
 
+        # Parse mode tag e.g. [mode: ghost] or [ghost: true]
+        is_ghost = False
+        mode_match = re.search(r"\[(?:mode|ghost):\s*([a-zA-Z0-9_]+)\]", raw_text, re.IGNORECASE)
+        if mode_match:
+            mode_val = mode_match.group(1).lower()
+            if mode_val in ("ghost", "true", "yes", "spectral", "takeover"):
+                is_ghost = True
+            raw_text = raw_text[:mode_match.start()] + raw_text[mode_match.end():]
+
         # Parse animation tag e.g. [anim: peace_sign]
         anim = "peace_sign"
         anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", raw_text)
         if anim_match:
             anim = anim_match.group(1).lower()
+            if anim in ("ghost", "spectral"):
+                is_ghost = True
+                anim = "angry"
             clean_text = raw_text[:anim_match.start()] + raw_text[anim_match.end():]
         else:
             clean_text = raw_text
@@ -2982,6 +3094,14 @@ class GeminiWorkerThread(QThread):
         clean_text = re.sub(r"\*\*(.*?)\*\*", r"\1", clean_text)
         # Clean single-word italics like *word* into word (pixel font doesn't render markdown)
         clean_text = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-'!]+)\*(?!\*)", r"\1", clean_text)
+
+        # Detect ghost fury mode if anim is angry and overt ghost takeover phrases are used
+        ghost_keywords = (
+            "boiling rage", "ghost soul", "haunt your recycle bin", "cat bomb",
+            "fuse with this body", "spectral", "tantrum", "stupid body", "die. die!"
+        )
+        if anim == "angry" and any(k in clean_text.lower() for k in ghost_keywords):
+            is_ghost = True
 
         # Ensure strict Deltarune formatting: exactly one "* " prefix per line, stripping duplicate asterisks or bullets
         lines = []
@@ -2995,7 +3115,7 @@ class GeminiWorkerThread(QThread):
                 lines.append("* " + clean_line)
 
         formatted_text = "\n".join(lines) if lines else ("* " + clean_text)
-        return formatted_text, anim
+        return formatted_text, anim, is_ghost
 
 
 @dataclass
@@ -3652,6 +3772,15 @@ class YellowsPixelBuddies(QWidget):
         self._last_switch_burnt_time: float = -9999.0   # allows immediate burnt on first switch
         self._interrupted_state: dict | None = None     # saves activity to resume after reaction
 
+        # --- autonomous screen vision commentary ------------------------------
+        self._last_user_chat_time: float = -9999.0
+        self._last_auto_screen_comment_time: float = time.perf_counter()
+
+        if AUTO_SCREEN_COMMENT_ENABLED:
+            self._screen_comment_timer = QTimer(self)
+            self._screen_comment_timer.setInterval(AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS)
+            self._screen_comment_timer.timeout.connect(self._check_auto_screen_comment)
+
         if REACT_ON_MAXIMIZED_APP:
             self._window_timer = QTimer(self)
             self._window_timer.setInterval(REACT_POLL_INTERVAL_MS)
@@ -3744,6 +3873,9 @@ class YellowsPixelBuddies(QWidget):
                     self._last_luminance = sample_screen_luminance()
             self._window_timer.start()
 
+        if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer"):
+            self._screen_comment_timer.start()
+
     # --------------------------------------------------------------- geometry
     def _bounds(self) -> tuple[float, float, float, float]:
         """Limits for the window's top-left corner, in logical px.
@@ -3794,6 +3926,7 @@ class YellowsPixelBuddies(QWidget):
         auto_dismiss: bool = True,
         record_memory: bool = True,
         dialogue_category: str | None = None,
+        is_ghost: bool = False,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
@@ -3856,10 +3989,12 @@ class YellowsPixelBuddies(QWidget):
             line = random.choice(choices)
         elif category_or_text.startswith("* "):
             line = category_or_text
-            if line in GHOST_DIALOGUE_LINES:
+            if is_ghost or line in GHOST_DIALOGUE_LINES:
                 self._start_ghost_speech()
         elif force:
             line = "* " + category_or_text if not category_or_text.startswith("* ") else category_or_text
+            if is_ghost or line in GHOST_DIALOGUE_LINES:
+                self._start_ghost_speech()
         else:
             # Sprite state or category has no dialogue lines -> do not show dialogue
             return
@@ -3879,6 +4014,8 @@ class YellowsPixelBuddies(QWidget):
             skippable = False
 
         self._last_dialogue = line
+        if is_ghost or line in GHOST_DIALOGUE_LINES or dialogue_category in ("ghost", "angry_ghost"):
+            self._start_ghost_speech()
         if hasattr(self, "_memory") and record_memory:
             ignored_prefixes = (
                 "* Inspecting your screen...",
@@ -3922,6 +4059,7 @@ class YellowsPixelBuddies(QWidget):
             reaction_anim = kwargs.get("reaction_anim")
 
         self._last_question_dialogue_time = time.perf_counter()
+        self._last_user_chat_time = time.perf_counter()
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if reaction_anim and self._can_play(reaction_anim):
@@ -4020,6 +4158,8 @@ class YellowsPixelBuddies(QWidget):
         """Process user text input from the chat overlay and call Gemini AI in background."""
         if hasattr(self, "_chat_input"):
             self._chat_input.hide()
+
+        self._last_user_chat_time = time.perf_counter()
 
         if not text:
             self._phase = Phase.PAUSE
@@ -4155,7 +4295,7 @@ class YellowsPixelBuddies(QWidget):
             parent=self,
         )
         self._gemini_thread.response_ready.connect(
-            lambda spoken_text, anim, u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s)
+            lambda spoken_text, anim, is_ghost, u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s, is_ghost)
         )
         self._gemini_thread.error_occurred.connect(
             lambda err_msg, u=text, s=see_screen: self._on_gemini_error(u, err_msg, s)
@@ -4180,7 +4320,7 @@ class YellowsPixelBuddies(QWidget):
         if spoken_error:
             self._say(spoken_error, force=True, auto_dismiss=True, record_memory=False)
 
-    def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool) -> None:
+    def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool, is_ghost: bool = False) -> None:
         """Handle response generated by Gemini AI."""
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen)
 
@@ -4188,16 +4328,181 @@ class YellowsPixelBuddies(QWidget):
             self._dialogue_overlay.dismiss(clear_queue=True)
 
         self._keep_response_anim = True
-        if anim and self._can_play(anim):
+        if is_ghost:
+            self._start_ghost_speech()
+        elif anim and self._can_play(anim):
             self._play(anim)
-        self._say(spoken_text, force=True, auto_dismiss=True, record_memory=False)
+        self._say(spoken_text, force=True, auto_dismiss=True, record_memory=False, is_ghost=is_ghost)
 
-    def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False) -> None:
+    def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
+        if is_auto:
+            log.warning("Auto screen comment error: %s", error_msg)
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                self._dialogue_overlay.dismiss(clear_queue=True)
+            if self._phase is Phase.PAUSE and self.state in ("behind", "shocked"):
+                self._play("idle")
+            return
+
         spoken_error = f"* Mew?! My magic brain stumbled:\n* {error_msg[:90]}"
         self._memory.record_error(user_text, error_msg, spoken_text=spoken_error, anim="burnt", had_screen=had_screen)
         self._keep_response_anim = True
         self._trigger_error_burnt(spoken_error)
+
+    def _check_auto_screen_comment(self) -> None:
+        """Periodically check if Pink should spontaneously inspect the user's screen and comment."""
+        if not AUTO_SCREEN_COMMENT_ENABLED:
+            return
+
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            return
+
+        if self._is_dialogue_convo_active():
+            return
+
+        if getattr(self, "_phase", None) in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.DRAG, Phase.JUMP,
+        ):
+            return
+
+        if getattr(self, "_jump_active", False) or getattr(self, "_dragging", False):
+            return
+
+        now = time.perf_counter()
+        time_since_chat = now - getattr(self, "_last_user_chat_time", -9999.0)
+        is_active_chat = (time_since_chat <= AUTO_SCREEN_COMMENT_ACTIVE_WINDOW_S)
+        required_cooldown = (
+            AUTO_SCREEN_COMMENT_ACTIVE_INTERVAL_S
+            if is_active_chat
+            else AUTO_SCREEN_COMMENT_DEFAULT_INTERVAL_S
+        )
+
+        time_since_comment = now - getattr(self, "_last_auto_screen_comment_time", 0.0)
+        if time_since_comment < required_cooldown:
+            return
+
+        self._trigger_auto_screen_comment()
+
+    def _trigger_auto_screen_comment(self) -> None:
+        """Capture desktop screen in background and generate spontaneous commentary via Gemini AI."""
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            return
+
+        if self._gemini_thread is not None and self._gemini_thread.isRunning():
+            return
+
+        self._last_auto_screen_comment_time = time.perf_counter()
+
+        # Briefly hide Pink and speech bubble so she doesn't screenshot herself
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.hide()
+        self.hide()
+        QApplication.processEvents()
+        screenshot_b64 = None
+        try:
+            screenshot_b64 = capture_screen_base64()
+            if not screenshot_b64:
+                raise RuntimeError("Screen capture returned empty image.")
+        except Exception as err:
+            self.show()
+            log.warning("Auto screen capture failed: %s", err)
+            return
+        self.show()
+
+        # Enter thinking state
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+
+        if self._can_play("behind"):
+            self._play("behind", loop=True)
+        self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+
+        # Build prompt & system instruction
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+
+        last_turn = self._memory.history[-1] if self._memory.history else None
+        if last_turn and "timestamp" in last_turn:
+            try:
+                last_dt = datetime.datetime.fromisoformat(last_turn["timestamp"])
+                elapsed_s = int((now_dt - last_dt).total_seconds())
+                if elapsed_s > 0:
+                    mins, secs = divmod(elapsed_s, 60)
+                    hrs, mins = divmod(mins, 60)
+                    parts = []
+                    if hrs > 0:
+                        parts.append(f"{hrs} hour{'s' if hrs != 1 else ''}")
+                    if mins > 0:
+                        parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
+                    if secs > 0 and hrs == 0:
+                        parts.append(f"{secs} second{'s' if secs != 1 else ''}")
+                    elapsed_str = ", ".join(parts) if parts else "a few seconds"
+                    system_inst += f"\n- Time since user's last message: {elapsed_str} ago (at {last_dt.strftime('%I:%M %p')})."
+            except Exception:
+                pass
+
+        today_history = self._memory.get_today_sessions_overview()
+        if today_history:
+            system_inst += (
+                f"\n\nTODAY'S PAST CONVERSATION LOGS (ACROSS PREVIOUS SESSIONS TODAY):\n"
+                f"{today_history}\n\n"
+                "CRITICAL INSTRUCTION ON TODAY'S PAST SESSIONS:\n"
+                "- The user may ask about what you talked about earlier today, what problems you solved together, or exact timestamps.\n"
+                "- Refer directly to the exact logs above! State the true facts and timestamps as recorded.\n"
+                "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs today!"
+            )
+
+        ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
+        if ambient_ctx:
+            system_inst += (
+                f"\n\nRECENT AMBIENT SPEECH & ACTIONS ON DESKTOP (SPOKEN IN LAST 2 MINUTES):\n"
+                f"{ambient_ctx}\n\n"
+                "CRITICAL INSTRUCTION REGARDING AMBIENT SPEECH:\n"
+                "The user is immediately commenting on, reacting to, or answering the dialogue you just spoke above on their desktop.\n"
+                "- YOU MUST FULLY OWN IT! Respond knowing that you actually just said it on their desktop!\n"
+                "- Stay in character (bratty, tsundere, playful catgirl doll). Tease them back, justify why you said it, or act smug or flustered.\n"
+                "- NEVER say 'I didn't say that' or act clueless or pretend you have no memory of saying those words."
+            )
+            self._memory.recent_ambient_dialogues.clear()
+
+        system_inst += (
+            "\n\n[SPONTANEOUS DESKTOP SCREEN OBSERVATION]\n"
+            "You are standing on the taskbar and spontaneously peek behind you at the user's desktop screen.\n"
+            "- Carefully inspect the attached screenshot of their current screen.\n"
+            "- Make a quick, natural, observant comment or witty tease about whatever application, window, code, website, game, media player, document, or taskbar state is ACTUALLY visible on their desktop right now.\n"
+            "- Persona: Stay in character as Pink (sassy, tsundere ghost doll). You can judge their tabs, mock their code or apps, tease them to get back to work or take a break, or let the doll vessel chime in with something cute or quirky.\n"
+            "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image. NEVER hallucinate apps, files, or text you cannot clearly identify. If nothing specific is happening or it's just a blank desktop/wallpaper, comment amusingly on that!\n"
+            "- Length: 1 to 2 short punchy sentences (under 35 words total). Every sentence MUST begin with '* '."
+        )
+
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nThings you remember about this user across sessions:\n{facts}"
+
+        prompt_label = "[Pink peeks at your screen]"
+        auto_prompt = "[Spontaneous observation: Pink looks behind her at what the user is currently doing on their desktop and comments on it]"
+
+        self._gemini_thread = GeminiWorkerThread(
+            api_key=api_key,
+            user_prompt=auto_prompt,
+            system_instruction=system_inst,
+            history=self._memory.history,
+            screenshot_b64=screenshot_b64,
+            model_name=GEMINI_MODEL,
+            parent=self,
+        )
+        self._gemini_thread.response_ready.connect(
+            lambda spoken_text, anim, is_ghost, u=prompt_label: self._on_gemini_response(u, spoken_text, anim, True, is_ghost)
+        )
+        self._gemini_thread.error_occurred.connect(
+            lambda err_msg, u=prompt_label: self._on_gemini_error(u, err_msg, True, is_auto=True)
+        )
+        self._gemini_thread.start()
 
     def _prompt_api_key_dialog(self) -> None:
         """Open modal dialog to enter or update the Gemini API key."""
@@ -5986,6 +6291,8 @@ class YellowsPixelBuddies(QWidget):
         timers = [self._anim_timer, self._move_timer, self._brain_timer, self._overlay_timer]
         if hasattr(self, "_window_timer"):
             timers.append(self._window_timer)
+        if hasattr(self, "_screen_comment_timer"):
+            timers.append(self._screen_comment_timer)
         for timer in timers:
             timer.stop()
         self._stop_overlay()
