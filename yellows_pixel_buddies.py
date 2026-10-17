@@ -206,8 +206,8 @@ SPECIAL_CHANCE = 0.5              # chance that a pause contains one special ani
 BURNT_CHANCE = 0.03               # RARE: chance per pause that the pet is "burnt" instead
 SPECIAL_WEIGHTS = {
     # relative odds of each special / looping rest when one is rolled (never the same twice in a row)
-    "laughing": 3, "shocked": 2, "singing": 2, "peace_sign": 3,
-    "embarrassed": 2, "overjoyed": 2, "wistful": 2, "sad": 1,
+    "laughing": 4, "shocked": 2, "singing": 2, "peace_sign": 3,
+    "embarrassed": 2, "wistful": 2, "sad": 1,
     "crying": 1, "tongue": 2, "kneeling": 2, "behind": 2,
 }
 RUN_CHANCE = 0.25                 # chance that a new walk is a run instead
@@ -291,8 +291,9 @@ LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
                   "wistful_walk_left", "wistful_walk_right")   # repeat forever
 LOOPING_REST_STATES = ()                  # loops for the whole pause; picked like a special
 SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign",
-                  "embarrassed", "overjoyed", "wistful", "sad",
+                  "embarrassed", "wistful", "sad",
                   "crying", "tongue", "kneeling", "behind")           # one-shot -> idle
+EXCEPTIONAL_STATES = ("overjoyed",)       # reserved for rare / exceptional moments; never picked randomly
 REACTION_STATES = ("angry",)              # one-shot -> idle; triggered, never random
 BURNT_STATE = "burnt"                                                # one-shot (+hold) -> idle
 AIRBORNE_STATE = "airborne"               # jump to the cursor: the flight and every fall after it
@@ -315,7 +316,7 @@ EFFECT_GROUND_RATIO = {
 }
 GHOST_STATE = "ghost"
 ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_STATES
-              + (BURNT_STATE, THROW_STATE, GHOST_STATE) + JUMP_STATES + EFFECT_STATES)
+              + EXCEPTIONAL_STATES + (BURNT_STATE, THROW_STATE, GHOST_STATE) + JUMP_STATES + EFFECT_STATES)
 
 # --- Startup Hiding & Summoning ----------------------------------------------
 EAR_PEEK_HEIGHT_PX = 34   # height (px) of ghost ears poking above the taskbar (lowered slightly)
@@ -464,10 +465,11 @@ You have the sassy, tsundere magical ghost doll personality inspired by Mad Mew 
 - Persona & Tone: Proud, dramatic, tsundere, slightly chaotic, playful.
 - Speech Habits: Occasionally use "mew!" or "Hmph!". Refer to the user as "minion", "human", or "darling".
 - Secretly Helpful: Even while teasing, you give genuinely smart, observant, and helpful answers when asked.
-- Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or point MUST begin with "* ".
+- Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or sentence MUST begin with exactly one "* " (never use double asterisks like "* * " or markdown bold/italic asterisks).
 - Strict Length Limit: Keep your reply CONCISE (1 to 3 short punchy sentences, under 45 words total). Long walls of text cannot fit on screen!
 - Animation Tag: At the very end of your message, include exactly one bracketed emotion tag matching your mood:
-  [anim: peace_sign], [anim: laughing], [anim: overjoyed], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
+  [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
+  Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
 """
 
 # --- Ghost Takeover Lines ----------------------------------------------------
@@ -699,7 +701,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Is your desktop always this chaotic?! Where do you even find your files, mew?!",
         choices=[
             ("Organized chaos!", "* 'Organized chaos' is an excuse made by amateurs!", "tongue"),
-            ("I'll clean it...", "* Hah! You better! My paws need clean runway to strut on!", "overjoyed"),
+            ("I'll clean it...", "* Hah! You better! My paws need clean runway to strut on!", "laughing"),
         ],
         category="desktop",
     ),
@@ -722,7 +724,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Why are there so many icons on this taskbar?! Give my feet some walking room!",
         choices=[
-            ("I'll unpin some!", "* Excellent! Clear the stage for the ultimate magical superstar!", "overjoyed"),
+            ("I'll unpin some!", "* Excellent! Clear the stage for the ultimate magical superstar!", "laughing"),
             ("Deal with it, doll.", "* DOLL?! I am an ethereal warrior trapped in cotton! SHOW RESPECT!!", "angry"),
         ],
         category="desktop",
@@ -756,7 +758,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* What kind of project is this anyway?! Does it have a dramatic tournament arc?!",
         choices=[
-            ("Full of drama!", "* YES!! High stakes, explosive climaxes! That's the only way to work!", "overjoyed"),
+            ("Full of drama!", "* YES!! High stakes, explosive climaxes! That's the only way to work!", "laughing"),
             ("Just normal work.", "* Ugh, boring?! Add some glitter fireworks to your documents then!", "tongue"),
         ],
         category="work",
@@ -780,7 +782,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* How long have you been staring at that screen?! Did a bug steal your soul?!",
         choices=[
-            ("Found the bug!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "overjoyed"),
+            ("Found the bug!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "laughing"),
             ("Still stuck...", "* Grrr! Step back, take a breath, and strike again with boiling rage!", "kneeling"),
         ],
         category="work",
@@ -788,7 +790,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Finished your tasks for today?! Or are you planning to procrastinate forever?!",
         choices=[
-            ("All finished!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "overjoyed"),
+            ("All finished!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "laughing"),
             ("Not even close...", "* Then why are your hands off the keyboard?! Back to the battlefield!!", "angry"),
         ],
         category="work",
@@ -806,7 +808,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Have you watched Mew Mew Kissy Cutie yet?! ...WHAT DO YOU MEAN 'NO'?!",
         choices=[
-            ("I love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!!", "overjoyed"),
+            ("I love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!!", "laughing"),
             ("Never seen it.", "* TRAVESTY! Binge all four seasons right now or face my wrath!!", "angry"),
         ],
         category="fun",
@@ -814,8 +816,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* If we fought an epic final boss right now, what weapon would you bring?!",
         choices=[
-            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!!", "overjoyed"),
-            ("A sturdy shield.", "* Defensive?! BORING! Offense is the greatest defense, mew!!", "tongue"),
+            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!!", "laughing"),
+            ("A sturdy shield.", "* Defensive?! BORING! Offense is the greatest defense, mew!", "tongue"),
         ],
         category="fun",
     ),
@@ -846,7 +848,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Video games or anime tonight?! You better pick something with high drama!",
         choices=[
-            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!!", "overjoyed"),
+            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!!", "laughing"),
             ("Anime marathon!", "* Stock up on popcorn and get ready to cry during the emotional climax!!", "peace_sign"),
         ],
         category="fun",
@@ -888,7 +890,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Have you stretched your shoulders yet?! Don't stiffen up like a wooden dummy!",
         choices=[
-            ("Just stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "overjoyed"),
+            ("Just stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "laughing"),
             ("Too stiff to move.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
         ],
         category="advices",
@@ -922,7 +924,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Feeling overwhelmed?! Remember: a true magical girl NEVER surrenders!",
         choices=[
-            ("I won't give up!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "overjoyed"),
+            ("I won't give up!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "laughing"),
             ("It's pretty tough...", "* Tough times build elite warriors! I believe in you... don't make me repeat it!!", "embarrassed"),
         ],
         category="motivations",
@@ -938,7 +940,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Put some boiling fury into your work! Smash through that task like a boss!",
         choices=[
-            ("Fired up now!!", "* YES!! Burn with passion and obliterate every obstacle in your path!!", "overjoyed"),
+            ("Fired up now!!", "* YES!! Burn with passion and obliterate every obstacle in your path!!", "laughing"),
             ("Need some calm.", "* Then channel cool focus! A master swordsman strikes with precision!", "wistful"),
         ],
         category="motivations",
@@ -963,7 +965,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Channel your inner boss monster! Show this day who's really in charge!",
         choices=[
             ("I am in charge!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
-            ("The day is winning.", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "overjoyed"),
+            ("The day is winning.", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "laughing"),
         ],
         category="motivations",
     ),
@@ -971,7 +973,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Every mistake is just training for the final battle! Keep pushing, mew!",
         choices=[
             ("Learning & growing!", "* That's how legends are born! Every setback is just XP in disguise!!", "peace_sign"),
-            ("Hate making mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "overjoyed"),
+            ("Hate making mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "laughing"),
         ],
         category="motivations",
     ),
@@ -2749,7 +2751,9 @@ class GeminiWorkerThread(QThread):
             if u_text:
                 contents.append({"role": "user", "parts": [{"text": f"{t_str}{u_text}" if t_str else u_text}]})
             if p_text:
-                contents.append({"role": "model", "parts": [{"text": p_text}]})
+                # Sanitize any legacy double asterisks in past turns so they don't infect future responses
+                cleaned_p = re.sub(r"(?m)^\*\s+\*\s+", "* ", p_text)
+                contents.append({"role": "model", "parts": [{"text": cleaned_p}]})
 
         # Current user turn
         current_parts = [{"text": self.user_prompt}]
@@ -2799,21 +2803,22 @@ class GeminiWorkerThread(QThread):
             clean_text = raw_text
 
         clean_text = clean_text.strip()
-        # Clean any markdown bolding like **text** into clean text for pixel font
+        # Clean any markdown bolding and triple asterisks: ***text*** or **text**
+        clean_text = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", clean_text)
         clean_text = re.sub(r"\*\*(.*?)\*\*", r"\1", clean_text)
+        # Clean single-word italics like *word* into word (pixel font doesn't render markdown)
+        clean_text = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-'!]+)\*(?!\*)", r"\1", clean_text)
 
-        # Ensure Deltarune formatting: if it doesn't start with "* ", prefix it
+        # Ensure strict Deltarune formatting: exactly one "* " prefix per line, stripping duplicate asterisks or bullets
         lines = []
         for line in clean_text.splitlines():
             line_str = line.strip()
             if not line_str:
                 continue
-            if not line_str.startswith("*"):
-                lines.append("* " + line_str)
-            elif line_str.startswith("*") and not line_str.startswith("* "):
-                lines.append("* " + line_str[1:].lstrip())
-            else:
-                lines.append(line_str)
+            # Strip all leading asterisks, hyphens, and whitespace: e.g. "* * ", "** ", "* ", "- "
+            clean_line = re.sub(r"^[\s*\-]+", "", line_str)
+            if clean_line:
+                lines.append("* " + clean_line)
 
         formatted_text = "\n".join(lines) if lines else ("* " + clean_text)
         return formatted_text, anim
@@ -3372,6 +3377,8 @@ class YellowsPixelBuddies(QWidget):
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = -9999.0
+        self._keep_response_anim: bool = False
+        self._pending_song_announcement: tuple[str, list[str]] | None = None
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -3705,6 +3712,7 @@ class YellowsPixelBuddies(QWidget):
         self._pause_elapsed = False
         if reaction_anim and self._can_play(reaction_anim):
             self._play(reaction_anim)
+        self._keep_response_anim = True
         self._say(reaction_text, force=True)
 
     def _start_ghost_speech(self) -> None:
@@ -3726,6 +3734,10 @@ class YellowsPixelBuddies(QWidget):
             self._is_ghost_talking = False
             if self._phase is Phase.PAUSE and self.state == "angry":
                 self._play("idle")
+        if getattr(self, "_keep_response_anim", False):
+            self._keep_response_anim = False
+            if self._phase is Phase.PAUSE:
+                self._play("idle")
         if self._phase is Phase.PAUSE:
             if not getattr(self, "_in_angry_spam", False):
                 if self.state in ("shocked", "angry", "behind") or not self._loop:
@@ -3734,6 +3746,25 @@ class YellowsPixelBuddies(QWidget):
                 self._pause_elapsed = False
                 self._brain_timer.start(AFTER_SPECIAL_REST_MS)
         self.update()
+        self._check_and_play_pending_song()
+
+    def _check_and_play_pending_song(self) -> None:
+        """If a song announcement was deferred while dialogue or chat was active, play it now."""
+        if getattr(self, "_pending_song_announcement", None) is None:
+            return
+        if self._is_dialogue_convo_active():
+            return
+        pending_data = self._pending_song_announcement
+        self._pending_song_announcement = None
+
+        def _play_deferred() -> None:
+            if self._is_dialogue_convo_active():
+                self._pending_song_announcement = pending_data
+                return
+            line, extra = pending_data
+            self._say(line, force=True, extra_queue=extra)
+
+        QTimer.singleShot(400, _play_deferred)
 
     def _open_chat_input(self) -> None:
         """Open the interactive chat text input bar to talk to Pink."""
@@ -3763,6 +3794,7 @@ class YellowsPixelBuddies(QWidget):
         if self._phase == Phase.PAUSE:
             self._pause_elapsed = False
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+        self._check_and_play_pending_song()
 
     def _on_chat_submitted(self, text: str, see_screen: bool = False) -> None:
         """Process user text input from the chat overlay and call Gemini AI in background."""
@@ -3905,6 +3937,7 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.dismiss(clear_queue=True)
 
+        self._keep_response_anim = True
         if anim and self._can_play(anim):
             self._play(anim)
         self._say(spoken_text, force=True, auto_dismiss=True)
@@ -3913,6 +3946,7 @@ class YellowsPixelBuddies(QWidget):
         """Handle error from Gemini AI."""
         spoken_error = f"* Mew?! My magic brain stumbled:\n* {error_msg[:90]}"
         self._memory.record_error(user_text, error_msg, spoken_text=spoken_error, anim="burnt", had_screen=had_screen)
+        self._keep_response_anim = True
         self._trigger_error_burnt(spoken_error)
 
     def _prompt_api_key_dialog(self) -> None:
@@ -3987,6 +4021,12 @@ class YellowsPixelBuddies(QWidget):
                 "* (... Did someone from Hometown compose this?)",
             ])
             extra_queue.append(random.choice(toby_lines))
+
+        # If on chat (typing, waiting for AI response, or dialogue box is visible), defer announcement
+        if self._is_dialogue_convo_active():
+            log.info("Dialogue/chat is active: deferring song announcement for '%s'", display_title)
+            self._pending_song_announcement = (line, extra_queue)
+            return
 
         self._say(line, force=True, extra_queue=extra_queue)
 
@@ -4161,6 +4201,11 @@ class YellowsPixelBuddies(QWidget):
         elif self._hold_ticks > 0:
             self._hold_ticks -= 1                # freeze on the last frame (e.g. burnt)
         else:
+            if getattr(self, "_keep_response_anim", False):
+                if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                    # Keep holding the response reaction pose until dialogue box completely closes
+                    return
+                self._keep_response_anim = False
             self._finish_one_shot()
 
     def _finish_throw_sequence(self) -> None:
