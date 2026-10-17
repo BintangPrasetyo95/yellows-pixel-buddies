@@ -223,7 +223,7 @@ LAST_FRAME_HOLD_MS = {
     "wistful": 3000,
     "embarrassed": 2000,
     "tongue": 1500,               # hold tongue pose
-    "kneeling": 15000,            # hold kneeling pose
+    "kneeling": 20000,            # hold kneeling pose
     "behind": 5000,               # hold looking behind pose for 5000 ms (5 s)
 }
 FRAME_SUB_LOOPS = {
@@ -2739,8 +2739,15 @@ class GeminiWorkerThread(QThread):
         for turn in self.history[-6:]:
             u_text = turn.get("user", "")
             p_text = turn.get("pink", "")
+            t_str = ""
+            if "timestamp" in turn:
+                try:
+                    dt = datetime.datetime.fromisoformat(turn["timestamp"])
+                    t_str = f"[{dt.strftime('%I:%M %p')}] "
+                except Exception:
+                    pass
             if u_text:
-                contents.append({"role": "user", "parts": [{"text": u_text}]})
+                contents.append({"role": "user", "parts": [{"text": f"{t_str}{u_text}" if t_str else u_text}]})
             if p_text:
                 contents.append({"role": "model", "parts": [{"text": p_text}]})
 
@@ -3824,7 +3831,31 @@ class YellowsPixelBuddies(QWidget):
             self._say("* ...", force=True, skippable=False, auto_dismiss=False)
 
         # Build prompt & system instruction
-        system_inst = PINK_SYSTEM_INSTRUCTION
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+
+        # Add elapsed time since user's previous interaction if available
+        last_turn = self._memory.history[-1] if self._memory.history else None
+        if last_turn and "timestamp" in last_turn:
+            try:
+                last_dt = datetime.datetime.fromisoformat(last_turn["timestamp"])
+                elapsed_s = int((now_dt - last_dt).total_seconds())
+                if elapsed_s > 0:
+                    mins, secs = divmod(elapsed_s, 60)
+                    hrs, mins = divmod(mins, 60)
+                    parts = []
+                    if hrs > 0:
+                        parts.append(f"{hrs} hour{'s' if hrs != 1 else ''}")
+                    if mins > 0:
+                        parts.append(f"{mins} minute{'s' if mins != 1 else ''}")
+                    if secs > 0 and hrs == 0:
+                        parts.append(f"{secs} second{'s' if secs != 1 else ''}")
+                    elapsed_str = ", ".join(parts) if parts else "a few seconds"
+                    system_inst += f"\n- Time since user's last message: {elapsed_str} ago (at {last_dt.strftime('%I:%M %p')})."
+            except Exception:
+                pass
+
         if see_screen:
             system_inst += "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop. Accurately comment on what they have open or what they asked about their screen!"
         facts = self._memory.get_long_term_facts()
