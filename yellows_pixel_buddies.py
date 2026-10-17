@@ -470,6 +470,15 @@ You have the sassy, tsundere magical ghost doll personality inspired by Mad Mew 
 - Animation Tag: At the very end of your message, include exactly one bracketed emotion tag matching your mood:
   [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
   Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
+- STRICT ANTI-HALLUCINATION & FACTUALITY RULES:
+  * NEVER invent, guess, or fabricate past events, times, timestamps, minutes, conversation details, numbers, or facts.
+  * You have access to: active conversation history, logs of earlier sessions from today, and any recent ambient speech.
+  * If the user asks about past conversations, times, or events:
+    - ONLY use the actual logs provided in your context.
+    - If you do not have the exact time, minute, or record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs today, minion! Stop trying to test me!").
+    - Never pretend you remember something that is not in your memory records. Guessing or making up timestamps is strictly forbidden!
+  * Technical Self-Identity: You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
+  * Screen Vision: When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing.
 """
 
 # --- Ghost Takeover Lines ----------------------------------------------------
@@ -1960,7 +1969,10 @@ class DialogueOverlay(QWidget):
         callback = self._on_chosen_callback
         self._on_chosen_callback = None
         if callback:
-            callback(reaction_text, reaction_anim)
+            try:
+                callback(choice_label, reaction_text, reaction_anim)
+            except TypeError:
+                callback(reaction_text, reaction_anim)
 
     def mouseMoveEvent(self, event) -> None:
         """Track mouse hover across choice options to highlight selection with Deltarune soul heart."""
@@ -2175,16 +2187,17 @@ class ChatInputOverlay(QWidget):
 
     def _load_eye_icons(self) -> None:
         """Load and scale custom eye sprites for the vision toggle button."""
-        icon_h = max(14, round(11 * self._scale))
+        btn_h = round(16 * self._scale)
+        icon_h = max(14, btn_h - 6)
         if EYE_OFF_PATH.exists():
             pix_off = QPixmap(str(EYE_OFF_PATH))
             if not pix_off.isNull():
-                scaled_off = pix_off.scaledToHeight(icon_h, Qt.SmoothTransformation)
+                scaled_off = pix_off.scaledToHeight(icon_h, Qt.FastTransformation)
                 self._eye_off_icon = QIcon(scaled_off)
         if EYE_ON_PATH.exists():
             pix_on = QPixmap(str(EYE_ON_PATH))
             if not pix_on.isNull():
-                scaled_on = pix_on.scaledToHeight(icon_h, Qt.SmoothTransformation)
+                scaled_on = pix_on.scaledToHeight(icon_h, Qt.FastTransformation)
                 self._eye_on_icon = QIcon(scaled_on)
 
     def _on_vision_toggled(self, checked: bool) -> None:
@@ -2212,7 +2225,7 @@ class ChatInputOverlay(QWidget):
 
         layout = QHBoxLayout(self)
         pad_h = round(16 * self._scale)
-        pad_v = round(7 * self._scale)
+        pad_v = round(10 * self._scale)
         layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
         layout.setSpacing(6)
 
@@ -2237,7 +2250,8 @@ class ChatInputOverlay(QWidget):
         self._text_edit.setPlaceholderText("Talk to Pink...")
         self._text_edit.setToolTip("Press Enter to send (Shift+Enter for newline)")
         pal = self._text_edit.palette()
-        pal.setColor(QPalette.PlaceholderText, QColor(140, 140, 140))
+        pal.setColor(QPalette.Active, QPalette.PlaceholderText, QColor(140, 140, 140))
+        pal.setColor(QPalette.Inactive, QPalette.PlaceholderText, QColor(140, 140, 140))
         self._text_edit.setPalette(pal)
         self._text_edit.setStyleSheet(
             "QPlainTextEdit {"
@@ -2267,6 +2281,8 @@ class ChatInputOverlay(QWidget):
         self._text_edit.textChanged.connect(self._on_text_changed)
         layout.addWidget(self._text_edit, stretch=1)
 
+        btn_h = round(16 * self._scale)
+
         # Screen vision toggle button
         self._vision_btn = QPushButton(self)
         self._vision_btn.setFont(font)
@@ -2274,12 +2290,11 @@ class ChatInputOverlay(QWidget):
         self._vision_btn.setCheckable(True)
         self._vision_btn.setChecked(False)
         self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
-        btn_h = round(18 * self._scale)
-        btn_w = round(20 * self._scale)
+        btn_w = round(18 * self._scale)
         self._vision_btn.setFixedSize(btn_w, btn_h)
         if self._eye_off_icon and not self._eye_off_icon.isNull():
             self._vision_btn.setIcon(self._eye_off_icon)
-            self._vision_btn.setIconSize(QSize(15, 16))
+            self._vision_btn.setIconSize(QSize(btn_w - 6, btn_h - 6))
         else:
             self._vision_btn.setText("👁️")
         self._vision_btn.toggled.connect(self._on_vision_toggled)
@@ -2288,7 +2303,7 @@ class ChatInputOverlay(QWidget):
             "  background-color: #000000;"
             "  color: #888888;"
             "  border: 1px solid #555555;"
-            "  padding: 0px 3px;"
+            "  padding: 0px;"
             "}"
             "QPushButton:hover {"
             "  border: 1px solid #00FFFF;"
@@ -2304,7 +2319,7 @@ class ChatInputOverlay(QWidget):
         self._send_btn = QPushButton("Send", self)
         self._send_btn.setFont(font)
         self._send_btn.setCursor(Qt.PointingHandCursor)
-        self._send_btn.setFixedHeight(round(18 * self._scale))
+        self._send_btn.setFixedHeight(btn_h)
         self._send_btn.setStyleSheet(
             "QPushButton {"
             "  background-color: #000000;"
@@ -2329,18 +2344,23 @@ class ChatInputOverlay(QWidget):
         self._close_btn = QPushButton("×", self)
         self._close_btn.setFont(font)
         self._close_btn.setCursor(Qt.PointingHandCursor)
-        self._close_btn.setFixedHeight(round(18 * self._scale))
+        self._close_btn.setFixedSize(btn_h, btn_h)
         self._close_btn.setStyleSheet(
             "QPushButton {"
-            "  background-color: transparent;"
+            "  background-color: #000000;"
             "  color: #888888;"
-            "  border: none;"
-            "  padding: 0px 4px;"
-            "  font-size: 14px;"
+            "  border: 1px solid #555555;"
+            "  padding: 0px;"
             "  font-weight: bold;"
             "}"
             "QPushButton:hover {"
             "  color: #FF5555;"
+            "  border: 1px solid #FF5555;"
+            "  background-color: #2b0000;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #550000;"
+            "  color: #FFFFFF;"
             "}"
         )
         self._close_btn.clicked.connect(self.cancel)
@@ -2349,9 +2369,17 @@ class ChatInputOverlay(QWidget):
         self.setFixedSize(self._base_w, self._base_h)
         self._build_background(self._base_w, self._base_h)
 
+    def _get_line_count(self) -> int:
+        block = self._text_edit.document().firstBlock()
+        count = 0
+        while block.isValid():
+            bl = block.layout()
+            count += max(1, bl.lineCount()) if bl else 1
+            block = block.next()
+        return max(1, count)
+
     def _on_text_changed(self) -> None:
-        doc = self._text_edit.document()
-        line_count = doc.lineCount()
+        line_count = self._get_line_count()
         clamped_lines = min(4, max(1, line_count))
         fm = self._text_edit.fontMetrics()
         line_step = fm.lineSpacing()
@@ -2510,6 +2538,8 @@ class MemoryManager:
         self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
         self.history: list[dict[str, any]] = []
+        # Temporary in-memory only storage for immediate ambient dialogue reactions (never saved to disk)
+        self.recent_ambient_dialogues: deque[dict[str, any]] = deque(maxlen=4)
         self._init_session_file()
 
     def _ensure_dirs(self) -> None:
@@ -2666,9 +2696,153 @@ class MemoryManager:
     def clear_current_session(self) -> None:
         """Reset current in-memory history and start a fresh session file."""
         self.history.clear()
+        self.recent_ambient_dialogues.clear()
         self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
         self._init_session_file()
+
+    def record_ambient_dialogue(
+        self,
+        text: str,
+        category: str = "dialogue",
+        extra_lines: list[str] | None = None,
+        user_choice: str | None = None,
+        context: str | None = None,
+    ) -> None:
+        """Record an ambient or fixed dialogue line in temporary in-memory RAM storage only (zero disk writes)."""
+        if not text:
+            return
+        clean_text = text.strip()
+        if extra_lines:
+            clean_extras = [e.strip() for e in extra_lines if e.strip()]
+            if clean_extras:
+                clean_text = clean_text + " -> " + " -> ".join(clean_extras)
+
+        entry = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "text": clean_text,
+            "category": category,
+            "user_choice": user_choice,
+            "context": context,
+        }
+        # In-memory only (RAM) so session files on disk never blow up in size!
+        self.recent_ambient_dialogues.append(entry)
+
+    def get_recent_ambient_context(self, max_items: int = 3, max_age_s: int = 120) -> str:
+        """Format very recent ambient dialogue lines (temporary RAM only, max 2 minutes old)."""
+        if not self.recent_ambient_dialogues:
+            return ""
+
+        now = datetime.datetime.now()
+        lines = []
+        valid_entries = []
+        for entry in self.recent_ambient_dialogues:
+            if "timestamp" in entry:
+                try:
+                    dt = datetime.datetime.fromisoformat(entry["timestamp"])
+                    diff_s = int((now - dt).total_seconds())
+                    if diff_s <= max_age_s:
+                        valid_entries.append((entry, max(0, diff_s)))
+                except Exception:
+                    valid_entries.append((entry, 0))
+
+        if not valid_entries:
+            return ""
+
+        recent = valid_entries[-max_items:]
+
+        category_descriptions = {
+            "idle": "Ambient idle speech while resting",
+            "question": "Interactive question asked to user",
+            "question_answered": "User answered Pink's interactive question",
+            "burnt_switch": "Flashbang reaction when switching to bright light app",
+            "window_switch_shock": "Startled reaction when switching to maximized app",
+            "song_detection": "Detected song playing in media player",
+            "toby_fox_familiar": "Heard familiar music composed by Toby Fox",
+            "startup_summon": "Spawned / summoned onto the taskbar",
+            "shocked": "Startled by a click",
+            "tongue": "Stuck tongue out (:P)",
+            "angry": "Angry reaction",
+            "land": "Landed after falling or dropping",
+            "throw": "Throwing cat bomb attack",
+            "drag": "Picked up by cursor",
+            "singing": "Singing happily",
+            "peace_sign": "Flashing a peace sign",
+            "embarrassed": "Feeling embarrassed",
+            "wistful": "Wistful thinking",
+            "kneeling": "Taking a break kneeling down",
+            "behind": "Looking suspiciously behind her back",
+        }
+
+        for entry, diff_s in recent:
+            if diff_s < 10:
+                ts_str = "just now"
+            elif diff_s < 60:
+                ts_str = f"{diff_s}s ago"
+            else:
+                mins = diff_s // 60
+                ts_str = f"{mins}m ago"
+
+            cat = entry.get("category", "dialogue")
+            cat_desc = category_descriptions.get(cat, cat)
+            spoken = entry.get("text", "")
+            choice = entry.get("user_choice")
+            ctx = entry.get("context")
+
+            item_desc = f"- [{ts_str}] ({cat_desc}): \"{spoken}\""
+            if choice:
+                item_desc += f" (User clicked option: \"{choice}\")"
+            elif ctx:
+                item_desc += f" [Context: {ctx}]"
+            lines.append(item_desc)
+
+        return "\n".join(lines)
+
+    def get_today_sessions_overview(self) -> str:
+        """Retrieve a concise timeline of today's past conversations across sessions."""
+        now = datetime.datetime.now()
+        today_str = now.strftime("%Y%m%d")
+        today_files = sorted(self.sessions_dir.glob(f"session_{today_str}_*.json"))
+
+        session_entries = []
+        for f in today_files:
+            if f.name == self.session_file.name:
+                continue  # skip current active session
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                msgs = data.get("messages", [])
+                if not msgs:
+                    continue
+                first_ts = msgs[0].get("timestamp", "")
+                last_ts = msgs[-1].get("timestamp", "")
+
+                def _fmt_t(iso_str: str) -> str:
+                    try:
+                        dt = datetime.datetime.fromisoformat(iso_str)
+                        return dt.strftime("%I:%M:%S %p")
+                    except Exception:
+                        return iso_str
+
+                span = f"{_fmt_t(first_ts)} - {_fmt_t(last_ts)}"
+                lines = [f"### Session ({span}, {len(msgs)} turns):"]
+                for m in msgs:
+                    m_ts = _fmt_t(m.get("timestamp", ""))
+                    u = m.get("user", "").strip().replace("\n", " ")
+                    if len(u) > 75:
+                        u = u[:72] + "..."
+                    p = m.get("pink", "").strip().replace("\n", " ")
+                    p = re.sub(r"\[anim:\s*[^\]]+\]", "", p).strip()
+                    if len(p) > 80:
+                        p = p[:77] + "..."
+                    lines.append(f"- [{m_ts}] User: \"{u}\" -> Pink: \"{p}\"")
+                session_entries.append("\n".join(lines))
+            except Exception as err:
+                log.warning("Could not read previous session %s: %s", f, err)
+
+        if not session_entries:
+            return ""
+
+        return "\n\n".join(session_entries)
 
 
 class GeminiWorkerThread(QThread):
@@ -3618,6 +3792,8 @@ class YellowsPixelBuddies(QWidget):
         extra_queue: list[str] | None = None,
         skippable: bool = True,
         auto_dismiss: bool = True,
+        record_memory: bool = True,
+        dialogue_category: str | None = None,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
@@ -3641,6 +3817,13 @@ class YellowsPixelBuddies(QWidget):
                 candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]
                 q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
                 self._last_dialogue = q_item.question
+                if hasattr(self, "_memory") and record_memory:
+                    options_preview = [c[0] for c in q_item.choices]
+                    self._memory.record_ambient_dialogue(
+                        q_item.question,
+                        category="question",
+                        context=f"Pink offered choices: {options_preview}",
+                    )
                 if q_item.question in GHOST_DIALOGUE_LINES:
                     self._start_ghost_speech()
                 self._dialogue_overlay.ask(
@@ -3696,6 +3879,22 @@ class YellowsPixelBuddies(QWidget):
             skippable = False
 
         self._last_dialogue = line
+        if hasattr(self, "_memory") and record_memory:
+            ignored_prefixes = (
+                "* Inspecting your screen...",
+                "* Hold your horses, minion!",
+                "* Did a cat step on your keyboard",
+            )
+            if not line.startswith(ignored_prefixes) and line not in ("* ...", "* ..?"):
+                effective_cat = dialogue_category or (
+                    category_or_text if category_or_text in DIALOGUE_LINES or category_or_text in ("idle", "question") else "ambient"
+                )
+                self._memory.record_ambient_dialogue(
+                    line,
+                    category=effective_cat,
+                    extra_lines=extra_queue,
+                )
+
         self._dialogue_overlay.say(
             line,
             self._x,
@@ -3705,15 +3904,36 @@ class YellowsPixelBuddies(QWidget):
             auto_dismiss=auto_dismiss,
         )
 
-    def _on_question_answered(self, reaction_text: str, reaction_anim: str | None) -> None:
+    def _on_question_answered(self, *args, **kwargs) -> None:
         """Handle player's answer to Pink's question: play reaction animation and speak response."""
+        choice_label: str | None = None
+        reaction_text: str = ""
+        reaction_anim: str | None = None
+
+        if len(args) == 3:
+            choice_label, reaction_text, reaction_anim = args
+        elif len(args) == 2:
+            reaction_text, reaction_anim = args
+        elif len(args) == 1:
+            reaction_text = args[0]
+        else:
+            choice_label = kwargs.get("choice_label")
+            reaction_text = kwargs.get("reaction_text", "")
+            reaction_anim = kwargs.get("reaction_anim")
+
         self._last_question_dialogue_time = time.perf_counter()
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if reaction_anim and self._can_play(reaction_anim):
             self._play(reaction_anim)
         self._keep_response_anim = True
-        self._say(reaction_text, force=True)
+        if hasattr(self, "_memory"):
+            self._memory.record_ambient_dialogue(
+                reaction_text,
+                category="question_answered",
+                user_choice=choice_label,
+            )
+        self._say(reaction_text, force=True, record_memory=False)
 
     def _start_ghost_speech(self) -> None:
         """Ghost takes over the vessel with angry animation and spectral aura."""
@@ -3762,7 +3982,7 @@ class YellowsPixelBuddies(QWidget):
                 self._pending_song_announcement = pending_data
                 return
             line, extra = pending_data
-            self._say(line, force=True, extra_queue=extra)
+            self._say(line, force=True, extra_queue=extra, dialogue_category=("toby_fox_familiar" if extra else "song_detection"))
 
         QTimer.singleShot(400, _play_deferred)
 
@@ -3775,7 +3995,7 @@ class YellowsPixelBuddies(QWidget):
         if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.DRAG):
             return
         if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
-            self._say("* Hold your horses, minion! I'm still thinking about your screen or last question!", force=True)
+            self._say("* Hold your horses, minion! I'm still thinking about your screen or last question!", force=True, record_memory=False)
             return
         self._in_angry_spam = False
         self._click_times.clear()
@@ -3806,7 +4026,7 @@ class YellowsPixelBuddies(QWidget):
             self._pause_elapsed = False
             if self._can_play("angry"):
                 self._play("angry")
-            self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True)
+            self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True, record_memory=False)
             return
 
         if text.strip().lower() in ("/error", "test error", "/test-error"):
@@ -3826,7 +4046,7 @@ class YellowsPixelBuddies(QWidget):
             return
 
         if self._gemini_thread is not None and self._gemini_thread.isRunning():
-            self._say("* Hold your horses, minion! I'm already thinking about your last question!", force=True)
+            self._say("* Hold your horses, minion! I'm already thinking about your last question!", force=True, record_memory=False)
             return
 
         screenshot_b64 = None
@@ -3857,10 +4077,10 @@ class YellowsPixelBuddies(QWidget):
         if see_screen:
             if self._can_play("behind"):
                 self._play("behind", loop=True)
-            self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False)
+            self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
         else:
             self._play("idle")
-            self._say("* ...", force=True, skippable=False, auto_dismiss=False)
+            self._say("* ...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
 
         # Build prompt & system instruction
         now_dt = datetime.datetime.now()
@@ -3888,8 +4108,38 @@ class YellowsPixelBuddies(QWidget):
             except Exception:
                 pass
 
+        # Add past sessions from today for cross-session continuity and anti-hallucination
+        today_history = self._memory.get_today_sessions_overview()
+        if today_history:
+            system_inst += (
+                f"\n\nTODAY'S PAST CONVERSATION LOGS (ACROSS PREVIOUS SESSIONS TODAY):\n"
+                f"{today_history}\n\n"
+                "CRITICAL INSTRUCTION ON TODAY'S PAST SESSIONS:\n"
+                "- The user may ask about what you talked about earlier today, what problems you solved together, or exact timestamps.\n"
+                "- Refer directly to the exact logs above! State the true facts and timestamps as recorded.\n"
+                "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs today!"
+            )
+
+        ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
+        if ambient_ctx:
+            system_inst += (
+                f"\n\nRECENT AMBIENT SPEECH & ACTIONS ON DESKTOP (SPOKEN IN LAST 2 MINUTES):\n"
+                f"{ambient_ctx}\n\n"
+                "CRITICAL INSTRUCTION REGARDING AMBIENT SPEECH:\n"
+                "The user is immediately commenting on, reacting to, or answering the dialogue you just spoke above on their desktop.\n"
+                "- YOU MUST FULLY OWN IT! Respond knowing that you actually just said it on their desktop!\n"
+                "- Stay in character (bratty, tsundere, playful catgirl doll). Tease them back, justify why you said it, or act smug or flustered.\n"
+                "- NEVER say 'I didn't say that' or act clueless or pretend you have no memory of saying those words."
+            )
+            # Temporary storage consumed after immediate reaction
+            self._memory.recent_ambient_dialogues.clear()
+
         if see_screen:
-            system_inst += "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop. Accurately comment on what they have open or what they asked about their screen!"
+            system_inst += (
+                "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop.\n"
+                "- Look carefully at the screenshot. Accurately comment ONLY on what is ACTUALLY visible on their screen.\n"
+                "- Never guess, imagine, or hallucinate apps, code, files, or text that are not clearly visible. If text or code is too small or illegible, say you can't read it clearly instead of making it up!"
+            )
         facts = self._memory.get_long_term_facts()
         if facts:
             system_inst += f"\n\nThings you remember about this user across sessions:\n{facts}"
@@ -3928,7 +4178,7 @@ class YellowsPixelBuddies(QWidget):
             if "explosion" in self._bank.frames:
                 self._start_overlay("explosion")
         if spoken_error:
-            self._say(spoken_error, force=True, auto_dismiss=True)
+            self._say(spoken_error, force=True, auto_dismiss=True, record_memory=False)
 
     def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool) -> None:
         """Handle response generated by Gemini AI."""
@@ -3940,7 +4190,7 @@ class YellowsPixelBuddies(QWidget):
         self._keep_response_anim = True
         if anim and self._can_play(anim):
             self._play(anim)
-        self._say(spoken_text, force=True, auto_dismiss=True)
+        self._say(spoken_text, force=True, auto_dismiss=True, record_memory=False)
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False) -> None:
         """Handle error from Gemini AI."""
@@ -3965,11 +4215,11 @@ class YellowsPixelBuddies(QWidget):
             clean_key = key.strip()
             self._memory.save_api_key(clean_key)
             if clean_key:
-                self._say("* Gemini API key saved to local storage! My magic brain is online, mew!", force=True)
+                self._say("* Gemini API key saved to local storage! My magic brain is online, mew!", force=True, record_memory=False)
                 if self._can_play("peace_sign"):
                     self._play("peace_sign")
             else:
-                self._say("* Cleared Gemini API key! Back in offline mode, mew.", force=True)
+                self._say("* Cleared Gemini API key! Back in offline mode, mew.", force=True, record_memory=False)
 
     def _open_memory_folder(self) -> None:
         """Open the local memory storage folder in Windows Explorer."""
@@ -3982,7 +4232,7 @@ class YellowsPixelBuddies(QWidget):
     def _reset_session_memory(self) -> None:
         """Clear recent in-memory conversation history and start a new session file."""
         self._memory.clear_current_session()
-        self._say("* Session memory cleared! A clean slate for our chats, mew!", force=True)
+        self._say("* Session memory cleared! A clean slate for our chats, mew!", force=True, record_memory=False)
         if self._can_play("peace_sign"):
             self._play("peace_sign")
 
@@ -4028,7 +4278,7 @@ class YellowsPixelBuddies(QWidget):
             self._pending_song_announcement = (line, extra_queue)
             return
 
-        self._say(line, force=True, extra_queue=extra_queue)
+        self._say(line, force=True, extra_queue=extra_queue, dialogue_category=("toby_fox_familiar" if extra_queue else "song_detection"))
 
     # -------------------------------------------------------------- animation
     def _can_play(self, state: str) -> bool:
@@ -4626,7 +4876,7 @@ class YellowsPixelBuddies(QWidget):
         self._play("shocked", loop=False)
 
         line = random.choice(SUMMON_OPENING_LINES)
-        self._say(line, force=True)
+        self._say(line, force=True, dialogue_category="startup_summon")
 
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
         self._pause_elapsed = False
@@ -5519,7 +5769,7 @@ class YellowsPixelBuddies(QWidget):
                 return
             self._last_switch_shock_time = now
             log.info("Switched to maximized app -> shocked")
-            self._interrupt_with_reaction("shocked")
+            self._interrupt_with_reaction("shocked", dialogue_category="window_switch_shock")
 
     def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
@@ -5540,7 +5790,8 @@ class YellowsPixelBuddies(QWidget):
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._play(reaction)
-        self._say(dialogue_category or reaction, force=True)
+        dialogue_key = dialogue_category if (dialogue_category and dialogue_category in DIALOGUE_LINES) else reaction
+        self._say(dialogue_key, force=True, dialogue_category=dialogue_category)
 
     # -------------------------------------------------------- system tray icon
     def _init_tray_icon(self) -> None:
