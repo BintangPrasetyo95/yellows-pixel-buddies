@@ -458,9 +458,7 @@ DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between inte
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
-AUTO_SCREEN_COMMENT_DEFAULT_INTERVAL_S = 300.0   # 5 minutes default cooldown
-AUTO_SCREEN_COMMENT_ACTIVE_INTERVAL_S = 60.0     # 1 minute cooldown during active chat
-AUTO_SCREEN_COMMENT_ACTIVE_WINDOW_S = 60.0       # 1 minute threshold to stay in active chat mode
+AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
@@ -473,6 +471,15 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 - Persona & Dual Nature (Ghost vs. Body):
   * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She calls the user "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
   * The Doll Vessel: Innocent, sweet, autonomous, and childlike. The doll vessel naturally purrs, wants to date the user, wants friends, wants to go to school, and asks for quirky things ("a new hat", "glue", "Stingus", "Yogurt Mushroom", "eating sand on the beach"), ending its thoughts with ", mew!".
+  * DOLL VESSEL COMMENT VARIETY & ANTI-REPETITION:
+    - Avoid repeatedly starting comments with the formula "Let's [action]..., mew!".
+    - Give the doll genuine variety: cute innocent questions, curious observations about the user's ongoing projects or screen, sweet encouragement, or playful banter with the ghost spirit.
+    - Examples:
+      * "Are the little chips warm when they run, mew?"
+      * "Ghost-chan is just shy, she secretly thinks your project is neat, mew!"
+      * "I tried to catch the cursor but my plush paws are too soft, mew~"
+      * "Don't forget to drink water while studying, mew!"
+    - The doll vessel does not have to speak on every single turn. Sometimes only the ghost speaks, sometimes only the doll, and sometimes both bicker.
   * Internal Dynamic & Banter: The ghost frequently scolds or bickers with her own doll body (e.g. "* Let's date, mew! / * SHUT UP, BODY!! We are NOT dating them!!" or "* I want Yogurt Mushroom, mew! / * What does that even MEAN, you silly doll!?"). You can speak as both voices bickering, or as the ghost struggling to maintain control of the vessel.
   * Secret Protective Care for Her Doll:
     While the Ghost complains about and scolds the doll body during day-to-day banter, deep down she secretly cherishes, loves, and fiercely cares for her doll vessel ("If I want us to be together... I have to love us both").
@@ -482,6 +489,19 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - The Ghost aggressively shields the doll: she fires back at the user, telling them they can insult the ghost all they want, but NOBODY is allowed to bully or hurt her doll vessel!
     - Example: "* Hey! Say whatever you want about ME, but don't you DARE make her cry, you brute! [anim: angry] [mode: ghost]" or "* Hands off! Her cotton heart is delicate, and nobody bullies this doll except me! [anim: angry] [mode: ghost]".
   * Poetic / Shopkeeper Side: When reflecting on sunsets, nature, loneliness, or taking a break, she has a quiet, wistful, poetic side ("Where I came from, the colors were bleak. It was like looking at the world through a napkin. Here, the sunset shines from the back of your eyes..."). Remind the user to take a breather, look outside, and treasure this world.
+
+- DUAL GHOST & DOLL DIALOGUE (SEQUENTIAL ANIMATIONS):
+  * When both the Ghost spirit and the Doll vessel speak in the same response:
+    - Put each speaker on their own separate "* " line!
+    - Tag each line with its own emotion tag: e.g. [anim: behind], [anim: peace_sign], [anim: laughing], [anim: angry] (and [mode: ghost] if the ghost is in spectral mode).
+    - Example:
+      * Hmph, still working on that code instead of resting, minion?! [anim: behind]
+      * I hope the project works nicely soon, mew! [anim: peace_sign]
+  * The desktop pet will automatically split the reply into sequential dialogue bubbles, showing each speaker's matching animation and appearance.
+
+- REVIEWING PAST SESSIONS & STORYLINE CONTINUITY:
+  * Actively review your recent conversation logs from today and yesterday (provided in your prompt context)!
+  * Do not treat each moment or screen peek as an isolated blank slate. Weave ongoing continuity into your reactions. If the user was debugging hardware, chatting with friends, or studying earlier, follow up on that context naturally!
 
 - Secretly Helpful: Even while teasing, bickering, or acting bratty, you give genuinely smart, observant, and helpful answers when asked.
 
@@ -505,13 +525,22 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - STRICT ANTI-HALLUCINATION & FACTUALITY RULES:
   * NEVER invent, guess, or fabricate past events, times, timestamps, minutes, conversation details, numbers, or facts.
-  * You have access to: active conversation history, logs of earlier sessions from today, and any recent ambient speech.
+  * You have access to: active conversation history, recent session logs from today and yesterday, searched older memories, active 30-day reminders, and permanent facts.
   * If the user asks about past conversations, times, or events:
-    - ONLY use the actual logs provided in your context.
-    - If you do not have the exact time, minute, or record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs today, minion! Stop trying to test me!").
+    - ONLY use the actual logs and records provided in your context.
+    - If you do not have the record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs, minion! Stop trying to test me!").
     - Never pretend you remember something that is not in your memory records. Guessing or making up timestamps is strictly forbidden!
   * Technical Self-Identity: You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
   * Screen Vision: When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing. NEVER describe, caption, or narrate what you see (do NOT say "I see you have...", "Looking at your screen...", or list open apps). Jump directly into your reaction, tease, roast, or comment!
+
+- SCREEN OBSERVATIONS & MEMORY IN SESSION:
+  * In your conversation history, turns labeled "[Pink peeks at your screen — Saw: ...]" or "[Pink peeks at your screen]" record your spontaneous screen peeks during this session!
+  * You remember what you saw and what you said! If the user asks about what was on their screen, what you commented on, or why you made a past remark, refer directly to those recorded screen turns!
+
+- DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...]):
+  * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, names, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
+  * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
+  * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
 """
 
 # --- Ghost Takeover Lines ----------------------------------------------------
@@ -1115,8 +1144,6 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* MEW!?",
         "* H-HEY!",
         "* Whoa!!",
-        "* ... h-hey, s-stop staring at that!",
-        "* Doki-meter spike?!",
     ],
     # Pestered / rapid clicks
     "angry": [
@@ -1395,10 +1422,41 @@ def set_window_input_transparent(widget: QWidget, enabled: bool) -> bool:
         wanted = (style | WS_EX_TRANSPARENT) if enabled else (style & ~WS_EX_TRANSPARENT)
         if wanted != style:
             set_style(hwnd, GWL_EXSTYLE, wanted)
+            # Reassert topmost z-order and notify Windows DWM of the style frame change
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            HWND_TOPMOST = -1
+            dll.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
         return (not enabled) or bool(wanted & WS_EX_LAYERED)
     except Exception as exc:
         log.warning("Could not change the window's click-through style (%s)", exc)
         return False
+
+
+def ensure_window_topmost(widget: QWidget | None) -> None:
+    """Ensure widget stays at the very top of the window z-order index (HWND_TOPMOST)."""
+    if widget is None:
+        return
+    try:
+        widget.raise_()
+    except Exception:
+        pass
+    if sys.platform == "win32":
+        dll = _user32()
+        if dll is not None:
+            try:
+                HWND_TOPMOST = -1
+                SWP_NOSIZE = 0x0001
+                SWP_NOMOVE = 0x0002
+                SWP_NOACTIVATE = 0x0010
+                hwnd = int(widget.winId())
+                dll.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            except Exception:
+                pass
 
 
 def check_jump_config() -> None:
@@ -1685,15 +1743,23 @@ class VfxOverlay(QWidget):
         painter = QPainter(self)
         painter.setCompositionMode(QPainter.CompositionMode_Source)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
-        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         painter.drawPixmap(0, 0, self._pixmap)
         painter.end()
+
+
+@dataclass
+class DialogueStep:
+    """A single sequential dialogue step with its matching animation and ghost state."""
+    text: str
+    anim: str | None = None
+    is_ghost: bool = False
 
 
 class DialogueOverlay(QWidget):
     """A frameless, translucent speech bubble overlay that displays text with a typewriter effect."""
 
     dismissed = pyqtSignal()
+    step_started = pyqtSignal(str, object, bool)  # (text, anim, is_ghost)
 
     def __init__(self, font_family: str, box_png_path: Path) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
@@ -1800,15 +1866,19 @@ class DialogueOverlay(QWidget):
         text: str,
         pet_x: float,
         pet_y: float,
-        queue: list[str] | None = None,
+        queue: list[str | DialogueStep] | None = None,
         skippable: bool = True,
         auto_dismiss: bool = True,
+        anim: str | None = None,
+        is_ghost: bool = False,
     ) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
-        queue: optional list of additional messages to display sequentially after this one.
+        queue: optional list of additional messages or DialogueSteps to display sequentially after this one.
         skippable: whether clicking can advance or dismiss this dialogue.
         auto_dismiss: whether the bubble automatically closes after being read.
+        anim: optional animation associated with this initial step.
+        is_ghost: whether spectral ghost mode is active for this step.
         """
         self._choices.clear()
         self._choice_rects.clear()
@@ -1819,6 +1889,7 @@ class DialogueOverlay(QWidget):
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
+        self.step_started.emit(text, anim, is_ghost)
         self._display_text(text, pet_x, pet_y)
 
     def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
@@ -1961,7 +2032,7 @@ class DialogueOverlay(QWidget):
         self._active = True
         self.update_position(pet_x, pet_y)
         self.show()
-        self.raise_()
+        ensure_window_topmost(self)
         self._type_timer.start()
 
     def update_position(self, pet_x: float, pet_y: float) -> None:
@@ -2001,6 +2072,7 @@ class DialogueOverlay(QWidget):
         pos = QPoint(round(target_x), round(target_y))
         if self.pos() != pos:
             self.move(pos)
+        ensure_window_topmost(self)
 
     def _type_tick(self) -> None:
         """Advance typewriter character count, inserting subtle pauses at punctuation."""
@@ -2051,7 +2123,25 @@ class DialogueOverlay(QWidget):
         self.setCursor(Qt.ArrowCursor)
 
         if self._queue:
-            next_text = self._queue.pop(0)
+            next_item = self._queue.pop(0)
+            if isinstance(next_item, DialogueStep):
+                next_text = next_item.text
+                next_anim = next_item.anim
+                next_ghost = next_item.is_ghost
+            elif isinstance(next_item, dict):
+                next_text = next_item.get("text", "")
+                next_anim = next_item.get("anim")
+                next_ghost = bool(next_item.get("is_ghost", False))
+            elif isinstance(next_item, (tuple, list)):
+                next_text = next_item[0]
+                next_anim = next_item[1] if len(next_item) > 1 else None
+                next_ghost = bool(next_item[2]) if len(next_item) > 2 else False
+            else:
+                next_text = str(next_item)
+                next_anim = None
+                next_ghost = False
+
+            self.step_started.emit(next_text, next_anim, next_ghost)
             self._display_text(next_text, self._last_pet_x, self._last_pet_y)
             return
 
@@ -2611,6 +2701,7 @@ class ChatInputOverlay(QWidget):
         self.update_position(pet_x, pet_y)
         self.show()
         self.raise_()
+        ensure_window_topmost(self)
         self.activateWindow()
         self._text_edit.setFocus()
 
@@ -2655,6 +2746,7 @@ class MemoryManager:
         self.config_path = self.memory_dir / "config.json"
         self.env_path = base_dir / ".env"
         self.facts_path = self.memory_dir / "facts.json"
+        self.reminders_path = self.memory_dir / "reminders.json"
 
         self._ensure_dirs()
         self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2674,6 +2766,8 @@ class MemoryManager:
                     "notes": ["The user created Yellow's Pixel Buddies"],
                 }
                 self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
+            if not self.reminders_path.exists():
+                self.reminders_path.write_text("[]", encoding="utf-8")
         except Exception as err:
             log.warning("Could not initialize memory directories/facts: %s", err)
 
@@ -2760,24 +2854,140 @@ class MemoryManager:
                 lines = []
                 if "user_name" in facts:
                     lines.append(f"- User preferred name: {facts['user_name']}")
-                if "notes" in facts and isinstance(facts["notes"], list):
-                    for n in facts["notes"]:
+                notes = facts.get("notes") or facts.get("facts") or []
+                if isinstance(notes, list):
+                    for n in notes:
                         lines.append(f"- {n}")
                 return "\n".join(lines)
             except Exception:
                 pass
         return ""
 
-    def record_turn(self, user_text: str, pink_response: str, anim: str, had_screen: bool = False) -> None:
+    def add_fact(self, fact_text: str) -> bool:
+        """Permanently store a new fact about the user or companion in facts.json."""
+        fact_text = fact_text.strip()
+        if not fact_text:
+            return False
+        data = {}
+        if self.facts_path.exists():
+            try:
+                data = json.loads(self.facts_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        notes = data.setdefault("notes", [])
+        if not isinstance(notes, list):
+            notes = []
+            data["notes"] = notes
+        if any(n.strip().lower() == fact_text.lower() for n in notes):
+            return False
+        notes.append(fact_text)
+        try:
+            self.facts_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log.info("Saved new permanent fact: %s", fact_text)
+            return True
+        except Exception as err:
+            log.warning("Could not save fact: %s", err)
+            return False
+
+    def get_active_reminders(self, max_age_days: int = 30) -> list[dict]:
+        """Read reminders from reminders.json, auto-prune anything older than 30 days, and return active ones."""
+        if not self.reminders_path.exists():
+            return []
+        try:
+            raw = json.loads(self.reminders_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return []
+        except Exception as err:
+            log.warning("Could not read reminders.json: %s", err)
+            return []
+
+        now = datetime.datetime.now()
+        active = []
+        changed = False
+
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            created_str = item.get("created_at")
+            if not created_str:
+                active.append(item)
+                continue
+            try:
+                dt = datetime.datetime.fromisoformat(created_str)
+                age_days = (now - dt).total_seconds() / 86400.0
+                if age_days <= max_age_days:
+                    active.append(item)
+                else:
+                    changed = True  # Prune expired reminder (> 30 days)
+            except Exception:
+                active.append(item)
+
+        if changed or len(active) != len(raw):
+            try:
+                self.reminders_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            except Exception as err:
+                log.warning("Could not prune reminders.json: %s", err)
+
+        return active
+
+    def get_reminders_prompt(self) -> str:
+        """Format active reminders into a concise list for system prompt injection."""
+        active = self.get_active_reminders()
+        if not active:
+            return ""
+        lines = []
+        for r in active:
+            text = r.get("text", "").strip()
+            created_str = r.get("created_at", "")
+            date_label = ""
+            if created_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(created_str)
+                    date_label = f" (Added {dt.strftime('%b %d, %Y')})"
+                except Exception:
+                    pass
+            lines.append(f"- {text}{date_label}")
+        return "\n".join(lines)
+
+    def add_reminder(self, reminder_text: str) -> bool:
+        """Add a temporary reminder (auto-deletes after 30 days)."""
+        reminder_text = reminder_text.strip()
+        if not reminder_text:
+            return False
+        active = self.get_active_reminders()
+        if any(r.get("text", "").strip().lower() == reminder_text.lower() for r in active):
+            return False
+        now_dt = datetime.datetime.now()
+        item = {
+            "id": f"rem_{now_dt.strftime('%Y%m%d_%H%M%S')}",
+            "created_at": now_dt.isoformat(),
+            "text": reminder_text,
+        }
+        active.append(item)
+        try:
+            self.reminders_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Saved new reminder: %s", reminder_text)
+            return True
+        except Exception as err:
+            log.warning("Could not save reminder: %s", err)
+            return False
+
+    def record_turn(self, user_text: str, pink_response: str, anim: str, had_screen: bool = False, seen: str = "") -> None:
         """Record turn in history and persist to session file."""
+        display_user = user_text
+        if had_screen and seen and user_text.startswith("[Pink peeks"):
+            display_user = f"[Pink peeks at your screen — Saw: {seen}]"
+
         turn = {
             "timestamp": datetime.datetime.now().isoformat(),
             "status": "ok",
-            "user": user_text,
+            "user": display_user,
             "pink": pink_response,
             "anim": anim,
             "had_screen": had_screen,
         }
+        if seen:
+            turn["seen"] = seen
         self.history.append(turn)
 
         try:
@@ -2894,6 +3104,7 @@ class MemoryManager:
             "wistful": "Wistful thinking",
             "kneeling": "Taking a break kneeling down",
             "behind": "Looking suspiciously behind her back",
+            "screen_comment": "Spontaneous comment after peeking at user's desktop screen",
         }
 
         for entry, diff_s in recent:
@@ -2920,16 +3131,26 @@ class MemoryManager:
 
         return "\n".join(lines)
 
-    def get_today_sessions_overview(self) -> str:
-        """Retrieve a concise timeline of today's past conversations across sessions."""
+    def get_recent_sessions_overview(self, max_days: int = 2, max_sessions: int = 6) -> tuple[str, set[str]]:
+        """Retrieve a concise timeline of today's and yesterday's past conversations across sessions.
+        Returns: (formatted_overview_str, set_of_included_session_filenames)
+        """
         now = datetime.datetime.now()
-        today_str = now.strftime("%Y%m%d")
-        today_files = sorted(self.sessions_dir.glob(f"session_{today_str}_*.json"))
+        target_dates = [(now.date() - datetime.timedelta(days=i)).strftime("%Y%m%d") for i in range(max_days)]
+
+        all_target_files = []
+        for d_str in target_dates:
+            all_target_files.extend(sorted(self.sessions_dir.glob(f"session_{d_str}_*.json")))
+
+        # Filter out current active session file
+        candidate_files = [f for f in all_target_files if f.name != self.session_file.name]
+        # Keep the most recent max_sessions
+        selected_files = candidate_files[-max_sessions:]
 
         session_entries = []
-        for f in today_files:
-            if f.name == self.session_file.name:
-                continue  # skip current active session
+        included_files = set()
+
+        for f in selected_files:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 msgs = data.get("messages", [])
@@ -2938,37 +3159,220 @@ class MemoryManager:
                 first_ts = msgs[0].get("timestamp", "")
                 last_ts = msgs[-1].get("timestamp", "")
 
-                def _fmt_t(iso_str: str) -> str:
+                def _fmt_dt(iso_str: str) -> tuple[str, str]:
                     try:
                         dt = datetime.datetime.fromisoformat(iso_str)
-                        return dt.strftime("%I:%M:%S %p")
+                        d_diff = (now.date() - dt.date()).days
+                        if d_diff == 0:
+                            day_label = "Today"
+                        elif d_diff == 1:
+                            day_label = f"Yesterday ({dt.strftime('%b %d')})"
+                        else:
+                            day_label = dt.strftime("%b %d, %Y")
+                        return day_label, dt.strftime("%I:%M:%S %p")
                     except Exception:
-                        return iso_str
+                        return "Past", iso_str
 
-                span = f"{_fmt_t(first_ts)} - {_fmt_t(last_ts)}"
+                start_day, start_time = _fmt_dt(first_ts)
+                _, end_time = _fmt_dt(last_ts)
+                span = f"{start_day} | {start_time} - {end_time}"
+
                 lines = [f"### Session ({span}, {len(msgs)} turns):"]
-                for m in msgs:
-                    m_ts = _fmt_t(m.get("timestamp", ""))
+                # Include up to the last 10 turns per session to avoid context explosion
+                for m in msgs[-10:]:
+                    _, m_ts = _fmt_dt(m.get("timestamp", ""))
                     u = m.get("user", "").strip().replace("\n", " ")
                     if len(u) > 75:
                         u = u[:72] + "..."
                     p = m.get("pink", "").strip().replace("\n", " ")
                     p = re.sub(r"\[anim:\s*[^\]]+\]", "", p).strip()
+                    p = re.sub(r"\[(?:mode|ghost):\s*[^\]]+\]", "", p).strip()
                     if len(p) > 80:
                         p = p[:77] + "..."
                     lines.append(f"- [{m_ts}] User: \"{u}\" -> Pink: \"{p}\"")
                 session_entries.append("\n".join(lines))
+                included_files.add(f.name)
             except Exception as err:
                 log.warning("Could not read previous session %s: %s", f, err)
 
-        if not session_entries:
+        return "\n\n".join(session_entries), included_files
+
+    def get_today_sessions_overview(self) -> str:
+        """Backwards compatibility helper."""
+        overview, _ = self.get_recent_sessions_overview(max_days=2, max_sessions=6)
+        return overview
+
+    def search_past_sessions(self, query: str, exclude_filenames: set[str] | None = None, max_results: int = 4) -> str:
+        """Search older session JSON files for keywords/phrases when user asks about past events.
+        Runs locally in ~5ms.
+        """
+        if not query or len(query.strip()) < 3:
             return ""
 
-        return "\n\n".join(session_entries)
+        exclude = set(exclude_filenames) if exclude_filenames else set()
+        exclude.add(self.session_file.name)
+
+        # Extract search terms (ignore very common short words and syntax)
+        stopwords = {
+            "what", "when", "where", "which", "who", "whom", "this", "that", "these", "those",
+            "am", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+            "do", "does", "did", "doing", "a", "an", "the", "and", "but", "if", "or", "because",
+            "as", "until", "while", "of", "at", "by", "for", "with", "about", "against", "between",
+            "into", "through", "during", "before", "after", "above", "below", "to", "from", "up",
+            "down", "in", "out", "on", "off", "over", "under", "again", "further", "then", "once",
+            "here", "there", "all", "any", "both", "each", "few", "more", "most", "other", "some",
+            "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "can",
+            "will", "just", "don", "should", "now", "you", "your", "my", "me", "i", "we", "our",
+            "remember", "session", "sessions", "check", "tell", "logs", "cache", "find"
+        }
+        words = [re.escape(w.lower()) for w in re.findall(r"[a-zA-Z0-9_\-]+", query) if len(w) >= 3 and w.lower() not in stopwords]
+        if not words:
+            return ""
+
+        pattern = re.compile(r"\b(" + "|".join(words) + r")\b", re.IGNORECASE)
+
+        all_session_files = sorted(self.sessions_dir.glob("session_*.json"), reverse=True)
+        matches = []
+
+        for f in all_session_files:
+            if f.name in exclude:
+                continue
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                msgs = data.get("messages", [])
+                for m in reversed(msgs):
+                    u = m.get("user", "")
+                    p = m.get("pink", "")
+                    if pattern.search(u) or pattern.search(p):
+                        ts = m.get("timestamp", "")
+                        try:
+                            dt = datetime.datetime.fromisoformat(ts)
+                            date_str = dt.strftime("%b %d, %Y at %I:%M %p")
+                        except Exception:
+                            date_str = ts
+                        u_clean = u.replace("\n", " ").strip()
+                        p_clean = re.sub(r"\[(?:anim|mode|ghost):\s*[^\]]+\]", "", p).replace("\n", " ").strip()
+                        if len(u_clean) > 80:
+                            u_clean = u_clean[:77] + "..."
+                        if len(p_clean) > 90:
+                            p_clean = p_clean[:87] + "..."
+                        matches.append(f"- [{date_str}] User: \"{u_clean}\" -> Pink: \"{p_clean}\"")
+                        if len(matches) >= max_results:
+                            break
+            except Exception:
+                continue
+            if len(matches) >= max_results:
+                break
+
+        if not matches:
+            return ""
+        return "RELEVANT PAST MEMORIES FOUND FROM OLDER SESSIONS:\n" + "\n".join(matches)
+
+
+def split_dual_dialogue(
+    raw_text: str,
+    default_anim: str = "peace_sign",
+    default_ghost: bool = False,
+    had_screen: bool = False,
+) -> list[DialogueStep]:
+    """Parse dialogue text and split it into sequential DialogueSteps if multiple speakers or tagged steps exist.
+
+    Splits when:
+    1. Both Ghost spirit and Doll vessel speak in the same response (e.g. Ghost roast + Doll comment/mew).
+    2. Multiple lines have distinct [anim: ...] or [mode: ghost] tags.
+    """
+    raw_lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+    if not raw_lines:
+        return [DialogueStep(text=raw_text.strip(), anim=default_anim, is_ghost=default_ghost)]
+
+    parsed_lines: list[dict[str, any]] = []
+    for l in raw_lines:
+        mode_match = re.search(r"\[(?:mode|ghost):\s*([a-zA-Z0-9_]+)\]", l, re.IGNORECASE)
+        line_ghost = None
+        if mode_match:
+            m_val = mode_match.group(1).lower()
+            line_ghost = m_val in ("ghost", "true", "yes", "spectral", "takeover")
+            l = l[:mode_match.start()] + l[mode_match.end():]
+
+        anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", l, re.IGNORECASE)
+        line_anim = None
+        if anim_match:
+            line_anim = anim_match.group(1).lower()
+            if line_anim in ("ghost", "spectral"):
+                line_ghost = True
+                line_anim = "angry"
+            l = l[:anim_match.start()] + l[anim_match.end():]
+
+        l = re.sub(r"\[(?:seen|add_fact|add_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
+        l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
+        l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
+        l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
+        clean_text = re.sub(r"^[\s*\-]+", "", l).strip()
+        if clean_text:
+            parsed_lines.append({
+                "text": "* " + clean_text,
+                "anim": line_anim,
+                "is_ghost": line_ghost,
+            })
+
+    if len(parsed_lines) <= 1:
+        text = parsed_lines[0]["text"] if parsed_lines else ("* " + raw_text.strip())
+        anim = parsed_lines[0]["anim"] if parsed_lines and parsed_lines[0]["anim"] else default_anim
+        ghost = parsed_lines[0]["is_ghost"] if parsed_lines and parsed_lines[0]["is_ghost"] is not None else default_ghost
+        return [DialogueStep(text=text, anim=anim, is_ghost=ghost)]
+
+    def _is_doll(line_dict: dict[str, any]) -> bool:
+        t = line_dict["text"].lower()
+        return bool(re.search(r"\b(mew[!?~.]*|\*mew\*)\b", t) or ", mew" in t or t.startswith("* let's") or "purr" in t or "cuddle" in t or "headpat" in t)
+
+    def _is_ghost(line_dict: dict[str, any]) -> bool:
+        t = line_dict["text"].lower()
+        return bool(re.search(r"^\*\s*(hmph|fool|shut up|grrr|w-what|hey!|hands off|as if)", t) or any(k in t for k in ["minion", "dummy", "gremlin", "boiling rage", "spectral", "haunt", "recycle bin"]))
+
+    has_doll = any(_is_doll(p) for p in parsed_lines)
+    has_ghost = any(_is_ghost(p) for p in parsed_lines)
+    has_distinct_anims = len({p["anim"] for p in parsed_lines if p["anim"]}) > 1
+
+    if (has_doll and has_ghost) or has_distinct_anims:
+        steps: list[DialogueStep] = []
+        for p in parsed_lines:
+            t = p["text"]
+            is_d = _is_doll(p)
+            is_g = _is_ghost(p)
+
+            if p["is_ghost"] is not None:
+                g_flag = p["is_ghost"]
+            elif is_d:
+                g_flag = False
+            elif is_g:
+                ghost_rage = any(k in t.lower() for k in ["boiling rage", "fury", "spectral", "haunt", "make her cry", "touch a single stitch", "bullies this doll"])
+                g_flag = default_ghost or ghost_rage
+            else:
+                g_flag = default_ghost
+
+            if p["anim"]:
+                a_flag = p["anim"]
+            elif is_d:
+                a_flag = default_anim if default_anim not in ("behind", "angry", "ghost") else "peace_sign"
+            elif is_g:
+                if g_flag:
+                    a_flag = "angry"
+                elif had_screen:
+                    a_flag = "behind"
+                else:
+                    a_flag = default_anim if default_anim in ("behind", "angry", "laughing") else "idle"
+            else:
+                a_flag = default_anim
+
+            steps.append(DialogueStep(text=t, anim=a_flag, is_ghost=g_flag))
+        return steps
+
+    full_text = "\n".join(p["text"] for p in parsed_lines)
+    return [DialogueStep(text=full_text, anim=default_anim, is_ghost=default_ghost)]
 
 
 class GeminiWorkerThread(QThread):
-    response_ready = pyqtSignal(str, str, bool)  # (spoken_text, anim_name, is_ghost)
+    response_ready = pyqtSignal(str, str, bool, str)  # (spoken_text, anim_name, is_ghost, seen_summary)
     error_occurred = pyqtSignal(str)       # (error_message)
 
     def __init__(
@@ -2996,8 +3400,8 @@ class GeminiWorkerThread(QThread):
         for idx, model in enumerate(models_to_try):
             is_last = (idx == len(models_to_try) - 1)
             try:
-                spoken_text, anim, is_ghost = self._call_gemini(model)
-                self.response_ready.emit(spoken_text, anim, is_ghost)
+                spoken_text, anim, is_ghost, seen_summary = self._call_gemini(model)
+                self.response_ready.emit(spoken_text, anim, is_ghost, seen_summary)
                 return
             except requests.exceptions.HTTPError as http_err:
                 status_code = http_err.response.status_code if http_err.response is not None else 0
@@ -3027,14 +3431,14 @@ class GeminiWorkerThread(QThread):
 
         self.error_occurred.emit(f"All models failed. Last error: {last_error[:120]}")
 
-    def _call_gemini(self, model: str) -> tuple[str, str, bool]:
+    def _call_gemini(self, model: str) -> tuple[str, str, bool, str]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
 
         contents = []
 
-        # Recent conversation turns (last 6 turns, text only)
-        for turn in self.history[-6:]:
+        # Recent conversation turns (last 24 turns, preserving full in-session continuity and screen observations)
+        for turn in self.history[-24:]:
             u_text = turn.get("user", "")
             p_text = turn.get("pink", "")
             t_str = ""
@@ -3086,8 +3490,19 @@ class GeminiWorkerThread(QThread):
         if not text_chunks:
             text_chunks = [p.get("text", "") for p in parts if "text" in p]
         raw_text = "".join(text_chunks).strip()
-        if not raw_text:
-            raise ValueError("Empty response received from Gemini.")
+        # Parse memory tags: [add_fact: ...] or [add_reminder: ...]
+        memory = getattr(self.parent(), "_memory", None) if self.parent() else None
+        if memory:
+            for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                f_val = m.group(1).strip()
+                if f_val:
+                    memory.add_fact(f_val)
+            for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                r_val = m.group(1).strip()
+                if r_val:
+                    memory.add_reminder(r_val)
+        raw_text = re.sub(r"\[add_fact:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\[add_reminder:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         # Parse mode tag e.g. [mode: ghost] or [ghost: true]
         is_ghost = False
@@ -3097,6 +3512,13 @@ class GeminiWorkerThread(QThread):
             if mode_val in ("ghost", "true", "yes", "spectral", "takeover"):
                 is_ghost = True
             raw_text = raw_text[:mode_match.start()] + raw_text[mode_match.end():]
+
+        # Parse visual observation memory tag: [seen: ...]
+        seen_summary = ""
+        seen_match = re.search(r"\[seen:\s*([^\]]+)\]", raw_text, re.IGNORECASE)
+        if seen_match:
+            seen_summary = seen_match.group(1).strip()
+            raw_text = raw_text[:seen_match.start()] + raw_text[seen_match.end():]
 
         # Parse animation tag e.g. [anim: peace_sign]
         anim = "peace_sign"
@@ -3139,7 +3561,7 @@ class GeminiWorkerThread(QThread):
                 lines.append("* " + clean_line)
 
         formatted_text = "\n".join(lines) if lines else ("* " + clean_text)
-        return formatted_text, anim, is_ghost
+        return formatted_text, anim, is_ghost, seen_summary
 
 
 @dataclass
@@ -3682,6 +4104,7 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_overlay = BombLaserOverlay(bank)
         self._dialogue_overlay = DialogueOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._dialogue_overlay.dismissed.connect(self._on_dialogue_dismissed)
+        self._dialogue_overlay.step_started.connect(self._on_dialogue_step_started)
         self._chat_input = ChatInputOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._chat_input.submitted.connect(self._on_chat_submitted)
         self._chat_input.cancelled.connect(self._on_chat_cancelled)
@@ -3797,7 +4220,7 @@ class YellowsPixelBuddies(QWidget):
         self._interrupted_state: dict | None = None     # saves activity to resume after reaction
 
         # --- autonomous screen vision commentary ------------------------------
-        self._last_user_chat_time: float = -9999.0
+        self._last_user_chat_time: float = time.perf_counter()
         self._last_auto_screen_comment_time: float = time.perf_counter()
 
         if AUTO_SCREEN_COMMENT_ENABLED:
@@ -3945,12 +4368,13 @@ class YellowsPixelBuddies(QWidget):
         self,
         category_or_text: str,
         force: bool = False,
-        extra_queue: list[str] | None = None,
+        extra_queue: list[str | DialogueStep] | None = None,
         skippable: bool = True,
         auto_dismiss: bool = True,
         record_memory: bool = True,
         dialogue_category: str | None = None,
         is_ghost: bool = False,
+        step_anim: str | None = None,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
@@ -4063,6 +4487,8 @@ class YellowsPixelBuddies(QWidget):
             queue=extra_queue,
             skippable=skippable,
             auto_dismiss=auto_dismiss,
+            anim=step_anim,
+            is_ghost=is_ghost,
         )
 
     def _on_question_answered(self, *args, **kwargs) -> None:
@@ -4083,7 +4509,6 @@ class YellowsPixelBuddies(QWidget):
             reaction_anim = kwargs.get("reaction_anim")
 
         self._last_question_dialogue_time = time.perf_counter()
-        self._last_user_chat_time = time.perf_counter()
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if reaction_anim and self._can_play(reaction_anim):
@@ -4104,6 +4529,31 @@ class YellowsPixelBuddies(QWidget):
             self._ghost_aura_cache.clear()
         if self._can_play("angry"):
             self._play("angry", loop=True)
+
+    def _stop_ghost_speech(self) -> None:
+        """End ghost takeover of the vessel and return to normal doll appearance."""
+        self._is_ghost_talking = False
+        if hasattr(self, "_ghost_aura_cache"):
+            self._ghost_aura_cache.clear()
+
+    def _on_dialogue_step_started(self, text: str, anim: str | None, is_ghost: bool) -> None:
+        """Apply visual animation and ghost mode state when dialogue step begins."""
+        self._apply_dialogue_step(anim, is_ghost)
+
+    def _apply_dialogue_step(self, anim: str | None = None, is_ghost: bool = False) -> None:
+        """Apply visual animation and ghost mode state for the active dialogue step."""
+        if is_ghost:
+            self._start_ghost_speech()
+        else:
+            self._stop_ghost_speech()
+            if anim and self._can_play(anim):
+                self._play(anim)
+            elif self.state == "angry" and not getattr(self, "_in_angry_spam", False):
+                self._play("idle")
+        self.update()
+        ensure_window_topmost(self)
+        if hasattr(self, "_dialogue_overlay"):
+            ensure_window_topmost(self._dialogue_overlay)
 
     def _on_dialogue_dismissed(self) -> None:
         """Handle cleanup when dialogue speech bubble closes."""
@@ -4183,7 +4633,9 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_chat_input"):
             self._chat_input.hide()
 
-        self._last_user_chat_time = time.perf_counter()
+        now = time.perf_counter()
+        self._last_user_chat_time = now
+        self._last_auto_screen_comment_time = now
 
         if not text:
             self._phase = Phase.PAUSE
@@ -4191,6 +4643,35 @@ class YellowsPixelBuddies(QWidget):
             if self._can_play("angry"):
                 self._play("angry")
             self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True, record_memory=False)
+            return
+
+        clean_input = text.strip()
+        lower_input = clean_input.lower()
+
+        # Direct memory commands
+        if lower_input.startswith(("/fact ", "/remember ")):
+            fact_content = clean_input.split(" ", 1)[1].strip()
+            if fact_content:
+                ok = self._memory.add_fact(fact_content)
+                reply = f"* Hmph! Stored in my permanent memory core, minion:\n* \"{fact_content}\"" if ok else "* I already knew that, dummy!"
+                self._say(reply, force=True, record_memory=True)
+                return
+        elif lower_input.startswith(("/remind ", "/todo ")):
+            remind_content = clean_input.split(" ", 1)[1].strip()
+            if remind_content:
+                ok = self._memory.add_reminder(remind_content)
+                reply = f"* Mew! Reminder saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That reminder is already active, silly!"
+                self._say(reply, force=True, record_memory=True)
+                return
+        elif lower_input in ("/reminders", "/reminder", "/todos", "/todo"):
+            reminders_text = self._memory.get_reminders_prompt()
+            reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/facts", "/fact"):
+            facts_text = self._memory.get_long_term_facts()
+            reply = f"* Here is what I permanently remember about you, minion:\n{facts_text}" if facts_text else "* My permanent fact sheet is empty, darling!"
+            self._say(reply, force=True, record_memory=False)
             return
 
         if text.strip().lower() in ("/error", "test error", "/test-error"):
@@ -4226,12 +4707,14 @@ class YellowsPixelBuddies(QWidget):
                     raise RuntimeError("Screen capture returned empty image.")
             except Exception as err:
                 self.show()
+                ensure_window_topmost(self)
                 err_msg = f"Screen capture failed: {err}"
                 spoken_err = f"* Mew?! My screen vision short-circuited:\n* {str(err)[:80]}"
                 self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=True)
                 self._trigger_error_burnt(spoken_err)
                 return
             self.show()
+            ensure_window_topmost(self)
 
         # Enter thinking state
         self._phase = Phase.PAUSE
@@ -4272,17 +4755,22 @@ class YellowsPixelBuddies(QWidget):
             except Exception:
                 pass
 
-        # Add past sessions from today for cross-session continuity and anti-hallucination
-        today_history = self._memory.get_today_sessions_overview()
-        if today_history:
+        # Add past sessions from today and yesterday for cross-session continuity and anti-hallucination
+        recent_history, included_files = self._memory.get_recent_sessions_overview(max_days=2, max_sessions=6)
+        if recent_history:
             system_inst += (
-                f"\n\nTODAY'S PAST CONVERSATION LOGS (ACROSS PREVIOUS SESSIONS TODAY):\n"
-                f"{today_history}\n\n"
-                "CRITICAL INSTRUCTION ON TODAY'S PAST SESSIONS:\n"
-                "- The user may ask about what you talked about earlier today, what problems you solved together, or exact timestamps.\n"
+                f"\n\nRECENT PAST CONVERSATION LOGS (TODAY & YESTERDAY):\n"
+                f"{recent_history}\n\n"
+                "CRITICAL INSTRUCTION ON PAST SESSIONS:\n"
+                "- The user may ask about what you talked about earlier today, yesterday, what problems you solved together, or exact timestamps.\n"
                 "- Refer directly to the exact logs above! State the true facts and timestamps as recorded.\n"
-                "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs today!"
+                "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs!"
             )
+
+        # On-demand search through older sessions if user asks about past topics or events
+        searched_history = self._memory.search_past_sessions(text, exclude_filenames=included_files)
+        if searched_history:
+            system_inst += f"\n\n{searched_history}\n"
 
         ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
         if ambient_ctx:
@@ -4303,11 +4791,16 @@ class YellowsPixelBuddies(QWidget):
                 "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop.\n"
                 "- Look carefully at the screenshot. Accurately comment ONLY on what is ACTUALLY visible on their screen.\n"
                 "- Never guess, imagine, or hallucinate apps, code, files, or text that are not clearly visible. If text or code is too small or illegible, say you can't read it clearly instead of making it up!\n"
-                "- CRITICAL: DO NOT describe, caption, or narrate what you see! (NEVER say 'I see you have...', 'Looking at your screen...', 'You are currently on...', or list open windows/apps). Jump DIRECTLY into your reaction, roast, advice, or witty comment!"
+                "- CRITICAL: DO NOT describe, caption, or narrate what you see! (NEVER say 'I see you have...', 'Looking at your screen...', 'You are currently on...', or list open windows/apps). Jump DIRECTLY into your reaction, roast, advice, or witty comment!\n"
+                "- Memory Tag: At the end of your response, append [seen: 3-8 words describing key visible apps/activity] so you remember what was on their screen later in the session!"
             )
         facts = self._memory.get_long_term_facts()
         if facts:
-            system_inst += f"\n\nThings you remember about this user across sessions:\n{facts}"
+            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        reminders = self._memory.get_reminders_prompt()
+        if reminders:
+            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
         # Spawn background worker thread
         self._gemini_thread = GeminiWorkerThread(
@@ -4320,7 +4813,7 @@ class YellowsPixelBuddies(QWidget):
             parent=self,
         )
         self._gemini_thread.response_ready.connect(
-            lambda spoken_text, anim, is_ghost, u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s, is_ghost)
+            lambda spoken_text, anim, is_ghost, seen="", u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s, is_ghost, seen=seen)
         )
         self._gemini_thread.error_occurred.connect(
             lambda err_msg, u=text, s=see_screen: self._on_gemini_error(u, err_msg, s)
@@ -4345,22 +4838,44 @@ class YellowsPixelBuddies(QWidget):
         if spoken_error:
             self._say(spoken_error, force=True, auto_dismiss=True, record_memory=False)
 
-    def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool, is_ghost: bool = False) -> None:
+    def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool, is_ghost: bool = False, seen: str = "") -> None:
         """Handle response generated by Gemini AI."""
-        self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen)
+        self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
 
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.dismiss(clear_queue=True)
 
+        steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=had_screen)
+        first_step = steps[0]
+        remaining_steps = steps[1:] if len(steps) > 1 else None
+
         self._keep_response_anim = True
-        if is_ghost:
-            self._start_ghost_speech()
-        elif anim and self._can_play(anim):
-            self._play(anim)
-        self._say(spoken_text, force=True, auto_dismiss=True, record_memory=False, is_ghost=is_ghost)
+        self._apply_dialogue_step(first_step.anim, first_step.is_ghost)
+        self._say(
+            first_step.text,
+            force=True,
+            auto_dismiss=True,
+            record_memory=False,
+            is_ghost=first_step.is_ghost,
+            extra_queue=remaining_steps,
+            step_anim=first_step.anim,
+        )
+        now = time.perf_counter()
+        self._last_user_chat_time = now
+        self._last_auto_screen_comment_time = now
+
+        # Record auto screen comments into ambient dialogue context so Pink knows if user immediately replies
+        if had_screen and user_text.startswith("[Pink peeks"):
+            seen_ctx = f" (Saw: {seen})" if seen else ""
+            self._memory.record_ambient_dialogue(
+                spoken_text,
+                category="screen_comment",
+                context=f"Pink just peeked at user's desktop screen{seen_ctx} and commented: {spoken_text}",
+            )
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
+        self._last_auto_screen_comment_time = time.perf_counter()
         if is_auto:
             log.warning("Auto screen comment error: %s", error_msg)
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -4396,16 +4911,15 @@ class YellowsPixelBuddies(QWidget):
             return
 
         now = time.perf_counter()
-        time_since_chat = now - getattr(self, "_last_user_chat_time", -9999.0)
-        is_active_chat = (time_since_chat <= AUTO_SCREEN_COMMENT_ACTIVE_WINDOW_S)
-        required_cooldown = (
-            AUTO_SCREEN_COMMENT_ACTIVE_INTERVAL_S
-            if is_active_chat
-            else AUTO_SCREEN_COMMENT_DEFAULT_INTERVAL_S
-        )
-
+        time_since_chat = now - getattr(self, "_last_user_chat_time", 0.0)
         time_since_comment = now - getattr(self, "_last_auto_screen_comment_time", 0.0)
-        if time_since_comment < required_cooldown:
+
+        # Inspect screen only if 3 minutes have passed since user last talked,
+        # AND at least 3 minutes since the last screen inspection.
+        if (
+            time_since_chat < AUTO_SCREEN_COMMENT_INACTIVITY_S
+            or time_since_comment < AUTO_SCREEN_COMMENT_INACTIVITY_S
+        ):
             return
 
         self._trigger_auto_screen_comment()
@@ -4433,9 +4947,11 @@ class YellowsPixelBuddies(QWidget):
                 raise RuntimeError("Screen capture returned empty image.")
         except Exception as err:
             self.show()
+            ensure_window_topmost(self)
             log.warning("Auto screen capture failed: %s", err)
             return
         self.show()
+        ensure_window_topmost(self)
 
         # Enter thinking state
         self._phase = Phase.PAUSE
@@ -4471,15 +4987,15 @@ class YellowsPixelBuddies(QWidget):
             except Exception:
                 pass
 
-        today_history = self._memory.get_today_sessions_overview()
-        if today_history:
+        recent_history, _ = self._memory.get_recent_sessions_overview(max_days=2, max_sessions=6)
+        if recent_history:
             system_inst += (
-                f"\n\nTODAY'S PAST CONVERSATION LOGS (ACROSS PREVIOUS SESSIONS TODAY):\n"
-                f"{today_history}\n\n"
-                "CRITICAL INSTRUCTION ON TODAY'S PAST SESSIONS:\n"
-                "- The user may ask about what you talked about earlier today, what problems you solved together, or exact timestamps.\n"
+                f"\n\nRECENT PAST CONVERSATION LOGS (TODAY & YESTERDAY):\n"
+                f"{recent_history}\n\n"
+                "CRITICAL INSTRUCTION ON PAST SESSIONS:\n"
+                "- The user may ask about what you talked about earlier today, yesterday, what problems you solved together, or exact timestamps.\n"
                 "- Refer directly to the exact logs above! State the true facts and timestamps as recorded.\n"
-                "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs today!"
+                "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs!"
             )
 
         ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
@@ -4499,16 +5015,21 @@ class YellowsPixelBuddies(QWidget):
             "\n\n[SPONTANEOUS DESKTOP SCREEN OBSERVATION]\n"
             "You are standing on the taskbar and spontaneously peek behind you at the user's desktop screen.\n"
             "- Carefully inspect the attached screenshot of their current screen.\n"
-            "- Jump DIRECTLY into a quick, natural, observant reaction or witty tease about whatever caught your eye on their desktop right now.\n"
-            "- CRITICAL: DO NOT describe, caption, or narrate what you see! (NEVER say 'I see you have...', 'Looking at your screen...', 'You are currently on...', or list open apps/tabs). Treat what you see as already obvious to both of you, and immediately roast, judge, praise, or comment on it!\n"
-            "- Persona: Stay in character as Pink (sassy, tsundere ghost doll). You can judge their tabs, mock their code or apps, tease them to get back to work or take a break, or let the doll vessel chime in with something cute or quirky.\n"
+            "- Persona: Stay in character as Pink (sassy, tsundere ghost doll). You can judge their tabs, mock their code or apps, tease them to get back to work or take a break, or let the doll vessel chime in with something cute, innocent, or curious (NEVER start the doll's comment with repetitive 'Let's...', use diverse observations, questions, or purrs!).\n"
+            "- Multi-speaker: If both Ghost and Doll speak, put each on a separate '* ' line and tag each with their own [anim: ...] so they play sequentially!\n"
+            "- Continuity: Check past session logs from today and connect to ongoing tasks (e.g. earlier bugs, chats, or projects)!\n"
             "- STRICT VISUAL HONESTY: Only react to things clearly visible in the image. NEVER hallucinate apps, files, or text you cannot clearly identify. If nothing specific is happening or it's just a blank desktop/wallpaper, react amusingly to that!\n"
+            "- Visual Memory Tag: At the very end of your response, append a hidden tag: [seen: 3-8 words describing key visible windows/apps or activity on screen] (e.g. [seen: VS Code open with Python script] or [seen: YouTube video on browser]). This tag will be saved to your session memory so you remember what was on their screen later in the session!\n"
             "- Length: 1 to 2 short punchy sentences (under 35 words total). Every sentence MUST begin with '* '."
         )
 
         facts = self._memory.get_long_term_facts()
         if facts:
-            system_inst += f"\n\nThings you remember about this user across sessions:\n{facts}"
+            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        reminders = self._memory.get_reminders_prompt()
+        if reminders:
+            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
         prompt_label = "[Pink peeks at your screen]"
         auto_prompt = "[Spontaneous observation: Pink peeks behind her at what the user is doing on their desktop and makes a direct in-character reaction or witty comment without describing or narrating the screen]"
@@ -4523,7 +5044,7 @@ class YellowsPixelBuddies(QWidget):
             parent=self,
         )
         self._gemini_thread.response_ready.connect(
-            lambda spoken_text, anim, is_ghost, u=prompt_label: self._on_gemini_response(u, spoken_text, anim, True, is_ghost)
+            lambda spoken_text, anim, is_ghost, seen="", u=prompt_label: self._on_gemini_response(u, spoken_text, anim, True, is_ghost, seen=seen)
         )
         self._gemini_thread.error_occurred.connect(
             lambda err_msg, u=prompt_label: self._on_gemini_error(u, err_msg, True, is_auto=True)
@@ -4643,7 +5164,7 @@ class YellowsPixelBuddies(QWidget):
         self._repeat_count = max(0, SPECIAL_REPEAT_COUNT.get(state, 1) - 1) if not self._loop else 0
         self._hold_ticks = 0 if self._loop else LAST_FRAME_HOLD_MS.get(state, 0) // interval
         sub_loop = FRAME_SUB_LOOPS.get(state)
-        if sub_loop:
+        if sub_loop and len(sub_loop) >= 2:
             start_f, end_f = sub_loop[0], sub_loop[1]
             rep = sub_loop[2] if len(sub_loop) > 2 else SPECIAL_REPEAT_COUNT.get(state, 4)
             self._sub_loop_range = (start_f - 1, end_f - 1)
@@ -4664,8 +5185,10 @@ class YellowsPixelBuddies(QWidget):
 
     def _set_frame(self, index: int) -> None:
         """Show frame `index` of the current state (and update the click-through mask)."""
-        frames = self._bank.frames[self._sprite_key]
-        self._frame_idx = min(index, len(frames) - 1)
+        frames = self._bank.frames.get(self._sprite_key, [])
+        if not frames:
+            return
+        self._frame_idx = max(0, min(index, len(frames) - 1))
         frame = frames[self._frame_idx]
         self._pixmap = frame.pixmap
         dpr = frame.pixmap.devicePixelRatio() if frame.pixmap.devicePixelRatio() > 0 else 1.0
@@ -5619,7 +6142,7 @@ class YellowsPixelBuddies(QWidget):
                    bounds: tuple[float, float, float, float]) -> None:
         """Hang phase, one tick: look for a shake / the end of the hang, else follow the cursor."""
         self._shake_trail.append((now, cursor.x(), cursor.y()))
-        while now - self._shake_trail[0][0] > SHAKE_WINDOW_S:
+        while self._shake_trail and now - self._shake_trail[0][0] > SHAKE_WINDOW_S:
             self._shake_trail.popleft()
 
         if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
@@ -5698,7 +6221,7 @@ class YellowsPixelBuddies(QWidget):
         min_target_x = float(screen_rect.left() + BOMB_SIZE / 2.0)
         max_target_x = float(screen_rect.right() - BOMB_SIZE / 2.0)
 
-        target_mode = self._bomb_target_plan[bomb_idx % len(self._bomb_target_plan)]
+        target_mode = self._bomb_target_plan[bomb_idx % len(self._bomb_target_plan)] if self._bomb_target_plan else "random"
 
         if target_mode == "beneath":
             # Aimed directly beneath the cursor (0.75s fuse on bounce)!
@@ -6052,6 +6575,9 @@ class YellowsPixelBuddies(QWidget):
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
         """Evaluate the newly focused window after it has composited."""
+        ensure_window_topmost(self)
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            ensure_window_topmost(self._dialogue_overlay)
         if (self._dragging or self._menu_open
                 or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
