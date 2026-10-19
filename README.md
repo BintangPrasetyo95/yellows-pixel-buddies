@@ -25,7 +25,9 @@
 ### 💾 Persistent Memory & Context
 - **Session Logging**: All conversation turns are automatically recorded with status, timestamps, user text, spoken dialogue, and emotion tags in `memory/sessions/session_<timestamp>.json`.
 - **Cross-Session Fact Retention**: Pink remembers long-term facts about the user across sessions stored in `memory/facts.json`.
-- **In-App Memory Controls**: Open the memory folder or clear current session memory on the fly directly through the system tray (**Memory Storage 🧠**).
+- **30-Day Active Reminders & To-Dos**: Save, edit, or delete temporary reminders stored in `memory/reminders.json`. Pink tracks them in your context and auto-prunes anything older than 30 days. Manage them via chat commands (`/remind`, `/del_reminder`, `/edit_reminder`, `/clear_reminders`, `/reminders`) or visually through the system tray.
+- **AI Token Analytics & Quota Tracking**: Ask Pink anytime (`"how much token left"`, `"ai token"`, or `/tokens`) or click **AI Token Usage 📊** in the tray menu. Pink gives an instant in-character report on active context window tokens remaining (out of 1,048,576), last query token breakdown, and today's session usage without consuming extra API calls.
+- **In-App Memory Controls**: Open the memory folder, clear current session memory, manage reminders, or check token usage directly through the system tray (**Memory Storage 🧠**).
 - **Flexible API Key Storage**: Seamlessly loads your Gemini API key from the environment, `.env` file, `memory/config.json`, or the in-app popup dialog.
 
 ### ❓ Interactive DELTARUNE Choice Questions
@@ -46,7 +48,15 @@
 
 ### 🎵 Windows GSMTC Music & Song Detection
 - Detects media playback across Windows (Spotify, YouTube, browser, media players) via the Windows GSMTC API.
-- Pink announces the song title and artist when a track starts, with special Easter egg reactions when Toby Fox music is detected.
+- Pink announces the song title and artist when a track starts.
+- **Autonomous AI Song Commentary**: Powered by Gemini AI, Pink spontaneously comments on newly played songs. Rather than repeating generic author praises, Pink specifically reacts to the **song title itself**—its theme, drama, wordplay, and vibe (with special Toby Fox lore deja vu when applicable). Can be toggled on/off in the system tray.
+- **Normal Song Loading & Thoughtful Pauses**: After announcing a song, Pink enters her signature Undertale-style listening/loading bubble (`* ...`) before delivering commentary.
+- **Instant Skip Abort**: Skipping a track immediately stops and aborts the previous song's loading bubble and background query, preventing stale commentary from lagging behind or playing out of sync.
+- **Playlist Skip Stress & Confusion Mechanic**: Rapidly skipping songs within 8 seconds stresses Pink out!
+  - **Skip 1**: Mild curiosity (`* ...?`).
+  - **Skip 2**: Impatient listening (`* ...?! (Wait, make up your mind!)` with her `behind` sprite).
+  - **Skip 3+ (Overwhelmed & Dizzy)**: Pink reaches her breaking point—she gets dizzy and confused, screaming in shocked or angry sprites about her spinning cotton head and playlist whiplash while saving Gemini tokens! Continuous playback for $\ge 8$ seconds calms her back down.
+- **Smart YouTube Shorts & Reel Filtering**: Automatically filters out YouTube Shorts, short clips, and video reels (duration $\le 60$s from browsers or titles containing `#shorts`/`#reels`/`#tiktok`) so Pink won't spam speech bubbles while you scroll. Can be toggled in the system tray.
 
 ### 🖥️ Window Switch & Flashbang Reactions
 - **Maximized App Startle**: Switching to any maximized window startles Pink (`shocked`, 30s cooldown).
@@ -72,11 +82,15 @@ Right-click the tray icon in your Windows notification area (`^`) to:
 - **Talk to Pink 💬**: Launch the Gemini chat prompt.
 - **Set Gemini API Key 🔑**: Open a secure dialog to update your Gemini API key.
 - **Memory Storage 🧠**:
+  - **Manage Reminders 📝**: View, add, edit, or delete active 30-day reminders in an interactive desktop window.
   - **Open Memory Folder 📂**: Opens `memory/` in Windows File Explorer.
   - **Clear Current Session 🧹**: Flushes in-memory context and initializes a clean session file.
+  - **AI Token Usage 📊**: Pop up a dialogue bubble with live token analytics and context window headroom.
 - **Hide Pink 🐾**: Send Pink to her peeking spot.
 - **Bomb Attack Mode**: Toggle cursor bomb throws and tune odds with the embedded slider.
 - **Dialogue Bubbles**: Toggle speech bubbles on or off in real time.
+- **AI Song Commentary 🎵**: Toggle autonomous music track commentary on or off.
+- **Filter YouTube Shorts 🔕**: Toggle ignoring YouTube Shorts and short video reels.
 - **Exit**: Cleanly terminate the application.
 
 ### ⚙️ Transparent, Click-Through & High-DPI Ready

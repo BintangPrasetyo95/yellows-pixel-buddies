@@ -106,7 +106,8 @@ from PyQt5.QtGui import (
     QPainter, QPalette, QPen, QPixmap, QRegion, QTextOption, QTransform
 )
 from PyQt5.QtWidgets import (
-    QAction, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+    QAction, QApplication, QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox,
     QPlainTextEdit, QPushButton, QSlider, QStyle, QStyleOptionSlider,
     QSystemTrayIcon, QVBoxLayout, QWidget, QWidgetAction
 )
@@ -451,10 +452,28 @@ DIALOGUE_SIDE_OFFSET_PX = 4           # Gap between pet sprite edge and dialogue
 DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where head is centered (~28px)
 SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
 SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
+AI_SONG_COMMENT_ENABLED = True        # Generate Gemini AI in-character commentary on newly detected music
+AI_SONG_COMMENT_COOLDOWN_S = 8.0      # Cooldown in seconds between AI song comments to prevent track skip spam
+SONG_FILTER_SHORTS_ENABLED = True     # Ignore/filter YouTube Shorts & short-form video reels from media detection
+SHORTS_MAX_DURATION_S = 61.0          # Max duration in seconds for browser media to be classified as a short/clip
+SONG_SKIP_RAPID_THRESHOLD_S = 8.0     # Maximum seconds between songs to count as a rapid playlist skip
+SONG_SKIP_STRESS_THRESHOLD = 3        # Rapid skip count threshold where Pink gets confused/stressed out
+
+STRESSED_SKIP_LINES: list[tuple[str, str]] = [
+    ("* W-WAIT! Stop skipping so fast, minion! My cotton head is spinning, mew!", "shocked"),
+    ("* PICK A SONG ALREADY! Are you speedrunning your playlist or what?!", "angry"),
+    ("* (Dizzy ghost noises... which melody was I even supposed to listen to?!)", "shocked"),
+    ("* Hey! My ears can't process ten songs at once! Hands off the skip button, dummy!", "angry"),
+    ("* Argh! Playlist whiplash! Give my poor plush doll brain a second to breathe!", "shocked"),
+    ("* STOP! Did a hyperactive squirrel take over your media player, mew?!", "angry"),
+    ("* ... (Pink's eyes are swirling like hypnotic spirals. She looks thoroughly dizzy.)", "shocked"),
+]
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
 DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between interactive questions
+CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat input overlay (2 minutes)
+CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
@@ -556,10 +575,13 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * In your recent screen episodic memory, your desktop observations during this session are recorded!
   * You remember what you saw! If the user asks about what was on their screen, past tasks, or bugs, refer to those recorded sights!
 
-- DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...]):
+- DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
   * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, names, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
   * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
+  * When the user asks to remove, delete, or complete a reminder (e.g. "delete reminder 2", "remove the reminder about song comment", "check off task..."), append [delete_reminder: <number_or_text>] to your answer!
+  * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
   * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
+  * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -1790,6 +1812,30 @@ class DialogueStep:
     anim: str | None = None
     is_ghost: bool = False
 
+    def strip(self, *args, **kwargs) -> str:
+        return self.text.strip(*args, **kwargs)
+
+    def startswith(self, *args, **kwargs) -> bool:
+        return self.text.startswith(*args, **kwargs)
+
+    def endswith(self, *args, **kwargs) -> bool:
+        return self.text.endswith(*args, **kwargs)
+
+    def lower(self) -> str:
+        return self.text.lower()
+
+    def replace(self, *args, **kwargs) -> str:
+        return self.text.replace(*args, **kwargs)
+
+    def __bool__(self) -> bool:
+        return bool(self.text)
+
+    def __str__(self) -> str:
+        return self.text
+
+    def __repr__(self) -> str:
+        return f"DialogueStep(text={self.text!r}, anim={self.anim!r}, is_ghost={self.is_ghost!r})"
+
 
 class DialogueOverlay(QWidget):
     """A frameless, translucent speech bubble overlay that displays text with a typewriter effect."""
@@ -1927,6 +1973,10 @@ class DialogueOverlay(QWidget):
         self._last_pet_y = pet_y
         self.step_started.emit(text, anim, is_ghost)
         self._display_text(text, pet_x, pet_y)
+
+    def append_queue(self, item: str | DialogueStep) -> None:
+        """Append an additional dialogue step to the active sequence queue."""
+        self._queue.append(item)
 
     def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
         """Render and begin typing a single dialogue bubble."""
@@ -2342,6 +2392,7 @@ class ChatTextEdit(QPlainTextEdit):
 
     returnPressed = pyqtSignal()
     escapePressed = pyqtSignal()
+    userTyped = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -2359,11 +2410,13 @@ class ChatTextEdit(QPlainTextEdit):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if event.modifiers() & Qt.ShiftModifier:
                 super().keyPressEvent(event)
+                self.userTyped.emit()
             else:
                 self.returnPressed.emit()
                 event.accept()
             return
         super().keyPressEvent(event)
+        self.userTyped.emit()
 
     def text(self) -> str:
         return self.toPlainText()
@@ -2380,6 +2433,7 @@ class ChatInputOverlay(QWidget):
 
     submitted = pyqtSignal(str, bool)
     cancelled = pyqtSignal()
+    timed_out = pyqtSignal()
 
     def __init__(self, font_family: str, box_png_path: Path, parent: QWidget | None = None) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -2404,6 +2458,10 @@ class ChatInputOverlay(QWidget):
         self._eye_off_icon: QIcon | None = None
         self._eye_on_icon: QIcon | None = None
         self._load_eye_icons()
+
+        self._timeout_timer = QTimer(self)
+        self._timeout_timer.setSingleShot(True)
+        self._timeout_timer.timeout.connect(self._on_timeout)
 
         self._init_ui()
 
@@ -2449,6 +2507,7 @@ class ChatInputOverlay(QWidget):
                 self._eye_on_icon = QIcon(scaled_on)
 
     def _on_vision_toggled(self, checked: bool) -> None:
+        self.reset_timeout()
         if checked:
             if self._eye_on_icon and not self._eye_on_icon.isNull():
                 self._vision_btn.setIcon(self._eye_on_icon)
@@ -2527,6 +2586,7 @@ class ChatInputOverlay(QWidget):
         self._text_edit.returnPressed.connect(self._on_submit)
         self._text_edit.escapePressed.connect(self.cancel)
         self._text_edit.textChanged.connect(self._on_text_changed)
+        self._text_edit.userTyped.connect(self.reset_timeout)
         layout.addWidget(self._text_edit, stretch=1)
 
         btn_h = round(16 * self._scale)
@@ -2627,6 +2687,7 @@ class ChatInputOverlay(QWidget):
         return max(1, count)
 
     def _on_text_changed(self) -> None:
+        self.reset_timeout()
         line_count = self._get_line_count()
         clamped_lines = min(4, max(1, line_count))
         fm = self._text_edit.fontMetrics()
@@ -2725,6 +2786,16 @@ class ChatInputOverlay(QWidget):
 
         self.move(round(target_x), round(target_y))
 
+    def reset_timeout(self) -> None:
+        """Reset the inactivity timeout countdown to 2 minutes."""
+        self._timeout_timer.start(CHAT_INPUT_TIMEOUT_MS)
+
+    def _on_timeout(self) -> None:
+        """Handle chat input inactivity timeout (no typing for 2 minutes)."""
+        self._timeout_timer.stop()
+        self.hide()
+        self.timed_out.emit()
+
     def open_at(self, pet_x: float, pet_y: float) -> None:
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -2740,16 +2811,27 @@ class ChatInputOverlay(QWidget):
         ensure_window_topmost(self)
         self.activateWindow()
         self._text_edit.setFocus()
+        self.reset_timeout()
 
     def cancel(self) -> None:
+        self._timeout_timer.stop()
         self.hide()
         self.cancelled.emit()
 
     def _on_submit(self) -> None:
+        self._timeout_timer.stop()
         text = self._text_edit.toPlainText().strip()
         see_screen = self._vision_btn.isChecked()
         self.hide()
         self.submitted.emit(text, see_screen)
+
+    def hideEvent(self, event) -> None:
+        self._timeout_timer.stop()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:
+        self._timeout_timer.stop()
+        super().closeEvent(event)
 
 
 class LASTINPUTINFO(ctypes.Structure):
@@ -2853,23 +2935,47 @@ class MemoryManager:
         self.env_path = base_dir / ".env"
         self.facts_path = self.memory_dir / "facts.json"
         self.reminders_path = self.memory_dir / "reminders.json"
+        self.token_usage_path = self.memory_dir / "token_usage.json"
+
+        # Token usage tracking (session and persistent)
+        self.session_prompt_tokens = 0
+        self.session_candidates_tokens = 0
+        self.session_total_tokens = 0
+        self.session_queries = 0
+        self.last_prompt_tokens = 0
+        self.last_candidates_tokens = 0
+        self.last_total_tokens = 0
+        self.last_model = GEMINI_MODEL
+        self.last_token_timestamp = ""
+        self._load_token_stats()
 
         self._ensure_dirs()
-        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
+        self._generate_new_session_file()
         self.history: list[dict[str, any]] = []
         # Temporary in-memory only storage for immediate ambient dialogue reactions (never saved to disk)
         self.recent_ambient_dialogues: deque[dict[str, any]] = deque(maxlen=4)
-        self._init_session_file()
+
+    def _generate_new_session_file(self) -> None:
+        """Generate a unique session file path for a fresh session."""
+        now = datetime.datetime.now()
+        base_id = now.strftime("%Y%m%d_%H%M%S")
+        candidate = self.sessions_dir / f"session_{base_id}.json"
+        counter = 1
+        while candidate.exists():
+            candidate = self.sessions_dir / f"session_{base_id}_{counter}.json"
+            counter += 1
+        self._session_id = candidate.stem.replace("session_", "")
+        self.session_file = candidate
 
     def _ensure_dirs(self) -> None:
         try:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             self.sessions_dir.mkdir(parents=True, exist_ok=True)
+            self.prune_empty_sessions()
             if not self.facts_path.exists():
                 default_facts = {
                     "user_name": "Dork",
-                    "notes": ["The user created Yellow's Pixel Buddies"],
+                    "notes": [],
                 }
                 self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
             if not self.reminders_path.exists():
@@ -2877,16 +2983,45 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not initialize memory directories/facts: %s", err)
 
-    def _init_session_file(self) -> None:
-        init_data = {
-            "session_id": self._session_id,
-            "started_at": datetime.datetime.now().isoformat(),
-            "messages": [],
-        }
+    def prune_empty_sessions(self) -> int:
+        """Prune any historical 0-message empty session files from memory/sessions/.
+        Returns count of pruned files."""
+        if not self.sessions_dir.exists():
+            return 0
+        pruned_count = 0
         try:
-            self.session_file.write_text(json.dumps(init_data, indent=2), encoding="utf-8")
+            for f in self.sessions_dir.glob("session_*.json"):
+                try:
+                    size = f.stat().st_size
+                    if size == 0:
+                        f.unlink(missing_ok=True)
+                        pruned_count += 1
+                        continue
+                    if size <= 120:  # Fast path for ~105 byte empty files with "messages": []
+                        data = json.loads(f.read_text(encoding="utf-8"))
+                        if not data.get("messages"):
+                            f.unlink(missing_ok=True)
+                            pruned_count += 1
+                except Exception:
+                    pass
         except Exception as err:
-            log.warning("Could not initialize session file: %s", err)
+            log.warning("Could not prune empty sessions: %s", err)
+        if pruned_count > 0:
+            log.info("Pruned %d empty session files from %s", pruned_count, self.sessions_dir)
+        return pruned_count
+
+    def _ensure_session_file(self) -> None:
+        """Create session file on disk only when first message is ready to be written (lazy creation)."""
+        if not self.session_file.exists():
+            init_data = {
+                "session_id": self._session_id,
+                "started_at": datetime.datetime.now().isoformat(),
+                "messages": [],
+            }
+            try:
+                self.session_file.write_text(json.dumps(init_data, indent=2), encoding="utf-8")
+            except Exception as err:
+                log.warning("Could not initialize session file: %s", err)
 
     def get_api_key(self) -> str:
         """Retrieve Gemini API key from environment, .env file, or memory/config.json."""
@@ -3036,13 +3171,13 @@ class MemoryManager:
 
         return active
 
-    def get_reminders_prompt(self) -> str:
-        """Format active reminders into a concise list for system prompt injection."""
+    def get_reminders_prompt(self, numbered: bool = True) -> str:
+        """Format active reminders into a concise numbered list for prompt injection and user viewing."""
         active = self.get_active_reminders()
         if not active:
             return ""
         lines = []
-        for r in active:
+        for idx, r in enumerate(active, 1):
             text = r.get("text", "").strip()
             created_str = r.get("created_at", "")
             date_label = ""
@@ -3052,7 +3187,8 @@ class MemoryManager:
                     date_label = f" (Added {dt.strftime('%b %d, %Y')})"
                 except Exception:
                     pass
-            lines.append(f"- {text}{date_label}")
+            prefix = f"{idx}. " if numbered else "- "
+            lines.append(f"{prefix}{text}{date_label}")
         return "\n".join(lines)
 
     def add_reminder(self, reminder_text: str) -> bool:
@@ -3078,6 +3214,94 @@ class MemoryManager:
             log.warning("Could not save reminder: %s", err)
             return False
 
+    def _find_reminder_index(self, active: list[dict], identifier: str | int) -> int | None:
+        """Helper to find the 0-based index in active reminders by 1-based index, ID, or text match."""
+        if not active or identifier is None:
+            return None
+
+        if isinstance(identifier, int):
+            idx = identifier - 1
+            return idx if 0 <= idx < len(active) else None
+
+        clean = str(identifier).strip()
+        if not clean:
+            return None
+
+        target_str = clean[1:] if clean.startswith("#") else clean
+        if target_str.isdigit():
+            idx = int(target_str) - 1
+            if 0 <= idx < len(active):
+                return idx
+
+        clean_lower = clean.lower()
+
+        # 1. Exact match on id
+        for idx, r in enumerate(active):
+            if r.get("id", "").lower() == clean_lower:
+                return idx
+
+        # 2. Exact match on text
+        for idx, r in enumerate(active):
+            if r.get("text", "").strip().lower() == clean_lower:
+                return idx
+
+        # 3. Substring match on text
+        for idx, r in enumerate(active):
+            if clean_lower in r.get("text", "").strip().lower():
+                return idx
+
+        return None
+
+    def delete_reminder(self, identifier: str | int) -> tuple[bool, str]:
+        """Delete an active reminder by 1-based index, ID, or text match.
+        Returns (success, deleted_text)."""
+        active = self.get_active_reminders()
+        idx = self._find_reminder_index(active, identifier)
+        if idx is None:
+            return False, ""
+        deleted = active.pop(idx)
+        deleted_text = deleted.get("text", "").strip()
+        try:
+            self.reminders_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Deleted reminder [%s]: %s", deleted.get("id"), deleted_text)
+            return True, deleted_text
+        except Exception as err:
+            log.warning("Could not delete reminder: %s", err)
+            return False, ""
+
+    def edit_reminder(self, identifier: str | int, new_text: str) -> tuple[bool, str]:
+        """Edit an active reminder by 1-based index, ID, or text match.
+        Returns (success, old_text)."""
+        clean_new = new_text.strip()
+        if not clean_new:
+            return False, ""
+        active = self.get_active_reminders()
+        idx = self._find_reminder_index(active, identifier)
+        if idx is None:
+            return False, ""
+        old_text = active[idx].get("text", "").strip()
+        active[idx]["text"] = clean_new
+        active[idx]["updated_at"] = datetime.datetime.now().isoformat()
+        try:
+            self.reminders_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Edited reminder [%s]: '%s' -> '%s'", active[idx].get("id"), old_text, clean_new)
+            return True, old_text
+        except Exception as err:
+            log.warning("Could not edit reminder: %s", err)
+            return False, ""
+
+    def clear_all_reminders(self) -> int:
+        """Clear all active reminders. Returns count of removed reminders."""
+        active = self.get_active_reminders()
+        count = len(active)
+        try:
+            self.reminders_path.write_text("[]", encoding="utf-8")
+            log.info("Cleared all %d reminders.", count)
+            return count
+        except Exception as err:
+            log.warning("Could not clear reminders: %s", err)
+            return 0
+
     def record_turn(self, user_text: str, pink_response: str, anim: str, had_screen: bool = False, seen: str = "") -> None:
         """Record turn in history and persist to session file."""
         display_user = user_text
@@ -3092,10 +3316,18 @@ class MemoryManager:
             "anim": anim,
             "had_screen": had_screen,
         }
+        if getattr(self, "last_total_tokens", 0) > 0:
+            turn["tokens"] = {
+                "prompt": self.last_prompt_tokens,
+                "candidates": self.last_candidates_tokens,
+                "total": self.last_total_tokens,
+                "model": getattr(self, "last_model", GEMINI_MODEL),
+            }
         if seen:
             turn["seen"] = seen
         self.history.append(turn)
 
+        self._ensure_session_file()
         try:
             data = json.loads(self.session_file.read_text(encoding="utf-8"))
             data["messages"].append(turn)
@@ -3124,6 +3356,7 @@ class MemoryManager:
         }
         self.history.append(turn)
 
+        self._ensure_session_file()
         try:
             data = json.loads(self.session_file.read_text(encoding="utf-8"))
             data["messages"].append(turn)
@@ -3135,24 +3368,48 @@ class MemoryManager:
         """Reset current in-memory history and start a fresh session file."""
         self.history.clear()
         self.recent_ambient_dialogues.clear()
-        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
-        self._init_session_file()
+        # If previous session file on disk was empty (0 messages), prune it
+        if hasattr(self, "session_file") and self.session_file.exists():
+            try:
+                data = json.loads(self.session_file.read_text(encoding="utf-8"))
+                if not data.get("messages"):
+                    self.session_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+        self._generate_new_session_file()
 
     def record_ambient_dialogue(
         self,
-        text: str,
+        text: str | object,
         category: str = "dialogue",
-        extra_lines: list[str] | None = None,
+        extra_lines: list[object] | None = None,
         user_choice: str | None = None,
         context: str | None = None,
     ) -> None:
         """Record an ambient or fixed dialogue line in temporary in-memory RAM storage only (zero disk writes)."""
         if not text:
             return
-        clean_text = text.strip()
+        if hasattr(text, "text"):
+            clean_text = str(text.text).strip()
+        else:
+            clean_text = str(text).strip()
+
         if extra_lines:
-            clean_extras = [e.strip() for e in extra_lines if e.strip()]
+            clean_extras = []
+            for e in extra_lines:
+                if hasattr(e, "text"):
+                    t = str(e.text).strip()
+                elif isinstance(e, dict):
+                    t = str(e.get("text", "")).strip()
+                elif isinstance(e, (tuple, list)):
+                    t = str(e[0]).strip() if e else ""
+                elif isinstance(e, str):
+                    t = e.strip()
+                else:
+                    t = str(e).strip()
+                # Omit transient loading UI indicators from ambient dialogue context
+                if t and t not in ("* ...", "* ...?", "* ..?", "* ...?! (Wait, make up your mind!)"):
+                    clean_extras.append(t)
             if clean_extras:
                 clean_text = clean_text + " -> " + " -> ".join(clean_extras)
 
@@ -3197,6 +3454,7 @@ class MemoryManager:
             "window_switch_shock": "Startled reaction when switching to maximized app",
             "song_detection": "Detected song playing in media player",
             "toby_fox_familiar": "Heard familiar music composed by Toby Fox",
+            "stressed_skip": "Dizzy and annoyed from rapid song skips",
             "startup_summon": "Spawned / summoned onto the taskbar",
             "shocked": "Startled by a click",
             "tongue": "Stuck tongue out (:P)",
@@ -3248,9 +3506,18 @@ class MemoryManager:
         for d_str in target_dates:
             all_target_files.extend(sorted(self.sessions_dir.glob(f"session_{d_str}_*.json")))
 
-        # Filter out current active session file
-        candidate_files = [f for f in all_target_files if f.name != self.session_file.name]
-        # Keep the most recent max_sessions
+        # Filter out current active session file and empty sessions (size <= 120 bytes)
+        candidate_files = []
+        for f in all_target_files:
+            if f.name == self.session_file.name:
+                continue
+            try:
+                if f.stat().st_size <= 120:
+                    continue
+                candidate_files.append(f)
+            except Exception:
+                continue
+        # Keep the most recent max_sessions with actual conversations
         selected_files = candidate_files[-max_sessions:]
 
         session_entries = []
@@ -3351,6 +3618,8 @@ class MemoryManager:
             if f.name in exclude:
                 continue
             try:
+                if f.stat().st_size <= 120:
+                    continue
                 data = json.loads(f.read_text(encoding="utf-8"))
                 msgs = data.get("messages", [])
                 for m in reversed(msgs):
@@ -3380,6 +3649,397 @@ class MemoryManager:
         if not matches:
             return ""
         return "RELEVANT PAST MEMORIES FOUND FROM OLDER SESSIONS:\n" + "\n".join(matches)
+
+    def _load_token_stats(self) -> None:
+        """Load persistent token statistics from token_usage.json."""
+        if hasattr(self, "token_usage_path") and self.token_usage_path.exists():
+            try:
+                data = json.loads(self.token_usage_path.read_text(encoding="utf-8"))
+                last_q = data.get("last_query", {})
+                if isinstance(last_q, dict):
+                    self.last_prompt_tokens = int(last_q.get("prompt_tokens", 0))
+                    self.last_candidates_tokens = int(last_q.get("candidates_tokens", 0))
+                    self.last_total_tokens = int(last_q.get("total_tokens", 0))
+                    self.last_model = str(last_q.get("model", GEMINI_MODEL))
+                    self.last_token_timestamp = str(last_q.get("timestamp", ""))
+            except Exception as err:
+                log.debug("Could not load token usage file: %s", err)
+
+    def record_token_usage(self, prompt_tokens: int, candidates_tokens: int, total_tokens: int, model_name: str) -> None:
+        """Update in-memory and persistent token usage metrics from a Gemini API response."""
+        now_dt = datetime.datetime.now()
+        today_str = now_dt.strftime("%Y-%m-%d")
+        total = total_tokens if total_tokens > 0 else (prompt_tokens + candidates_tokens)
+
+        # In-memory session counters
+        self.session_prompt_tokens += prompt_tokens
+        self.session_candidates_tokens += candidates_tokens
+        self.session_total_tokens += total
+        self.session_queries += 1
+        self.last_prompt_tokens = prompt_tokens
+        self.last_candidates_tokens = candidates_tokens
+        self.last_total_tokens = total
+        self.last_model = model_name
+        self.last_token_timestamp = now_dt.isoformat()
+
+        # Update persistent file
+        data = {}
+        if hasattr(self, "token_usage_path") and self.token_usage_path.exists():
+            try:
+                data = json.loads(self.token_usage_path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+
+        data["lifetime_prompt_tokens"] = data.get("lifetime_prompt_tokens", 0) + prompt_tokens
+        data["lifetime_candidates_tokens"] = data.get("lifetime_candidates_tokens", 0) + candidates_tokens
+        data["lifetime_total_tokens"] = data.get("lifetime_total_tokens", 0) + total
+        data["lifetime_queries"] = data.get("lifetime_queries", 0) + 1
+
+        daily = data.setdefault("daily", {})
+        today_data = daily.setdefault(today_str, {"prompt_tokens": 0, "candidates_tokens": 0, "total_tokens": 0, "queries": 0})
+        today_data["prompt_tokens"] = today_data.get("prompt_tokens", 0) + prompt_tokens
+        today_data["candidates_tokens"] = today_data.get("candidates_tokens", 0) + candidates_tokens
+        today_data["total_tokens"] = today_data.get("total_tokens", 0) + total
+        today_data["queries"] = today_data.get("queries", 0) + 1
+
+        data["last_query"] = {
+            "prompt_tokens": prompt_tokens,
+            "candidates_tokens": candidates_tokens,
+            "total_tokens": total,
+            "model": model_name,
+            "timestamp": now_dt.isoformat(),
+        }
+
+        try:
+            if hasattr(self, "token_usage_path"):
+                self.token_usage_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not persist token usage: %s", err)
+
+    def get_token_summary(self) -> dict[str, any]:
+        """Aggregate token usage statistics across session, daily, and context window."""
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        today_prompt = 0
+        today_cand = 0
+        today_total = 0
+        today_queries = 0
+        lifetime_total = self.session_total_tokens
+        lifetime_queries = self.session_queries
+
+        if hasattr(self, "token_usage_path") and self.token_usage_path.exists():
+            try:
+                data = json.loads(self.token_usage_path.read_text(encoding="utf-8"))
+                daily = data.get("daily", {})
+                if today_str in daily:
+                    t_info = daily[today_str]
+                    today_prompt = t_info.get("prompt_tokens", 0)
+                    today_cand = t_info.get("candidates_tokens", 0)
+                    today_total = t_info.get("total_tokens", 0)
+                    today_queries = t_info.get("queries", 0)
+                lifetime_total = data.get("lifetime_total_tokens", lifetime_total)
+                lifetime_queries = data.get("lifetime_queries", lifetime_queries)
+            except Exception:
+                pass
+
+        if today_total == 0 and self.session_total_tokens > 0:
+            today_total = self.session_total_tokens
+            today_queries = self.session_queries
+
+        # Gemini Flash context window limit: 1,048,576 tokens
+        context_window_limit = 1_048_576
+        used_context = self.last_prompt_tokens if self.last_prompt_tokens > 0 else 0
+        context_remaining = max(0, context_window_limit - used_context)
+        context_pct_free = (context_remaining / context_window_limit) * 100.0
+
+        return {
+            "session_prompt_tokens": self.session_prompt_tokens,
+            "session_candidates_tokens": self.session_candidates_tokens,
+            "session_total_tokens": self.session_total_tokens,
+            "session_queries": self.session_queries,
+            "last_prompt_tokens": self.last_prompt_tokens,
+            "last_candidates_tokens": self.last_candidates_tokens,
+            "last_total_tokens": self.last_total_tokens,
+            "last_model": self.last_model,
+            "today_total_tokens": today_total,
+            "today_queries": today_queries,
+            "lifetime_total_tokens": lifetime_total,
+            "lifetime_queries": lifetime_queries,
+            "context_window_limit": context_window_limit,
+            "context_window_remaining": context_remaining,
+            "context_window_pct_free": context_pct_free,
+        }
+
+    def format_token_dialogue_lines(self) -> list[str]:
+        """Format an in-character dialogue sequence explaining token status and limits."""
+        stats = self.get_token_summary()
+        lines = []
+        lines.append("* Token Core Status, mew! Here's the rundown:")
+        if stats["session_queries"] > 0 or stats["last_total_tokens"] > 0:
+            lines.append(
+                f"* Last query: {stats['last_prompt_tokens']:,} prompt + {stats['last_candidates_tokens']:,} output = {stats['last_total_tokens']:,} tokens ({stats['last_model']})."
+            )
+            lines.append(
+                f"* Context window: {stats['context_window_remaining']:,} / {stats['context_window_limit']:,} tokens remaining (~{stats['context_window_pct_free']:.1f}% free)!"
+            )
+            lines.append(
+                f"* Usage: {stats['today_total_tokens']:,} tokens across {stats['today_queries']} queries today (session: {stats['session_total_tokens']:,} tokens)."
+            )
+        else:
+            lines.append("* No AI queries sent yet this session!")
+            lines.append(
+                f"* Context window: {stats['context_window_limit']:,} tokens available (100% free)!"
+            )
+            if stats["today_queries"] > 0:
+                lines.append(
+                    f"* Earlier today: {stats['today_total_tokens']:,} tokens across {stats['today_queries']} queries."
+                )
+        lines.append(
+            "* (Gemini API refills rate limits every minute with 1M TPM & 1,500 free daily requests, so don't worry about running out, dummy!)"
+        )
+        return lines
+
+
+class RemindersDialog(QDialog):
+    """An interactive window to view, add, edit, or delete active 30-day reminders."""
+
+    def __init__(self, memory: "MemoryManager", font_family: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._memory = memory
+        self._font_family = font_family
+        self.setWindowTitle("Pink's Active Reminders 📝")
+        self.resize(540, 440)
+        self.setMinimumSize(420, 320)
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
+
+        self._init_ui()
+        self.refresh_reminders()
+
+    def _init_ui(self) -> None:
+        font = QFont(self._font_family)
+        font.setPixelSize(14)
+
+        self.setStyleSheet(
+            "QDialog {"
+            "  background-color: #18181b;"
+            "  color: #f4f4f5;"
+            "}"
+            "QLabel {"
+            "  color: #f4f4f5;"
+            "}"
+            "QListWidget {"
+            "  background-color: #09090b;"
+            "  color: #f4f4f5;"
+            "  border: 1px solid #3f3f46;"
+            "  border-radius: 6px;"
+            "  padding: 4px;"
+            "  outline: none;"
+            "}"
+            "QListWidget::item {"
+            "  padding: 8px 10px;"
+            "  border-bottom: 1px solid #27272a;"
+            "  border-radius: 4px;"
+            "}"
+            "QListWidget::item:hover {"
+            "  background-color: #27272a;"
+            "}"
+            "QListWidget::item:selected {"
+            "  background-color: #3b82f6;"
+            "  color: #ffffff;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton {"
+            "  background-color: #27272a;"
+            "  color: #f4f4f5;"
+            "  border: 1px solid #3f3f46;"
+            "  border-radius: 4px;"
+            "  padding: 6px 14px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #3f3f46;"
+            "  border-color: #71717a;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #18181b;"
+            "}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Header Title
+        title_label = QLabel("🐾 Active Reminders & To-Dos", self)
+        title_font = QFont(self._font_family)
+        title_font.setPixelSize(16)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("color: #fbbf24;")
+        layout.addWidget(title_label)
+
+        # Subtitle / Hint
+        hint_label = QLabel("Reminders auto-expire after 30 days. Double-click any item to edit.", self)
+        hint_font = QFont(self._font_family)
+        hint_font.setPixelSize(11)
+        hint_label.setFont(hint_font)
+        hint_label.setStyleSheet("color: #a1a1aa;")
+        layout.addWidget(hint_label)
+
+        # List Widget
+        self._list_widget = QListWidget(self)
+        self._list_widget.setFont(font)
+        self._list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self._list_widget, stretch=1)
+
+        # Status count label
+        self._count_label = QLabel("", self)
+        self._count_label.setFont(hint_font)
+        self._count_label.setStyleSheet("color: #71717a;")
+        layout.addWidget(self._count_label)
+
+        # Action Buttons Layout
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        self._add_btn = QPushButton("➕ Add", self)
+        self._add_btn.setFont(font)
+        self._add_btn.setCursor(Qt.PointingHandCursor)
+        self._add_btn.setStyleSheet("QPushButton { background-color: #065f46; border-color: #059669; color: #a7f3d0; } QPushButton:hover { background-color: #047857; }")
+        self._add_btn.clicked.connect(self._on_add_clicked)
+        btn_layout.addWidget(self._add_btn)
+
+        self._edit_btn = QPushButton("✏️ Edit", self)
+        self._edit_btn.setFont(font)
+        self._edit_btn.setCursor(Qt.PointingHandCursor)
+        self._edit_btn.setStyleSheet("QPushButton { background-color: #1e3a8a; border-color: #2563eb; color: #bfdbfe; } QPushButton:hover { background-color: #1d4ed8; }")
+        self._edit_btn.clicked.connect(self._on_edit_clicked)
+        btn_layout.addWidget(self._edit_btn)
+
+        self._del_btn = QPushButton("🗑️ Delete", self)
+        self._del_btn.setFont(font)
+        self._del_btn.setCursor(Qt.PointingHandCursor)
+        self._del_btn.setStyleSheet("QPushButton { background-color: #7f1d1d; border-color: #dc2626; color: #fecaca; } QPushButton:hover { background-color: #991b1b; }")
+        self._del_btn.clicked.connect(self._on_delete_clicked)
+        btn_layout.addWidget(self._del_btn)
+
+        self._clear_btn = QPushButton("🧹 Clear All", self)
+        self._clear_btn.setFont(font)
+        self._clear_btn.setCursor(Qt.PointingHandCursor)
+        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        btn_layout.addWidget(self._clear_btn)
+
+        btn_layout.addStretch(1)
+
+        close_btn = QPushButton("Close", self)
+        close_btn.setFont(font)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Delete:
+            self._on_delete_clicked()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def refresh_reminders(self) -> None:
+        """Reload active reminders from MemoryManager and populate the list."""
+        self._list_widget.clear()
+        active = self._memory.get_active_reminders()
+        for idx, r in enumerate(active, 1):
+            text = r.get("text", "").strip()
+            created_str = r.get("created_at", "")
+            date_label = ""
+            if created_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(created_str)
+                    date_label = f"  ({dt.strftime('%b %d, %Y')})"
+                except Exception:
+                    pass
+            item = QListWidgetItem(f"{idx}. {text}{date_label}")
+            item.setData(Qt.UserRole, r)
+            self._list_widget.addItem(item)
+
+        count = len(active)
+        self._count_label.setText(f"Total: {count} active reminder{'s' if count != 1 else ''}")
+        has_items = count > 0
+        self._edit_btn.setEnabled(has_items)
+        self._del_btn.setEnabled(has_items)
+        self._clear_btn.setEnabled(has_items)
+
+    def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
+        self._edit_item(item)
+
+    def _on_add_clicked(self) -> None:
+        text, ok = QInputDialog.getText(
+            self,
+            "Add Reminder",
+            "Enter reminder / task description:",
+            QLineEdit.Normal,
+            "",
+        )
+        if ok and text.strip():
+            self._memory.add_reminder(text.strip())
+            self.refresh_reminders()
+
+    def _on_edit_clicked(self) -> None:
+        current_item = self._list_widget.currentItem()
+        if not current_item:
+            return
+        self._edit_item(current_item)
+
+    def _edit_item(self, item: QListWidgetItem) -> None:
+        r_data = item.data(Qt.UserRole)
+        if not r_data:
+            return
+        old_text = r_data.get("text", "")
+        item_id = r_data.get("id", "")
+        new_text, ok = QInputDialog.getText(
+            self,
+            "Edit Reminder",
+            "Update reminder text:",
+            QLineEdit.Normal,
+            old_text,
+        )
+        if ok and new_text.strip() and new_text.strip() != old_text:
+            self._memory.edit_reminder(item_id, new_text.strip())
+            self.refresh_reminders()
+
+    def _on_delete_clicked(self) -> None:
+        current_item = self._list_widget.currentItem()
+        if not current_item:
+            return
+        r_data = current_item.data(Qt.UserRole)
+        if not r_data:
+            return
+        item_id = r_data.get("id", "")
+        text_preview = r_data.get("text", "")[:40]
+        reply = QMessageBox.question(
+            self,
+            "Delete Reminder",
+            f"Are you sure you want to delete this reminder?\n\n\"{text_preview}...\"",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self._memory.delete_reminder(item_id)
+            self.refresh_reminders()
+
+    def _on_clear_clicked(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Clear All Reminders",
+            "Are you sure you want to delete ALL active reminders?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._memory.clear_all_reminders()
+            self.refresh_reminders()
 
 
 def split_dual_dialogue(
@@ -3416,7 +4076,7 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[:anim_match.start()] + l[anim_match.end():]
 
-        l = re.sub(r"\[(?:seen|add_fact|add_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
+        l = re.sub(r"\[(?:seen|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
         l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
@@ -3832,6 +4492,7 @@ class GeminiWorkerThread(QThread):
                 resp.raise_for_status()
 
                 data = resp.json()
+                self._record_tokens_from_response(data, model)
                 candidates_data = data.get("candidates", [])
                 if not candidates_data:
                     raise ValueError("No response generated by Gemini.")
@@ -3878,8 +4539,16 @@ class GeminiWorkerThread(QThread):
                             r_val = m.group(1).strip()
                             if r_val:
                                 memory.add_reminder(r_val)
-                    chosen_cand = re.sub(r"\[add_fact:\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
-                    chosen_cand = re.sub(r"\[add_reminder:\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                        for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            d_val = m.group(1).strip()
+                            if d_val:
+                                memory.delete_reminder(d_val)
+                        for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            t_val = m.group(1).strip()
+                            n_val = m.group(2).strip()
+                            if t_val and n_val:
+                                memory.edit_reminder(t_val, n_val)
+                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -3918,6 +4587,7 @@ class GeminiWorkerThread(QThread):
         resp.raise_for_status()
 
         data = resp.json()
+        self._record_tokens_from_response(data, model)
         candidates = data.get("candidates", [])
         if not candidates:
             raise ValueError("No response generated by Gemini.")
@@ -3938,10 +4608,188 @@ class GeminiWorkerThread(QThread):
                 r_val = m.group(1).strip()
                 if r_val:
                     memory.add_reminder(r_val)
-        raw_text = re.sub(r"\[add_fact:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
-        raw_text = re.sub(r"\[add_reminder:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+            for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                d_val = m.group(1).strip()
+                if d_val:
+                    memory.delete_reminder(d_val)
+            for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                t_val = m.group(1).strip()
+                n_val = m.group(2).strip()
+                if t_val and n_val:
+                    memory.edit_reminder(t_val, n_val)
+        raw_text = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
+
+    def _record_tokens_from_response(self, data: dict, model: str) -> None:
+        """Extract usageMetadata from Gemini response and forward to MemoryManager."""
+        try:
+            usage_meta = data.get("usageMetadata")
+            if isinstance(usage_meta, dict):
+                p_tokens = int(usage_meta.get("promptTokenCount", 0))
+                c_tokens = int(usage_meta.get("candidatesTokenCount", 0))
+                t_tokens = int(usage_meta.get("totalTokenCount", p_tokens + c_tokens))
+                memory = getattr(self.parent(), "_memory", None) if self.parent() else None
+                if memory and hasattr(memory, "record_token_usage"):
+                    memory.record_token_usage(p_tokens, c_tokens, t_tokens, model)
+        except Exception as ex:
+            log.debug("Could not record token usage: %s", ex)
+
+
+class GeminiQuestionWorkerThread(QThread):
+    """Worker thread that calls Gemini to generate an interactive in-character question with choices."""
+
+    question_ready = pyqtSignal(object, str)  # (QuestionItem, source_type)
+    error_occurred = pyqtSignal(str)          # (error_message)
+
+    def __init__(
+        self,
+        api_key: str,
+        user_prompt: str,
+        system_instruction: str,
+        screenshot_b64: str | None = None,
+        source_type: str = "personality",
+        model_name: str = GEMINI_MODEL,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.api_key = api_key
+        self.user_prompt = user_prompt
+        self.system_instruction = system_instruction
+        self.screenshot_b64 = screenshot_b64
+        self.source_type = source_type
+        self.model_name = model_name
+
+    def run(self) -> None:
+        models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
+        last_error = ""
+
+        for idx, model in enumerate(models_to_try):
+            is_last = (idx == len(models_to_try) - 1)
+            try:
+                q_item = self._call_gemini(model)
+                self.question_ready.emit(q_item, self.source_type)
+                return
+            except requests.exceptions.HTTPError as http_err:
+                status_code = http_err.response.status_code if http_err.response is not None else 0
+                resp_text = http_err.response.text if http_err.response is not None else str(http_err)
+                last_error = f"HTTP {status_code}: {resp_text[:120]}"
+                if status_code in (400, 404, 429, 500, 502, 503) and not is_last:
+                    log.warning("Model %s returned HTTP %s for question, trying fallback...", model, status_code)
+                    continue
+                else:
+                    self.error_occurred.emit(last_error)
+                    return
+            except requests.exceptions.Timeout:
+                last_error = f"Model {model} question request timed out."
+                if not is_last:
+                    continue
+                self.error_occurred.emit("Question request timed out.")
+                return
+            except Exception as err:
+                last_error = f"Network error during question generation: {err}"
+                if not is_last:
+                    continue
+                self.error_occurred.emit(last_error)
+                return
+
+        self.error_occurred.emit(f"All models failed for question. Last error: {last_error[:120]}")
+
+    def _call_gemini(self, model: str) -> QuestionItem:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        headers = {"Content-Type": "application/json"}
+
+        prompt_parts = [{"text": self.user_prompt}]
+        if self.screenshot_b64:
+            prompt_parts.append({
+                "inlineData": {
+                    "mimeType": "image/jpeg",
+                    "data": self.screenshot_b64,
+                }
+            })
+
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": self.system_instruction}]
+            },
+            "contents": [{
+                "role": "user",
+                "parts": prompt_parts,
+            }],
+            "generationConfig": {
+                "temperature": 0.9,
+                "maxOutputTokens": 450,
+                "responseMimeType": "application/json",
+            }
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=GEMINI_TIMEOUT_S)
+        resp.raise_for_status()
+
+        data = resp.json()
+        self._record_tokens_from_response(data, model)
+        candidates_data = data.get("candidates", [])
+        if not candidates_data:
+            raise ValueError("No question response generated by Gemini.")
+
+        parts = candidates_data[0].get("content", {}).get("parts", [])
+        text_chunks = [p.get("text", "") for p in parts if "text" in p and not p.get("thought")]
+        if not text_chunks:
+            text_chunks = [p.get("text", "") for p in parts if "text" in p]
+        raw_text = "".join(text_chunks).strip()
+
+        return self._parse_question_json(raw_text)
+
+    def _parse_question_json(self, raw_text: str) -> QuestionItem:
+        m = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        json_str = m.group(0) if m else raw_text
+        parsed = json.loads(json_str)
+
+        question = str(parsed.get("question", "")).strip()
+        if not question:
+            raise ValueError("Empty question field in JSON.")
+        if not question.startswith("* "):
+            question = "* " + question
+
+        raw_choices = parsed.get("choices", [])
+        if not isinstance(raw_choices, list) or len(raw_choices) < 2:
+            raise ValueError("Expected at least 2 choices in question JSON.")
+
+        valid_anims = {
+            "idle", "laughing", "shocked", "singing", "peace_sign",
+            "burnt", "tongue", "angry", "embarrassed", "wistful", "behind", "kneeling"
+        }
+
+        cleaned_choices: list[tuple[str, str, str | None]] = []
+        for c in raw_choices[:3]:
+            if isinstance(c, dict):
+                label = str(c.get("label", "")).strip()[:40]
+                reaction = str(c.get("reaction", "")).strip()
+                if reaction and not reaction.startswith("* "):
+                    reaction = "* " + reaction
+                anim = str(c.get("anim", "")).strip().lower()
+                if anim not in valid_anims:
+                    anim = "idle"
+                if label and reaction:
+                    cleaned_choices.append((label, reaction, anim))
+
+        if len(cleaned_choices) < 2:
+            raise ValueError("Less than 2 valid choices parsed from question JSON.")
+
+        return QuestionItem(question=question, choices=cleaned_choices, category=self.source_type)
+
+    def _record_tokens_from_response(self, data: dict, model: str) -> None:
+        try:
+            usage_meta = data.get("usageMetadata")
+            if isinstance(usage_meta, dict):
+                p_tokens = int(usage_meta.get("promptTokenCount", 0))
+                c_tokens = int(usage_meta.get("candidatesTokenCount", 0))
+                t_tokens = int(usage_meta.get("totalTokenCount", p_tokens + c_tokens))
+                memory = getattr(self.parent(), "_memory", None) if self.parent() else None
+                if memory and hasattr(memory, "record_token_usage"):
+                    memory.record_token_usage(p_tokens, c_tokens, t_tokens, model)
+        except Exception as ex:
+            log.debug("Could not record question token usage: %s", ex)
 
 
 @dataclass
@@ -4359,17 +5207,54 @@ class BombChanceWidget(QWidget):
         return self.slider.value()
 
 
+SHORTS_TAG_REGEX = re.compile(
+    r"#shorts?\b|#ytshorts?\b|#youtubeshorts?\b|#reels?\b|#tiktok\b|"
+    r"\byoutube\s+shorts?\b|\byt\s+shorts?\b|"
+    r"(?:[|\-\/:\(\[]\s*shorts?\b)|\bshorts?\s*[|\-\/:\)\]]|"
+    r"^\s*shorts?\s*$",
+    re.IGNORECASE
+)
+BROWSER_APP_IDS = (
+    "chrome", "edge", "firefox", "opera", "brave", "vivaldi", "arc", "browser", "floorp", "waterfox", "librewolf"
+)
+
+
+def is_shorts_track(title: str, artist: str = "") -> bool:
+    """Check if title or artist matches YouTube Shorts / short-form reel patterns."""
+    if not title:
+        return False
+    check_text = f"{title} {artist}"
+    return bool(SHORTS_TAG_REGEX.search(check_text))
+
+
+def clean_song_title(title: str) -> str:
+    """Clean common metadata tags (e.g. '(Official Music Video)', '[MV]') from title for commentary."""
+    if not title:
+        return ""
+    cleaned = re.sub(
+        r"(?i)\s*[\(\[](?:official\s+(?:music\s+)?video|official\s+audio|lyric\s+video|lyrics|audio|mv|hd|4k|visualizer|remastered|extended\s+mix)[\)\]]",
+        "",
+        title,
+    )
+    cleaned = re.sub(r"\s*[-–—]\s*$", "", cleaned).strip()
+    return cleaned or title
+
+
 class MediaWatcher(QThread):
     """Monitors system-wide media playback (Spotify, YouTube, browser, etc.) using Windows GSMTC."""
     song_started = pyqtSignal(str, str)  # title, artist
     song_ended = pyqtSignal()
 
-    def __init__(self, poll_interval_ms: int = 1500, parent=None) -> None:
+    def __init__(self, poll_interval_ms: int = 1500, filter_shorts: bool = SONG_FILTER_SHORTS_ENABLED, parent=None) -> None:
         super().__init__(parent)
         self._poll_interval_s = max(0.5, poll_interval_ms / 1000.0)
         self._running = True
         self._last_track_id: tuple[str, str] = ("", "")
         self._last_playing = False
+        self._filter_shorts = filter_shorts
+
+    def set_filter_shorts(self, enabled: bool) -> None:
+        self._filter_shorts = enabled
 
     def stop(self) -> None:
         self._running = False
@@ -4397,20 +5282,37 @@ class MediaWatcher(QThread):
             try:
                 sess = mgr.get_current_session()
                 if sess is None:
-                    return None, False
+                    return None, False, False
                 pb = sess.get_playback_info()
                 is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
                 if not is_playing:
-                    return None, False
+                    return None, False, False
                 props = await sess.try_get_media_properties_async()
                 if props is None:
-                    return None, False
+                    return None, False, False
                 title = props.title.strip() if props.title else ""
                 artist = props.artist.strip() if props.artist else ""
-                return (title, artist), True
+
+                is_short = False
+                if getattr(self, "_filter_shorts", True) and title:
+                    if is_shorts_track(title, artist):
+                        is_short = True
+                    else:
+                        try:
+                            source_id = (sess.source_app_user_model_id or "").lower()
+                            if any(b in source_id for b in BROWSER_APP_IDS):
+                                tl = sess.get_timeline_properties()
+                                if tl and getattr(tl, "end_time", None) is not None:
+                                    dur_s = tl.end_time.total_seconds()
+                                    if 0.0 < dur_s <= SHORTS_MAX_DURATION_S:
+                                        is_short = True
+                        except Exception as e:
+                            log.debug("GSMTC timeline check error: %s", e)
+
+                return (title, artist), True, is_short
             except Exception as ex:
                 log.debug("GSMTC poll error: %s", ex)
-                return None, False
+                return None, False, False
 
         try:
             mgr = loop.run_until_complete(_get_manager())
@@ -4420,14 +5322,20 @@ class MediaWatcher(QThread):
                     mgr = loop.run_until_complete(_get_manager())
                     continue
 
-                track, is_playing = loop.run_until_complete(_check_session(mgr))
+                track, is_playing, is_short = loop.run_until_complete(_check_session(mgr))
                 if is_playing and track and track[0]:
-                    if track != self._last_track_id:
-                        self._last_track_id = track
+                    if is_short:
+                        if track != self._last_track_id:
+                            self._last_track_id = track
+                            log.info("Ignoring YouTube Short / reel playback: '%s' by '%s'", track[0], track[1] or "Unknown")
                         self._last_playing = True
-                        self.song_started.emit(track[0], track[1])
                     else:
-                        self._last_playing = True
+                        if track != self._last_track_id:
+                            self._last_track_id = track
+                            self._last_playing = True
+                            self.song_started.emit(track[0], track[1])
+                        else:
+                            self._last_playing = True
                 else:
                     if self._last_playing:
                         self._last_playing = False
@@ -4442,6 +5350,23 @@ class MediaWatcher(QThread):
             log.warning("MediaWatcher encountered an error: %s", err)
         finally:
             loop.close()
+
+
+def is_token_query(text: str) -> bool:
+    """Check if the user input is asking about AI tokens, token usage, or token limits."""
+    clean = text.strip().lower()
+    if clean.startswith(("/token", "/tokens", "/ai_token", "/token_info", "/tokens_left", "/usage")):
+        return True
+    token_pattern = re.compile(r"\b(?:ai\s+)?tokens?\b", re.IGNORECASE)
+    if token_pattern.search(clean):
+        ask_pattern = re.compile(
+            r"\b(how\s+many|how\s+much|left|remaining|remain|status|usage|used|count|balance|info|check|what|quota|limit|tell\s+me|show)\b|"
+            r"^\s*(ai\s*)?tokens?\s*(\?|\.)?\s*$",
+            re.IGNORECASE
+        )
+        if ask_pattern.search(clean):
+            return True
+    return False
 
 
 class YellowsPixelBuddies(QWidget):
@@ -4488,6 +5413,7 @@ class YellowsPixelBuddies(QWidget):
         self._chat_input = ChatInputOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._chat_input.submitted.connect(self._on_chat_submitted)
         self._chat_input.cancelled.connect(self._on_chat_cancelled)
+        self._chat_input.timed_out.connect(self._on_chat_timeout)
         self._memory = MemoryManager(_base_dir)
         self._gemini_thread: GeminiWorkerThread | None = None
         self._is_ghost_talking: bool = False
@@ -4499,14 +5425,28 @@ class YellowsPixelBuddies(QWidget):
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = -9999.0
         self._keep_response_anim: bool = False
-        self._pending_song_announcement: tuple[str, list[str]] | None = None
+        self._pending_song_announcement: tuple | None = None
+        self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
+        self._last_ai_song_comment_time: float = -9999.0
+        self._ai_comment_target_song: str = ""
+        self._song_skip_count: int = 0
+        self._last_song_start_time: float = -9999.0
+        self._filter_shorts_enabled: bool = SONG_FILTER_SHORTS_ENABLED
+        self._is_handling_user_chat: bool = False
+        self._question_thread: GeminiQuestionWorkerThread | None = None
+        self._current_song: tuple[str, str] | None = None
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
         if SONG_DETECTION_ENABLED:
             try:
-                self._media_watcher = MediaWatcher(poll_interval_ms=SONG_DETECTION_INTERVAL_MS, parent=self)
+                self._media_watcher = MediaWatcher(
+                    poll_interval_ms=SONG_DETECTION_INTERVAL_MS,
+                    filter_shorts=self._filter_shorts_enabled,
+                    parent=self
+                )
                 self._media_watcher.song_started.connect(self._on_song_started)
+                self._media_watcher.song_ended.connect(self._on_song_ended)
                 self._media_watcher.start()
             except Exception as err:
                 log.info("MediaWatcher could not be started: %s", err)
@@ -4745,9 +5685,19 @@ class YellowsPixelBuddies(QWidget):
             return True
         return False
 
+    def _is_user_chat_or_choice_active(self) -> bool:
+        """Returns True if the user is typing in chat, waiting for user chat reply, or answering choices."""
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            return True
+        if getattr(self, "_is_handling_user_chat", False):
+            return True
+        if hasattr(self, "_dialogue_overlay") and bool(getattr(self._dialogue_overlay, "_choices", None)):
+            return True
+        return False
+
     def _say(
         self,
-        category_or_text: str,
+        category_or_text: str | DialogueStep,
         force: bool = False,
         extra_queue: list[str | DialogueStep] | None = None,
         skippable: bool = True,
@@ -4766,36 +5716,48 @@ class YellowsPixelBuddies(QWidget):
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
+
+        if isinstance(category_or_text, DialogueStep):
+            if step_anim is None:
+                step_anim = category_or_text.anim
+            if not is_ghost:
+                is_ghost = category_or_text.is_ghost
+            category_or_text = category_or_text.text
+
         if category_or_text in ("idle", "question"):
             now = time.perf_counter()
             can_ask_question = (now - getattr(self, "_last_question_dialogue_time", -9999.0) >= DIALOGUE_QUESTION_COOLDOWN_S)
             is_question = (category_or_text == "question"
                            or (category_or_text == "idle"
                                and can_ask_question
-                               and random.random() < DIALOGUE_QUESTION_CHANCE
-                               and bool(QUESTION_ITEMS)))
-            if is_question and QUESTION_ITEMS:
+                               and random.random() < DIALOGUE_QUESTION_CHANCE))
+            if is_question:
                 self._last_question_dialogue_time = now
-                candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]
-                q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
-                self._last_dialogue = q_item.question
-                if hasattr(self, "_memory") and record_memory:
-                    options_preview = [c[0] for c in q_item.choices]
-                    self._memory.record_ambient_dialogue(
+                # 1. Attempt dynamic AI question generation (from screen, memory, or personality)
+                if self._trigger_ai_question():
+                    return
+                # 2. Offline fallback to static QUESTION_ITEMS
+                if QUESTION_ITEMS:
+                    candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]
+                    q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
+                    self._last_dialogue = q_item.question
+                    if hasattr(self, "_memory") and record_memory:
+                        options_preview = [c[0] for c in q_item.choices]
+                        self._memory.record_ambient_dialogue(
+                            q_item.question,
+                            category="question_fallback",
+                            context=f"Pink offered choices: {options_preview}",
+                        )
+                    if q_item.question in GHOST_DIALOGUE_LINES:
+                        self._start_ghost_speech()
+                    self._dialogue_overlay.ask(
                         q_item.question,
-                        category="question",
-                        context=f"Pink offered choices: {options_preview}",
+                        q_item.choices,
+                        self._x,
+                        self._y,
+                        on_chosen=self._on_question_answered,
                     )
-                if q_item.question in GHOST_DIALOGUE_LINES:
-                    self._start_ghost_speech()
-                self._dialogue_overlay.ask(
-                    q_item.question,
-                    q_item.choices,
-                    self._x,
-                    self._y,
-                    on_chosen=self._on_question_answered,
-                )
-                return
+                    return
             else:
                 today_idx = get_idle_variant_for_date()
                 if random.random() < DIALOGUE_IDLE_STEAL_CHANCE and len(IDLE_DIALOGUE_VARIANTS) > 1:
@@ -4901,7 +5863,296 @@ class YellowsPixelBuddies(QWidget):
                 category="question_answered",
                 user_choice=choice_label,
             )
-        self._say(reaction_text, force=True, record_memory=False)
+            q_title = getattr(self, "_last_dialogue", "Question")
+            self._memory.record_turn(
+                user_text=f"[Pink asked: \"{q_title}\" -> User chose: \"{choice_label or ''}\"]",
+                pink_response=reaction_text,
+                anim=reaction_anim or "idle",
+                had_screen=False,
+            )
+
+        steps = split_dual_dialogue(reaction_text, default_anim=reaction_anim)
+        if steps:
+            first_step = steps[0]
+            remaining_steps = steps[1:] if len(steps) > 1 else None
+            self._say(
+                first_step.text,
+                force=True,
+                record_memory=False,
+                extra_queue=remaining_steps,
+                step_anim=first_step.anim,
+                is_ghost=first_step.is_ghost,
+            )
+        else:
+            self._say(reaction_text, force=True, record_memory=False)
+
+    def _has_memory_highlights(self) -> bool:
+        """Check if there is rich memory or media context available for a memory-focused question."""
+        if not hasattr(self, "_memory"):
+            return False
+        has_facts = bool(self._memory.get_long_term_facts())
+        has_reminders = bool(self._memory.get_active_reminders())
+        has_song = bool(getattr(self, "_current_song", None) and self._current_song[0])
+        has_sessions = bool(getattr(self._memory, "sessions_dir", None) and any(self._memory.sessions_dir.glob("session_*.json")))
+        return has_facts or has_reminders or has_song or has_sessions
+
+    def _pick_question_source(self) -> str:
+        """Intelligently determine whether the next AI question should observe the screen, check memory, or be personality-driven."""
+        can_screen = (
+            getattr(self, "_screen_enabled", True)
+            and not is_workstation_locked()
+            and get_user_idle_seconds() <= AUTO_SCREEN_MAX_USER_IDLE_S
+        )
+        has_memory = self._has_memory_highlights()
+
+        if can_screen and has_memory:
+            return random.choices(["screen", "memory", "personality"], weights=[0.45, 0.40, 0.15])[0]
+        elif can_screen:
+            return random.choices(["screen", "personality"], weights=[0.70, 0.30])[0]
+        elif has_memory:
+            return random.choices(["memory", "personality"], weights=[0.70, 0.30])[0]
+        else:
+            return "personality"
+
+    def _get_best_memory_highlight(self) -> str:
+        """Pick an active, specific memory or context detail to center the question around."""
+        if getattr(self, "_current_song", None) and self._current_song[0]:
+            title, artist = self._current_song
+            return f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. If you know this song, ask what they think of its actual content, lyrics, vibe, or internet reputation/memes, or tease their taste in music!"
+
+        reminders = self._memory.get_active_reminders() if hasattr(self._memory, "get_active_reminders") else []
+        if reminders:
+            chosen_r = random.choice(reminders)
+            r_text = chosen_r.get("text", "")
+            return f"Active to-do/reminder: '{r_text}'. Ask if they completed it yet, or tease them for slacking!"
+
+        facts_str = self._memory.get_long_term_facts() if hasattr(self._memory, "get_long_term_facts") else ""
+        if facts_str:
+            lines = [l.strip("- ") for l in facts_str.splitlines() if l.strip()]
+            if lines:
+                chosen_f = random.choice(lines)
+                return f"Permanent memory fact about user: '{chosen_f}'. Playfully quiz them or tease them about this fact!"
+
+        recent_history, _ = self._memory.get_recent_sessions_overview(max_days=1, max_sessions=2)
+        if recent_history:
+            return "Recent conversation from earlier today: Call back to a topic from your conversation logs!"
+
+        return "Ask about their productivity, energy level, or how their day is going on the desktop!"
+
+    def _build_question_prompt(self, source: str) -> tuple[str, str]:
+        """Construct the system instruction and user prompt for generating an interactive question."""
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        reminders = self._memory.get_reminders_prompt()
+        if reminders:
+            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
+
+        recent_history, _ = self._memory.get_recent_sessions_overview(max_days=2, max_sessions=4)
+        if recent_history:
+            system_inst += f"\n\nRECENT PAST CONVERSATION LOGS:\n{recent_history}"
+
+        ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
+        if ambient_ctx:
+            system_inst += f"\n\nRECENT AMBIENT SPEECH ON DESKTOP:\n{ambient_ctx}"
+
+        if getattr(self, "_current_song", None) and self._current_song[0]:
+            title, artist = self._current_song
+            system_inst += f"\n\nCURRENTLY PLAYING MUSIC TRACK:\n\"{title}\" by \"{artist or 'Unknown'}\""
+
+        format_spec = (
+            "\n\nCRITICAL OUTPUT FORMAT REQUIREMENTS:\n"
+            "You MUST output a valid JSON object matching this exact schema:\n"
+            "{\n"
+            '  "question": "* ... (in-character question, starting with \'* \', max 20 words)",\n'
+            '  "choices": [\n'
+            "    {\n"
+            '      "label": "Short option button text (1-4 words)",\n'
+            '      "reaction": "* Pink\'s in-character reaction if user clicks this choice (starts with \'* \', 10-25 words)",\n'
+            '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
+            "    },\n"
+            "    {\n"
+            '      "label": "Short option button text (1-4 words)",\n'
+            '      "reaction": "* Pink\'s in-character reaction if user clicks this choice (starts with \'* \', 10-25 words)",\n'
+            '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "RULES:\n"
+            "- Exactly 2 choices (option 1 and option 2).\n"
+            "- Both choices should be natural, fun responses for the player.\n"
+            "- Question must start with '* '.\n"
+            "- Each reaction must start with '* ' and include a valid anim from the list above.\n"
+            "- Keep wording concise so it fits comfortably in the Undertale-style speech box.\n"
+            "- Do NOT include markdown code blocks or explanatory text outside the JSON."
+        )
+        system_inst += format_spec
+
+        if source == "screen":
+            user_prompt = (
+                "[Interactive Question from Screen Observation]\n"
+                "Pink is peeking over her shoulder at the user's desktop screen right now.\n"
+                "Carefully inspect what the user is actively doing on screen (open applications, IDE/code, browser tabs, media, game, documents, or desktop clutter).\n"
+                "Ask an interactive question DIRECTLY about what you see on their screen! "
+                "Tease them, ask what they're working on or watching, roast their open windows or clutter, or demand an explanation."
+            )
+        elif source == "memory":
+            highlight = self._get_best_memory_highlight()
+            user_prompt = (
+                f"[Interactive Question from Memory & Context]\n"
+                f"Pink is recalling a detail from memory about the user.\n"
+                f"Memory highlight to focus on: {highlight}\n"
+                f"Ask an interactive question following up or teasing them about this memory detail!"
+            )
+        else:
+            user_prompt = (
+                "[Interactive Question from Doll/Ghost Persona]\n"
+                "Pink is strolling or resting on the taskbar and asking a spontaneous, whimsical question!\n"
+                "Themes: declaring herself ruler of the desktop, asking what they'd do if a cat bomb landed near their mouse, doll vessel oddities, dark world secrets, or funny human-vs-doll dilemmas.\n"
+                "Ask an interactive question that invites the user to play along!"
+            )
+
+        return system_inst, user_prompt
+
+    def _trigger_ai_question(self, forced_source: str | None = None) -> bool:
+        """Trigger an AI-generated interactive question from screen, memory, or doll personality."""
+        if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return False
+
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            return False
+
+        if getattr(self, "_is_handling_user_chat", False):
+            return False
+
+        if getattr(self, "_question_thread", None) is not None and self._question_thread.isRunning():
+            return False
+
+        if self._is_dialogue_convo_active():
+            return False
+
+        source = forced_source or self._pick_question_source()
+
+        screenshot_b64 = None
+        if source == "screen":
+            if hasattr(self, "_dialogue_overlay"):
+                self._dialogue_overlay.hide()
+            self.hide()
+            QApplication.processEvents()
+            try:
+                screenshot_b64, _ = capture_screen_and_fingerprint()
+            except Exception as err:
+                log.warning("Question screenshot failed, falling back to memory/personality: %s", err)
+                source = "memory" if self._has_memory_highlights() else "personality"
+                screenshot_b64 = None
+            finally:
+                self.show()
+                ensure_window_topmost(self)
+
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+
+        if source == "screen":
+            if self._can_play("behind"):
+                self._play("behind", loop=True)
+            self._say("* ...?", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+        elif source == "memory":
+            if self._can_play("wistful"):
+                self._play("wistful", loop=True)
+            self._say("* ...?", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+        else:
+            if self._can_play("idle"):
+                self._play("idle", loop=True)
+            self._say("* ...?", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+
+        system_inst, user_prompt = self._build_question_prompt(source)
+
+        self._question_thread = GeminiQuestionWorkerThread(
+            api_key=api_key,
+            user_prompt=user_prompt,
+            system_instruction=system_inst,
+            screenshot_b64=screenshot_b64,
+            source_type=source,
+            model_name=GEMINI_MODEL,
+            parent=self,
+        )
+        self._question_thread.question_ready.connect(self._on_ai_question_ready)
+        self._question_thread.error_occurred.connect(self._on_ai_question_error)
+        self._question_thread.start()
+        return True
+
+    def _on_ai_question_ready(self, q_item: QuestionItem, source_type: str) -> None:
+        """Display AI-generated interactive question dialogue with choices."""
+        if self._is_user_chat_or_choice_active():
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                if self._dialogue_overlay._full_text == "* ...?":
+                    self._dialogue_overlay.dismiss(clear_queue=True)
+            return
+
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        self._last_question_item = q_item
+        self._last_dialogue = q_item.question
+
+        if hasattr(self, "_memory"):
+            options_preview = [c[0] for c in q_item.choices]
+            self._memory.record_ambient_dialogue(
+                q_item.question,
+                category=f"question_{source_type}",
+                context=f"Pink asked interactive question ({source_type}). Choices: {options_preview}",
+            )
+
+        if q_item.question in GHOST_DIALOGUE_LINES:
+            self._start_ghost_speech()
+
+        self._dialogue_overlay.ask(
+            q_item.question,
+            q_item.choices,
+            self._x,
+            self._y,
+            on_chosen=self._on_question_answered,
+        )
+
+    def _on_ai_question_error(self, err_msg: str) -> None:
+        """Handle failure in AI question generation by falling back to static questions."""
+        log.info("AI question generation failed (%s), falling back to static questions.", err_msg)
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            if self._dialogue_overlay._full_text == "* ...?":
+                self._dialogue_overlay.dismiss(clear_queue=True)
+
+        if QUESTION_ITEMS:
+            candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]
+            q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
+            self._last_question_item = q_item
+            self._last_dialogue = q_item.question
+            if hasattr(self, "_memory"):
+                options_preview = [c[0] for c in q_item.choices]
+                self._memory.record_ambient_dialogue(
+                    q_item.question,
+                    category="question_fallback",
+                    context=f"Pink offered choices: {options_preview}",
+                )
+            if q_item.question in GHOST_DIALOGUE_LINES:
+                self._start_ghost_speech()
+            self._dialogue_overlay.ask(
+                q_item.question,
+                q_item.choices,
+                self._x,
+                self._y,
+                on_chosen=self._on_question_answered,
+            )
+        else:
+            if getattr(self, "_phase", None) is Phase.PAUSE:
+                self._play("idle")
+                self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
 
     def _start_ghost_speech(self) -> None:
         """Ghost takes over the vessel with angry animation and spectral aura."""
@@ -4965,17 +6216,22 @@ class YellowsPixelBuddies(QWidget):
         """If a song announcement was deferred while dialogue or chat was active, play it now."""
         if getattr(self, "_pending_song_announcement", None) is None:
             return
-        if self._is_dialogue_convo_active():
+        if self._is_user_chat_or_choice_active():
             return
         pending_data = self._pending_song_announcement
         self._pending_song_announcement = None
 
         def _play_deferred() -> None:
-            if self._is_dialogue_convo_active():
+            if self._is_user_chat_or_choice_active():
                 self._pending_song_announcement = pending_data
                 return
-            line, extra = pending_data
+            line, extra = pending_data[:2]
+            clean_title = pending_data[2] if len(pending_data) > 2 else ""
+            clean_artist = pending_data[3] if len(pending_data) > 3 else ""
+            skip_count = pending_data[4] if len(pending_data) > 4 else 0
             self._say(line, force=True, extra_queue=extra, dialogue_category=("toby_fox_familiar" if extra else "song_detection"))
+            if clean_title and skip_count < SONG_SKIP_STRESS_THRESHOLD and getattr(self, "_ai_song_comment_enabled", True) and self._memory.get_api_key():
+                self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=skip_count)
 
         QTimer.singleShot(400, _play_deferred)
 
@@ -5004,6 +6260,16 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_chat_cancelled(self) -> None:
         """Resume normal behavior if user closes the chat box without sending."""
+        self._is_handling_user_chat = False
+        if self._phase == Phase.PAUSE:
+            self._pause_elapsed = False
+            self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+        self._check_and_play_pending_song()
+
+    def _on_chat_timeout(self) -> None:
+        """Resume normal behavior if chat input overlay closes after 2 minutes of typing inactivity."""
+        log.info("Chat input timed out after 2 minutes of inactivity")
+        self._is_handling_user_chat = False
         if self._phase == Phase.PAUSE:
             self._pause_elapsed = False
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
@@ -5044,6 +6310,45 @@ class YellowsPixelBuddies(QWidget):
                 reply = f"* Mew! Reminder saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That reminder is already active, silly!"
                 self._say(reply, force=True, record_memory=True)
                 return
+        elif lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ")):
+            target = clean_input.split(" ", 1)[1].strip()
+            if target:
+                ok, deleted_text = self._memory.delete_reminder(target)
+                if ok:
+                    reply = f"* Deleted reminder, mew:\n* \"{deleted_text}\""
+                else:
+                    reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
+                self._say(reply, force=True, record_memory=False)
+                return
+        elif lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ")):
+            rest = clean_input.split(" ", 1)[1].strip()
+            if "|" in rest:
+                parts = rest.split("|", 1)
+                target = parts[0].strip()
+                new_text = parts[1].strip()
+            else:
+                parts = rest.split(" ", 1)
+                target = parts[0].strip()
+                new_text = parts[1].strip() if len(parts) > 1 else ""
+            if target and new_text:
+                ok, old_text = self._memory.edit_reminder(target, new_text)
+                if ok:
+                    reply = f"* Reminder updated, mew!\n* New: \"{new_text}\""
+                else:
+                    reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
+            else:
+                reply = "* Format: /edit_reminder <number> <new text>, minion!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/clear_reminders", "/clear_todos"):
+            count = self._memory.clear_all_reminders()
+            reply = f"* Cleared {count} reminder{'s' if count != 1 else ''}, mew! Clean slate!" if count else "* No active reminders to clear, silly!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/reminders_ui", "/manage_reminders"):
+            self._open_reminders_dialog()
+            self._say("* Opened the reminder manager for you, mew!", force=True, record_memory=False)
+            return
         elif lower_input in ("/reminders", "/reminder", "/todos", "/todo"):
             reminders_text = self._memory.get_reminders_prompt()
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
@@ -5053,6 +6358,29 @@ class YellowsPixelBuddies(QWidget):
             facts_text = self._memory.get_long_term_facts()
             reply = f"* Here is what I permanently remember about you, minion:\n{facts_text}" if facts_text else "* My permanent fact sheet is empty, darling!"
             self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/question", "/ask", "/ask_question") or lower_input.startswith(("/question ", "/ask ")) or lower_input in ("ask me a question", "ask me something", "ask a question"):
+            forced_source = None
+            parts = clean_input.split(" ", 1)
+            if len(parts) > 1:
+                arg = parts[1].strip().lower()
+                if arg in ("screen", "desktop"):
+                    forced_source = "screen"
+                elif arg in ("memory", "memories", "music", "song", "reminder", "todo", "fact"):
+                    forced_source = "memory"
+                elif arg in ("persona", "personality", "doll", "ghost"):
+                    forced_source = "personality"
+            ok = self._trigger_ai_question(forced_source=forced_source)
+            if not ok:
+                self._say("* I couldn't think of a question right now, dummy! Try again in a second!", force=True, record_memory=False)
+            return
+        elif is_token_query(clean_input):
+            lines = self._memory.format_token_dialogue_lines()
+            first_line = lines[0]
+            extra = lines[1:] if len(lines) > 1 else None
+            if self._can_play("peace_sign"):
+                self._play("peace_sign")
+            self._say(first_line, force=True, extra_queue=extra, record_memory=True)
             return
 
         if text.strip().lower() in ("/error", "test error", "/test-error"):
@@ -5201,6 +6529,7 @@ class YellowsPixelBuddies(QWidget):
         self._gemini_thread.error_occurred.connect(
             lambda err_msg, u=text, s=see_screen: self._on_gemini_error(u, err_msg, s)
         )
+        self._is_handling_user_chat = True
         self._gemini_thread.start()
 
     def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
@@ -5223,6 +6552,7 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool, is_ghost: bool = False, seen: str = "") -> None:
         """Handle response generated by Gemini AI."""
+        self._is_handling_user_chat = False
         if not spoken_text or not spoken_text.strip():
             log.info("Auto screen comment suppressed: candidates repetitive or empty, staying quiet.")
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -5270,6 +6600,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
+        if not is_auto:
+            self._is_handling_user_chat = False
         self._last_auto_screen_comment_time = time.perf_counter()
         if is_auto:
             log.warning("Auto screen comment error: %s", error_msg)
@@ -5520,6 +6852,54 @@ class YellowsPixelBuddies(QWidget):
         if self._can_play("peace_sign"):
             self._play("peace_sign")
 
+    def _show_token_usage_dialogue(self) -> None:
+        """Display Pink's token report dialogue bubble."""
+        lines = self._memory.format_token_dialogue_lines()
+        first_line = lines[0]
+        extra = lines[1:] if len(lines) > 1 else None
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
+        self._say(first_line, force=True, extra_queue=extra, record_memory=False)
+
+    def _open_reminders_dialog(self) -> None:
+        """Open the interactive Reminders Management dialog."""
+        if not hasattr(self, "_reminders_dialog") or self._reminders_dialog is None:
+            self._reminders_dialog = RemindersDialog(self._memory, self._font_family, self)
+        self._reminders_dialog.refresh_reminders()
+        self._reminders_dialog.show()
+        self._reminders_dialog.raise_()
+        self._reminders_dialog.activateWindow()
+
+    def _cancel_previous_song_loading(self) -> None:
+        """Immediately stop any active Gemini worker thread and pending dialogue queue for previous song commentary."""
+        self._ai_comment_target_song = ""
+        self._pending_song_announcement = None
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            if not getattr(self, "_is_handling_user_chat", False):
+                try:
+                    self._gemini_thread.response_ready.disconnect()
+                except Exception:
+                    pass
+                try:
+                    self._gemini_thread.error_occurred.disconnect()
+                except Exception:
+                    pass
+                log.info("Aborted previous song's AI commentary thread upon skip.")
+
+    def _on_gemini_song_error(self, err_msg: str, target_song: str = "") -> None:
+        """Handle failure or timeout in AI song commentary generation."""
+        log.info("AI song comment query failed or timed out for '%s': %s", target_song, err_msg)
+        if target_song and target_song == getattr(self, "_ai_comment_target_song", ""):
+            self._ai_comment_target_song = ""
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                loading_texts = ("* ...", "* ...?", "* ...?! (Wait, make up your mind!)")
+                if getattr(self._dialogue_overlay, "_full_text", "") in loading_texts:
+                    self._dialogue_overlay.dismiss(clear_queue=True)
+
+    def _on_song_ended(self) -> None:
+        """Clear currently playing song track state upon playback stop/end."""
+        self._current_song = None
+
     def _on_song_started(self, title: str, artist: str) -> None:
         """React to newly started music playback via Windows GSMTC."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
@@ -5533,7 +6913,26 @@ class YellowsPixelBuddies(QWidget):
         if not clean_title:
             return
 
-        log.info("Song started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
+        self._current_song = (clean_title, clean_artist)
+
+        if getattr(self, "_filter_shorts_enabled", True) and is_shorts_track(clean_title, clean_artist):
+            log.info("Ignoring YouTube Short in _on_song_started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
+            return
+
+        # Immediately stop and cancel any running AI loading or thread from previous song
+        self._cancel_previous_song_loading()
+
+        now = time.perf_counter()
+        elapsed_since_last_song = now - getattr(self, "_last_song_start_time", -9999.0)
+        self._last_song_start_time = now
+
+        if elapsed_since_last_song < SONG_SKIP_RAPID_THRESHOLD_S:
+            self._song_skip_count += 1
+            log.info("Rapid song skip detected (%.1fs elapsed): skip count = %d", elapsed_since_last_song, self._song_skip_count)
+        else:
+            self._song_skip_count = 0
+
+        log.info("Song started: '%s' by '%s' (skip count: %d)", clean_title, clean_artist or "Unknown", self._song_skip_count)
 
         # Format title & artist to fit neatly in dialogue bubble
         display_title = clean_title if len(clean_title) <= 50 else clean_title[:47] + "..."
@@ -5544,9 +6943,22 @@ class YellowsPixelBuddies(QWidget):
         else:
             line = f"* Now playing: {display_title}"
 
-        extra_queue: list[str] = []
+        # If Pink is stressed out by rapid song skipping (skip count >= threshold):
+        if self._song_skip_count >= SONG_SKIP_STRESS_THRESHOLD:
+            stressed_text, stressed_anim = random.choice(STRESSED_SKIP_LINES)
+            self._ai_comment_target_song = ""
+            extra_queue = [DialogueStep(stressed_text, anim=stressed_anim)]
+            if self._is_user_chat_or_choice_active():
+                log.info("Dialogue/chat is active: deferring stressed song announcement for '%s'", display_title)
+                self._pending_song_announcement = (line, extra_queue, "", "", self._song_skip_count)
+                return
+            self._say(line, force=True, extra_queue=extra_queue, dialogue_category="stressed_skip")
+            return
+
+        extra_queue: list[str | DialogueStep] = []
         check_str = f"{clean_artist} {clean_title}".lower()
-        if "toby fox" in check_str or "toby 'radiation' fox" in check_str:
+        is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
+        if is_toby:
             toby_lines = DIALOGUE_LINES.get("toby_fox_familiar", [
                 "* (Wait... this sounds strangely familiar...)",
                 "* (... Huh? Have I heard this song before?)",
@@ -5556,13 +6968,179 @@ class YellowsPixelBuddies(QWidget):
             ])
             extra_queue.append(random.choice(toby_lines))
 
-        # If on chat (typing, waiting for AI response, or dialogue box is visible), defer announcement
-        if self._is_dialogue_convo_active():
+        # Multi-tier loading indicator before AI commentary
+        ai_enabled = getattr(self, "_ai_song_comment_enabled", True) and bool(self._memory.get_api_key())
+        if ai_enabled:
+            if self._song_skip_count == 0:
+                loading_step = DialogueStep("* ...", anim="idle")
+            elif self._song_skip_count == 1:
+                loading_step = DialogueStep("* ...?", anim="idle")
+            else:
+                loading_step = DialogueStep("* ...?! (Wait, make up your mind!)", anim="behind")
+            extra_queue.append(loading_step)
+
+        # If on chat (typing, waiting for AI response, or active choices), defer announcement
+        if self._is_user_chat_or_choice_active():
             log.info("Dialogue/chat is active: deferring song announcement for '%s'", display_title)
-            self._pending_song_announcement = (line, extra_queue)
+            self._pending_song_announcement = (line, extra_queue, clean_title, clean_artist, self._song_skip_count)
             return
 
-        self._say(line, force=True, extra_queue=extra_queue, dialogue_category=("toby_fox_familiar" if extra_queue else "song_detection"))
+        self._say(line, force=True, extra_queue=extra_queue, dialogue_category=("toby_fox_familiar" if is_toby else "song_detection"))
+        if ai_enabled:
+            self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=self._song_skip_count)
+
+    def _trigger_ai_song_comment(self, title: str, artist: str, skip_count: int = 0) -> None:
+        """Trigger an autonomous Gemini AI reaction/commentary on the newly started song, focusing on the title."""
+        if not getattr(self, "_ai_song_comment_enabled", True):
+            return
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            return
+
+        clean_artist = artist.strip()
+        clean_title = title.strip()
+        if not clean_title:
+            return
+
+        # Target song must match for response to be accepted
+        self._ai_comment_target_song = clean_title
+
+        # If busy with user chat, do not interrupt
+        if getattr(self, "_is_handling_user_chat", False):
+            log.info("Gemini thread is busy with user chat; skipping AI song comment.")
+            return
+
+        # Clean metadata fluff from title for sharper commentary
+        comment_title = clean_song_title(clean_title)
+
+        now = time.perf_counter()
+        self._last_ai_song_comment_time = now
+
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        reminders = self._memory.get_reminders_prompt()
+        if reminders:
+            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
+
+        check_str = f"{clean_artist} {clean_title}".lower()
+        is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
+
+        prompt_label = f"[Music played: '{comment_title}' by '{clean_artist or 'Unknown'}']"
+        song_prompt = (
+            f"[System event: A music track just started playing: \"{comment_title}\""
+            f"{f' by {clean_artist}' if clean_artist else ''}.]\n"
+            f"React in-character to this song: \"{comment_title}\"{f' by {clean_artist}' if clean_artist else ''}!\n"
+            f"Requirements:\n"
+            f"- RECOGNIZE THE SONG & ITS REPUTATION: If you know this song (its lyrics, actual musical vibe, history, or community memes), TAP INTO THAT! What is this song known for? Why do people listen to it? (e.g. boss fight PTSD, crying at 3 AM, anime training arc, nostalgia, legendary guitar solo or bass drop, meme culture, hype gym anthem). Mention or tease what this song is actually about or how people feel listening to it!\n"
+            f"- SASSY OPINION & TEASING: Tease the user's music taste or mood based on what kind of song this is. (e.g. 'Are we fighting a secret boss or what?!', 'Why are you listening to villain origin story music?!', 'Who hurt you to be listening to this at this hour?!', 'Minion, don't tell me you actually listen to this unironically!').\n"
+            f"- If obscure / unrecognized: Judge the track title and artist name with dramatic imagination.\n"
+            f"- Avoid generic praise: Do NOT just say 'Great song by [Artist]!'. React like a bratty, funny cat doll living on their desktop!\n"
+            f"- Personality: Tsundere ghost snark, childlike doll excitement, or dramatic bickering.\n"
+            f"- Concise: 1 to 2 short lines starting with '* ' (under 35 words total).\n"
+            f"- Emotion tag: End with an emotion tag like [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], or [anim: angry]."
+        )
+        if skip_count > 0:
+            song_prompt += (
+                f"\n- Playlist context: The user rapidly skipped past {skip_count} track(s) before stopping on this song. "
+                f"You can playfully mock their indecisiveness before reacting to this track!"
+            )
+        if is_toby:
+            song_prompt += (
+                f"\n- Toby Fox universe context: This track is from the Toby Fox universe (Undertale / Deltarune / related projects)! "
+                f"Tap into the lore, the boss or area this track plays in, or the feeling of deja vu and community memes about this specific track!"
+            )
+
+        target_song_tag = clean_title
+        self._gemini_thread = GeminiWorkerThread(
+            api_key=api_key,
+            user_prompt=song_prompt,
+            system_instruction=system_inst,
+            history=self._memory.history,
+            screenshot_b64=None,
+            model_name=GEMINI_MODEL,
+            is_auto_peek=False,
+            parent=self,
+        )
+        self._gemini_thread.response_ready.connect(
+            lambda spoken, anim, is_ghost, seen="", u=prompt_label, s=target_song_tag: self._on_gemini_song_comment(u, spoken, anim, is_ghost, target_song=s)
+        )
+        self._gemini_thread.error_occurred.connect(
+            lambda err, s=target_song_tag: self._on_gemini_song_error(err, target_song=s)
+        )
+        self._gemini_thread.start()
+
+    def _on_gemini_song_comment(self, user_label: str, spoken_text: str, anim: str, is_ghost: bool = False, target_song: str = "") -> None:
+        """Deliver Pink's Gemini AI commentary on the currently playing song."""
+        if not spoken_text or not spoken_text.strip():
+            return
+        if not self._dialogue_enabled or not getattr(self, "_ai_song_comment_enabled", True):
+            return
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+
+        # Stale comment prevention: ensure this commentary matches the active target song
+        if target_song and target_song != getattr(self, "_ai_comment_target_song", ""):
+            log.info("Discarding stale AI song comment for '%s' (active song is '%s')",
+                     target_song, getattr(self, "_ai_comment_target_song", ""))
+            return
+
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+            return
+        if getattr(self, "_is_handling_user_chat", False):
+            self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+            return
+
+        self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+        steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=False)
+        if not steps:
+            return
+
+        first_step = steps[0]
+        remaining_steps = steps[1:] if len(steps) > 1 else None
+
+        # If speech bubble is currently showing "Now playing" or loading step, queue comment right behind it!
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            log.info("Dialogue bubble active: appending AI song comment to sequence queue")
+            for step in steps:
+                self._dialogue_overlay.append_queue(step)
+            # If currently holding on a loading indicator, shorten remaining hold to 800ms for responsiveness
+            loading_texts = ("* ...", "* ...?", "* ...?! (Wait, make up your mind!)")
+            if getattr(self._dialogue_overlay, "_full_text", "") in loading_texts:
+                if self._dialogue_overlay._hold_timer.isActive():
+                    self._dialogue_overlay._hold_timer.start(800)
+            return
+
+        # Otherwise, speak the comment directly
+        self._keep_response_anim = True
+        self._apply_dialogue_step(first_step.anim, first_step.is_ghost)
+        self._say(
+            first_step.text,
+            force=True,
+            auto_dismiss=True,
+            record_memory=False,
+            is_ghost=first_step.is_ghost,
+            extra_queue=remaining_steps,
+            step_anim=first_step.anim,
+        )
+
+    def _toggle_ai_song_comment(self, checked: bool) -> None:
+        """Toggle autonomous AI commentary on newly detected music tracks."""
+        self._ai_song_comment_enabled = checked
+        log.info("AI song commentary %s", "enabled" if checked else "disabled")
+
+    def _toggle_filter_shorts(self, checked: bool) -> None:
+        """Toggle ignoring YouTube Shorts and short-form video reels."""
+        self._filter_shorts_enabled = checked
+        if hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            self._media_watcher.set_filter_shorts(checked)
+        log.info("Filter YouTube Shorts %s", "enabled" if checked else "disabled")
 
     # -------------------------------------------------------------- animation
     def _can_play(self, state: str) -> bool:
@@ -6942,6 +8520,7 @@ class YellowsPixelBuddies(QWidget):
             self._fall_after_jump(None)
         menu = QMenu(self)
         talk_action = menu.addAction("Talk to Pink 💬")
+        ask_action = menu.addAction("Ask me something ❓")
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -6962,6 +8541,8 @@ class YellowsPixelBuddies(QWidget):
             self._start_hide_sequence()
         elif chosen is talk_action:
             self._open_chat_input()
+        elif chosen is ask_action:
+            self._trigger_ai_question()
         elif jump_action is not None and chosen is jump_action:
             self._schedule_debug_jump()
 
@@ -7117,10 +8698,14 @@ class YellowsPixelBuddies(QWidget):
         self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)
 
         memory_menu = tray_menu.addMenu("Memory Storage 🧠")
+        manage_reminders_action = memory_menu.addAction("Manage Reminders 📝")
+        manage_reminders_action.triggered.connect(self._open_reminders_dialog)
         open_mem_action = memory_menu.addAction("Open Memory Folder 📂")
         open_mem_action.triggered.connect(self._open_memory_folder)
         reset_mem_action = memory_menu.addAction("Clear Current Session 🧹")
         reset_mem_action.triggered.connect(self._reset_session_memory)
+        token_usage_action = memory_menu.addAction("AI Token Usage 📊")
+        token_usage_action.triggered.connect(self._show_token_usage_dialogue)
 
         self._hide_tray_action = tray_menu.addAction("Hide Pink 🐾")
         self._hide_tray_action.triggered.connect(self._start_hide_sequence)
@@ -7146,6 +8731,16 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_action.setCheckable(True)
         self._dialogue_action.setChecked(self._dialogue_enabled)
         self._dialogue_action.toggled.connect(self._toggle_dialogue)
+
+        self._song_comment_action = tray_menu.addAction("AI Song Commentary 🎵")
+        self._song_comment_action.setCheckable(True)
+        self._song_comment_action.setChecked(self._ai_song_comment_enabled)
+        self._song_comment_action.toggled.connect(self._toggle_ai_song_comment)
+
+        self._filter_shorts_action = tray_menu.addAction("Filter YouTube Shorts 🔕")
+        self._filter_shorts_action.setCheckable(True)
+        self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
+        self._filter_shorts_action.toggled.connect(self._toggle_filter_shorts)
 
         tray_menu.addSeparator()
         exit_action = tray_menu.addAction("Exit")
@@ -7183,6 +8778,14 @@ class YellowsPixelBuddies(QWidget):
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(self._dialogue_enabled)
             self._dialogue_action.blockSignals(False)
+        if hasattr(self, "_song_comment_action") and self._song_comment_action is not None:
+            self._song_comment_action.blockSignals(True)
+            self._song_comment_action.setChecked(self._ai_song_comment_enabled)
+            self._song_comment_action.blockSignals(False)
+        if hasattr(self, "_filter_shorts_action") and self._filter_shorts_action is not None:
+            self._filter_shorts_action.blockSignals(True)
+            self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
+            self._filter_shorts_action.blockSignals(False)
 
     def _toggle_dialogue(self, checked: bool) -> None:
         """Enable or disable speech bubble popups."""
@@ -7292,9 +8895,14 @@ class YellowsPixelBuddies(QWidget):
             self._dialogue_overlay.close()
         if hasattr(self, "_chat_input"):
             self._chat_input.close()
+        if hasattr(self, "_reminders_dialog") and self._reminders_dialog is not None:
+            self._reminders_dialog.close()
         if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
             self._gemini_thread.terminate()
             self._gemini_thread.wait(500)
+        if hasattr(self, "_question_thread") and self._question_thread is not None and self._question_thread.isRunning():
+            self._question_thread.terminate()
+            self._question_thread.wait(500)
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
         self.hide()
         QApplication.quit()
