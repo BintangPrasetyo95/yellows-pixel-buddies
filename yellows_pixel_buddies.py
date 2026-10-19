@@ -2900,6 +2900,19 @@ class MemoryManager:
         self.env_path = base_dir / ".env"
         self.facts_path = self.memory_dir / "facts.json"
         self.reminders_path = self.memory_dir / "reminders.json"
+        self.token_usage_path = self.memory_dir / "token_usage.json"
+
+        # Token usage tracking (session and persistent)
+        self.session_prompt_tokens = 0
+        self.session_candidates_tokens = 0
+        self.session_total_tokens = 0
+        self.session_queries = 0
+        self.last_prompt_tokens = 0
+        self.last_candidates_tokens = 0
+        self.last_total_tokens = 0
+        self.last_model = GEMINI_MODEL
+        self.last_token_timestamp = ""
+        self._load_token_stats()
 
         self._ensure_dirs()
         self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3228,6 +3241,13 @@ class MemoryManager:
             "anim": anim,
             "had_screen": had_screen,
         }
+        if getattr(self, "last_total_tokens", 0) > 0:
+            turn["tokens"] = {
+                "prompt": self.last_prompt_tokens,
+                "candidates": self.last_candidates_tokens,
+                "total": self.last_total_tokens,
+                "model": getattr(self, "last_model", GEMINI_MODEL),
+            }
         if seen:
             turn["seen"] = seen
         self.history.append(turn)
@@ -3516,6 +3536,154 @@ class MemoryManager:
         if not matches:
             return ""
         return "RELEVANT PAST MEMORIES FOUND FROM OLDER SESSIONS:\n" + "\n".join(matches)
+
+    def _load_token_stats(self) -> None:
+        """Load persistent token statistics from token_usage.json."""
+        if hasattr(self, "token_usage_path") and self.token_usage_path.exists():
+            try:
+                data = json.loads(self.token_usage_path.read_text(encoding="utf-8"))
+                last_q = data.get("last_query", {})
+                if isinstance(last_q, dict):
+                    self.last_prompt_tokens = int(last_q.get("prompt_tokens", 0))
+                    self.last_candidates_tokens = int(last_q.get("candidates_tokens", 0))
+                    self.last_total_tokens = int(last_q.get("total_tokens", 0))
+                    self.last_model = str(last_q.get("model", GEMINI_MODEL))
+                    self.last_token_timestamp = str(last_q.get("timestamp", ""))
+            except Exception as err:
+                log.debug("Could not load token usage file: %s", err)
+
+    def record_token_usage(self, prompt_tokens: int, candidates_tokens: int, total_tokens: int, model_name: str) -> None:
+        """Update in-memory and persistent token usage metrics from a Gemini API response."""
+        now_dt = datetime.datetime.now()
+        today_str = now_dt.strftime("%Y-%m-%d")
+        total = total_tokens if total_tokens > 0 else (prompt_tokens + candidates_tokens)
+
+        # In-memory session counters
+        self.session_prompt_tokens += prompt_tokens
+        self.session_candidates_tokens += candidates_tokens
+        self.session_total_tokens += total
+        self.session_queries += 1
+        self.last_prompt_tokens = prompt_tokens
+        self.last_candidates_tokens = candidates_tokens
+        self.last_total_tokens = total
+        self.last_model = model_name
+        self.last_token_timestamp = now_dt.isoformat()
+
+        # Update persistent file
+        data = {}
+        if hasattr(self, "token_usage_path") and self.token_usage_path.exists():
+            try:
+                data = json.loads(self.token_usage_path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+
+        data["lifetime_prompt_tokens"] = data.get("lifetime_prompt_tokens", 0) + prompt_tokens
+        data["lifetime_candidates_tokens"] = data.get("lifetime_candidates_tokens", 0) + candidates_tokens
+        data["lifetime_total_tokens"] = data.get("lifetime_total_tokens", 0) + total
+        data["lifetime_queries"] = data.get("lifetime_queries", 0) + 1
+
+        daily = data.setdefault("daily", {})
+        today_data = daily.setdefault(today_str, {"prompt_tokens": 0, "candidates_tokens": 0, "total_tokens": 0, "queries": 0})
+        today_data["prompt_tokens"] = today_data.get("prompt_tokens", 0) + prompt_tokens
+        today_data["candidates_tokens"] = today_data.get("candidates_tokens", 0) + candidates_tokens
+        today_data["total_tokens"] = today_data.get("total_tokens", 0) + total
+        today_data["queries"] = today_data.get("queries", 0) + 1
+
+        data["last_query"] = {
+            "prompt_tokens": prompt_tokens,
+            "candidates_tokens": candidates_tokens,
+            "total_tokens": total,
+            "model": model_name,
+            "timestamp": now_dt.isoformat(),
+        }
+
+        try:
+            if hasattr(self, "token_usage_path"):
+                self.token_usage_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as err:
+            log.warning("Could not persist token usage: %s", err)
+
+    def get_token_summary(self) -> dict[str, any]:
+        """Aggregate token usage statistics across session, daily, and context window."""
+        today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        today_prompt = 0
+        today_cand = 0
+        today_total = 0
+        today_queries = 0
+        lifetime_total = self.session_total_tokens
+        lifetime_queries = self.session_queries
+
+        if hasattr(self, "token_usage_path") and self.token_usage_path.exists():
+            try:
+                data = json.loads(self.token_usage_path.read_text(encoding="utf-8"))
+                daily = data.get("daily", {})
+                if today_str in daily:
+                    t_info = daily[today_str]
+                    today_prompt = t_info.get("prompt_tokens", 0)
+                    today_cand = t_info.get("candidates_tokens", 0)
+                    today_total = t_info.get("total_tokens", 0)
+                    today_queries = t_info.get("queries", 0)
+                lifetime_total = data.get("lifetime_total_tokens", lifetime_total)
+                lifetime_queries = data.get("lifetime_queries", lifetime_queries)
+            except Exception:
+                pass
+
+        if today_total == 0 and self.session_total_tokens > 0:
+            today_total = self.session_total_tokens
+            today_queries = self.session_queries
+
+        # Gemini Flash context window limit: 1,048,576 tokens
+        context_window_limit = 1_048_576
+        used_context = self.last_prompt_tokens if self.last_prompt_tokens > 0 else 0
+        context_remaining = max(0, context_window_limit - used_context)
+        context_pct_free = (context_remaining / context_window_limit) * 100.0
+
+        return {
+            "session_prompt_tokens": self.session_prompt_tokens,
+            "session_candidates_tokens": self.session_candidates_tokens,
+            "session_total_tokens": self.session_total_tokens,
+            "session_queries": self.session_queries,
+            "last_prompt_tokens": self.last_prompt_tokens,
+            "last_candidates_tokens": self.last_candidates_tokens,
+            "last_total_tokens": self.last_total_tokens,
+            "last_model": self.last_model,
+            "today_total_tokens": today_total,
+            "today_queries": today_queries,
+            "lifetime_total_tokens": lifetime_total,
+            "lifetime_queries": lifetime_queries,
+            "context_window_limit": context_window_limit,
+            "context_window_remaining": context_remaining,
+            "context_window_pct_free": context_pct_free,
+        }
+
+    def format_token_dialogue_lines(self) -> list[str]:
+        """Format an in-character dialogue sequence explaining token status and limits."""
+        stats = self.get_token_summary()
+        lines = []
+        lines.append("* Token Core Status, mew! Here's the rundown:")
+        if stats["session_queries"] > 0 or stats["last_total_tokens"] > 0:
+            lines.append(
+                f"* Last query: {stats['last_prompt_tokens']:,} prompt + {stats['last_candidates_tokens']:,} output = {stats['last_total_tokens']:,} tokens ({stats['last_model']})."
+            )
+            lines.append(
+                f"* Context window: {stats['context_window_remaining']:,} / {stats['context_window_limit']:,} tokens remaining (~{stats['context_window_pct_free']:.1f}% free)!"
+            )
+            lines.append(
+                f"* Usage: {stats['today_total_tokens']:,} tokens across {stats['today_queries']} queries today (session: {stats['session_total_tokens']:,} tokens)."
+            )
+        else:
+            lines.append("* No AI queries sent yet this session!")
+            lines.append(
+                f"* Context window: {stats['context_window_limit']:,} tokens available (100% free)!"
+            )
+            if stats["today_queries"] > 0:
+                lines.append(
+                    f"* Earlier today: {stats['today_total_tokens']:,} tokens across {stats['today_queries']} queries."
+                )
+        lines.append(
+            "* (Gemini API refills rate limits every minute with 1M TPM & 1,500 free daily requests, so don't worry about running out, dummy!)"
+        )
+        return lines
 
 
 class RemindersDialog(QDialog):
@@ -4211,6 +4379,7 @@ class GeminiWorkerThread(QThread):
                 resp.raise_for_status()
 
                 data = resp.json()
+                self._record_tokens_from_response(data, model)
                 candidates_data = data.get("candidates", [])
                 if not candidates_data:
                     raise ValueError("No response generated by Gemini.")
@@ -4305,6 +4474,7 @@ class GeminiWorkerThread(QThread):
         resp.raise_for_status()
 
         data = resp.json()
+        self._record_tokens_from_response(data, model)
         candidates = data.get("candidates", [])
         if not candidates:
             raise ValueError("No response generated by Gemini.")
@@ -4337,6 +4507,20 @@ class GeminiWorkerThread(QThread):
         raw_text = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
+
+    def _record_tokens_from_response(self, data: dict, model: str) -> None:
+        """Extract usageMetadata from Gemini response and forward to MemoryManager."""
+        try:
+            usage_meta = data.get("usageMetadata")
+            if isinstance(usage_meta, dict):
+                p_tokens = int(usage_meta.get("promptTokenCount", 0))
+                c_tokens = int(usage_meta.get("candidatesTokenCount", 0))
+                t_tokens = int(usage_meta.get("totalTokenCount", p_tokens + c_tokens))
+                memory = getattr(self.parent(), "_memory", None) if self.parent() else None
+                if memory and hasattr(memory, "record_token_usage"):
+                    memory.record_token_usage(p_tokens, c_tokens, t_tokens, model)
+        except Exception as ex:
+            log.debug("Could not record token usage: %s", ex)
 
 
 @dataclass
@@ -4884,6 +5068,23 @@ class MediaWatcher(QThread):
             log.warning("MediaWatcher encountered an error: %s", err)
         finally:
             loop.close()
+
+
+def is_token_query(text: str) -> bool:
+    """Check if the user input is asking about AI tokens, token usage, or token limits."""
+    clean = text.strip().lower()
+    if clean.startswith(("/token", "/tokens", "/ai_token", "/token_info", "/tokens_left", "/usage")):
+        return True
+    token_pattern = re.compile(r"\b(?:ai\s+)?tokens?\b", re.IGNORECASE)
+    if token_pattern.search(clean):
+        ask_pattern = re.compile(
+            r"\b(how\s+many|how\s+much|left|remaining|remain|status|usage|used|count|balance|info|check|what|quota|limit|tell\s+me|show)\b|"
+            r"^\s*(ai\s*)?tokens?\s*(\?|\.)?\s*$",
+            re.IGNORECASE
+        )
+        if ask_pattern.search(clean):
+            return True
+    return False
 
 
 class YellowsPixelBuddies(QWidget):
@@ -5555,6 +5756,14 @@ class YellowsPixelBuddies(QWidget):
             reply = f"* Here is what I permanently remember about you, minion:\n{facts_text}" if facts_text else "* My permanent fact sheet is empty, darling!"
             self._say(reply, force=True, record_memory=False)
             return
+        elif is_token_query(clean_input):
+            lines = self._memory.format_token_dialogue_lines()
+            first_line = lines[0]
+            extra = lines[1:] if len(lines) > 1 else None
+            if self._can_play("peace_sign"):
+                self._play("peace_sign")
+            self._say(first_line, force=True, extra_queue=extra, record_memory=True)
+            return
 
         if text.strip().lower() in ("/error", "test error", "/test-error"):
             err_msg = "Test explosion error requested by user."
@@ -6020,6 +6229,15 @@ class YellowsPixelBuddies(QWidget):
         self._say("* Session memory cleared! A clean slate for our chats, mew!", force=True, record_memory=False)
         if self._can_play("peace_sign"):
             self._play("peace_sign")
+
+    def _show_token_usage_dialogue(self) -> None:
+        """Display Pink's token report dialogue bubble."""
+        lines = self._memory.format_token_dialogue_lines()
+        first_line = lines[0]
+        extra = lines[1:] if len(lines) > 1 else None
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
+        self._say(first_line, force=True, extra_queue=extra, record_memory=False)
 
     def _open_reminders_dialog(self) -> None:
         """Open the interactive Reminders Management dialog."""
@@ -7762,6 +7980,8 @@ class YellowsPixelBuddies(QWidget):
         open_mem_action.triggered.connect(self._open_memory_folder)
         reset_mem_action = memory_menu.addAction("Clear Current Session 🧹")
         reset_mem_action.triggered.connect(self._reset_session_memory)
+        token_usage_action = memory_menu.addAction("AI Token Usage 📊")
+        token_usage_action.triggered.connect(self._show_token_usage_dialogue)
 
         self._hide_tray_action = tray_menu.addAction("Hide Pink 🐾")
         self._hide_tray_action.triggered.connect(self._start_hide_sequence)

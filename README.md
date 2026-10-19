@@ -26,7 +26,8 @@
 - **Session Logging**: All conversation turns are automatically recorded with status, timestamps, user text, spoken dialogue, and emotion tags in `memory/sessions/session_<timestamp>.json`.
 - **Cross-Session Fact Retention**: Pink remembers long-term facts about the user across sessions stored in `memory/facts.json`.
 - **30-Day Active Reminders & To-Dos**: Save, edit, or delete temporary reminders stored in `memory/reminders.json`. Pink tracks them in your context and auto-prunes anything older than 30 days. Manage them via chat commands (`/remind`, `/del_reminder`, `/edit_reminder`, `/clear_reminders`, `/reminders`) or visually through the system tray.
-- **In-App Memory Controls**: Open the memory folder, clear current session memory, or manage reminders on the fly directly through the system tray (**Memory Storage 🧠**).
+- **AI Token Analytics & Quota Tracking**: Ask Pink anytime (`"how much token left"`, `"ai token"`, or `/tokens`) or click **AI Token Usage 📊** in the tray menu. Pink gives an instant in-character report on active context window tokens remaining (out of 1,048,576), last query token breakdown, and today's session usage without consuming extra API calls.
+- **In-App Memory Controls**: Open the memory folder, clear current session memory, manage reminders, or check token usage directly through the system tray (**Memory Storage 🧠**).
 - **Flexible API Key Storage**: Seamlessly loads your Gemini API key from the environment, `.env` file, `memory/config.json`, or the in-app popup dialog.
 
 ### ❓ Interactive DELTARUNE Choice Questions
@@ -78,6 +79,7 @@ Right-click the tray icon in your Windows notification area (`^`) to:
   - **Manage Reminders 📝**: View, add, edit, or delete active 30-day reminders in an interactive desktop window.
   - **Open Memory Folder 📂**: Opens `memory/` in Windows File Explorer.
   - **Clear Current Session 🧹**: Flushes in-memory context and initializes a clean session file.
+  - **AI Token Usage 📊**: Pop up a dialogue bubble with live token analytics and context window headroom.
 - **Hide Pink 🐾**: Send Pink to her peeking spot.
 - **Bomb Attack Mode**: Toggle cursor bomb throws and tune odds with the embedded slider.
 - **Dialogue Bubbles**: Toggle speech bubbles on or off in real time.
