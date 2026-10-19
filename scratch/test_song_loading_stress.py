@@ -182,6 +182,30 @@ def test_song_loading_and_stress_mechanics():
     assert not pet._dialogue_overlay._active, "Dialogue overlay should be dismissed on loading error!"
     print("-> Test 9 Passed: Song loading bubble dismissed cleanly upon Gemini error.")
 
+    # 10. Test real un-mocked _say with DialogueStep in extra_queue
+    print("\n[Test 10] Real _say with DialogueStep in extra_queue (verifying no strip() AttributeError)...")
+    del pet._say  # Restore original _say method from YellowsPixelBuddies
+    loading_step = DialogueStep("* ...", anim="idle")
+    # This must execute without raising AttributeError: 'DialogueStep' object has no attribute 'strip'
+    pet._say("* Now playing: Real Test Track", force=True, extra_queue=[loading_step], dialogue_category="song_detection")
+    # Verify ambient memory was recorded safely and loading dots filtered
+    assert len(pet._memory.recent_ambient_dialogues) > 0
+    last_ambient = pet._memory.recent_ambient_dialogues[-1]
+    assert "Real Test Track" in last_ambient["text"]
+    assert "* ..." not in last_ambient["text"]  # transient loading dot filtered out
+    print("-> Test 10 Passed: Real _say with DialogueStep in extra_queue executed and recorded cleanly without crashing.")
+
+    # 11. Test DialogueStep string helper methods
+    print("\n[Test 11] DialogueStep string helper methods...")
+    step = DialogueStep("  * Hello World!  ", anim="singing", is_ghost=True)
+    assert step.strip() == "* Hello World!"
+    assert step.startswith("  *")
+    assert step.endswith("!  ")
+    assert "hello" in step.lower()
+    assert str(step) == "  * Hello World!  "
+    assert bool(step) is True
+    print("-> Test 11 Passed: DialogueStep string helper methods work properly.")
+
     # Clean up media watcher thread to avoid QThread destroyed warning
     if hasattr(pet, "_media_watcher") and pet._media_watcher is not None:
         pet._media_watcher.stop()
@@ -192,3 +216,4 @@ def test_song_loading_and_stress_mechanics():
 
 if __name__ == "__main__":
     test_song_loading_and_stress_mechanics()
+

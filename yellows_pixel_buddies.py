@@ -1812,6 +1812,30 @@ class DialogueStep:
     anim: str | None = None
     is_ghost: bool = False
 
+    def strip(self, *args, **kwargs) -> str:
+        return self.text.strip(*args, **kwargs)
+
+    def startswith(self, *args, **kwargs) -> bool:
+        return self.text.startswith(*args, **kwargs)
+
+    def endswith(self, *args, **kwargs) -> bool:
+        return self.text.endswith(*args, **kwargs)
+
+    def lower(self) -> str:
+        return self.text.lower()
+
+    def replace(self, *args, **kwargs) -> str:
+        return self.text.replace(*args, **kwargs)
+
+    def __bool__(self) -> bool:
+        return bool(self.text)
+
+    def __str__(self) -> str:
+        return self.text
+
+    def __repr__(self) -> str:
+        return f"DialogueStep(text={self.text!r}, anim={self.anim!r}, is_ghost={self.is_ghost!r})"
+
 
 class DialogueOverlay(QWidget):
     """A frameless, translucent speech bubble overlay that displays text with a typewriter effect."""
@@ -3356,18 +3380,36 @@ class MemoryManager:
 
     def record_ambient_dialogue(
         self,
-        text: str,
+        text: str | object,
         category: str = "dialogue",
-        extra_lines: list[str] | None = None,
+        extra_lines: list[object] | None = None,
         user_choice: str | None = None,
         context: str | None = None,
     ) -> None:
         """Record an ambient or fixed dialogue line in temporary in-memory RAM storage only (zero disk writes)."""
         if not text:
             return
-        clean_text = text.strip()
+        if hasattr(text, "text"):
+            clean_text = str(text.text).strip()
+        else:
+            clean_text = str(text).strip()
+
         if extra_lines:
-            clean_extras = [e.strip() for e in extra_lines if e.strip()]
+            clean_extras = []
+            for e in extra_lines:
+                if hasattr(e, "text"):
+                    t = str(e.text).strip()
+                elif isinstance(e, dict):
+                    t = str(e.get("text", "")).strip()
+                elif isinstance(e, (tuple, list)):
+                    t = str(e[0]).strip() if e else ""
+                elif isinstance(e, str):
+                    t = e.strip()
+                else:
+                    t = str(e).strip()
+                # Omit transient loading UI indicators from ambient dialogue context
+                if t and t not in ("* ...", "* ...?", "* ..?", "* ...?! (Wait, make up your mind!)"):
+                    clean_extras.append(t)
             if clean_extras:
                 clean_text = clean_text + " -> " + " -> ".join(clean_extras)
 
@@ -3412,6 +3454,7 @@ class MemoryManager:
             "window_switch_shock": "Startled reaction when switching to maximized app",
             "song_detection": "Detected song playing in media player",
             "toby_fox_familiar": "Heard familiar music composed by Toby Fox",
+            "stressed_skip": "Dizzy and annoyed from rapid song skips",
             "startup_summon": "Spawned / summoned onto the taskbar",
             "shocked": "Startled by a click",
             "tongue": "Stuck tongue out (:P)",
@@ -5495,7 +5538,7 @@ class YellowsPixelBuddies(QWidget):
 
     def _say(
         self,
-        category_or_text: str,
+        category_or_text: str | DialogueStep,
         force: bool = False,
         extra_queue: list[str | DialogueStep] | None = None,
         skippable: bool = True,
@@ -5514,6 +5557,14 @@ class YellowsPixelBuddies(QWidget):
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
+
+        if isinstance(category_or_text, DialogueStep):
+            if step_anim is None:
+                step_anim = category_or_text.anim
+            if not is_ghost:
+                is_ghost = category_or_text.is_ghost
+            category_or_text = category_or_text.text
+
         if category_or_text in ("idle", "question"):
             now = time.perf_counter()
             can_ask_question = (now - getattr(self, "_last_question_dialogue_time", -9999.0) >= DIALOGUE_QUESTION_COOLDOWN_S)
