@@ -452,6 +452,11 @@ DIALOGUE_SIDE_OFFSET_PX = 4           # Gap between pet sprite edge and dialogue
 DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where head is centered (~28px)
 SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
 SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milliseconds
+AI_SONG_COMMENT_ENABLED = True        # Generate Gemini AI in-character commentary on newly detected music
+AI_SONG_COMMENT_COOLDOWN_S = 8.0      # Cooldown in seconds between AI song comments to prevent track skip spam
+SONG_FILTER_SHORTS_ENABLED = True     # Ignore/filter YouTube Shorts & short-form video reels from media detection
+SHORTS_MAX_DURATION_S = 61.0          # Max duration in seconds for browser media to be classified as a short/clip
+
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
@@ -1933,6 +1938,10 @@ class DialogueOverlay(QWidget):
         self._last_pet_y = pet_y
         self.step_started.emit(text, anim, is_ghost)
         self._display_text(text, pet_x, pet_y)
+
+    def append_queue(self, item: str | DialogueStep) -> None:
+        """Append an additional dialogue step to the active sequence queue."""
+        self._queue.append(item)
 
     def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
         """Render and begin typing a single dialogue bubble."""
@@ -4745,17 +4754,41 @@ class BombChanceWidget(QWidget):
         return self.slider.value()
 
 
+SHORTS_TAG_REGEX = re.compile(
+    r"#shorts?\b|#ytshorts?\b|#youtubeshorts?\b|#reels?\b|#tiktok\b|"
+    r"\byoutube\s+shorts?\b|\byt\s+shorts?\b|"
+    r"(?:[|\-\/:\(\[]\s*shorts?\b)|\bshorts?\s*[|\-\/:\)\]]|"
+    r"^\s*shorts?\s*$",
+    re.IGNORECASE
+)
+BROWSER_APP_IDS = (
+    "chrome", "edge", "firefox", "opera", "brave", "vivaldi", "arc", "browser", "floorp", "waterfox", "librewolf"
+)
+
+
+def is_shorts_track(title: str, artist: str = "") -> bool:
+    """Check if title or artist matches YouTube Shorts / short-form reel patterns."""
+    if not title:
+        return False
+    check_text = f"{title} {artist}"
+    return bool(SHORTS_TAG_REGEX.search(check_text))
+
+
 class MediaWatcher(QThread):
     """Monitors system-wide media playback (Spotify, YouTube, browser, etc.) using Windows GSMTC."""
     song_started = pyqtSignal(str, str)  # title, artist
     song_ended = pyqtSignal()
 
-    def __init__(self, poll_interval_ms: int = 1500, parent=None) -> None:
+    def __init__(self, poll_interval_ms: int = 1500, filter_shorts: bool = SONG_FILTER_SHORTS_ENABLED, parent=None) -> None:
         super().__init__(parent)
         self._poll_interval_s = max(0.5, poll_interval_ms / 1000.0)
         self._running = True
         self._last_track_id: tuple[str, str] = ("", "")
         self._last_playing = False
+        self._filter_shorts = filter_shorts
+
+    def set_filter_shorts(self, enabled: bool) -> None:
+        self._filter_shorts = enabled
 
     def stop(self) -> None:
         self._running = False
@@ -4783,20 +4816,37 @@ class MediaWatcher(QThread):
             try:
                 sess = mgr.get_current_session()
                 if sess is None:
-                    return None, False
+                    return None, False, False
                 pb = sess.get_playback_info()
                 is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
                 if not is_playing:
-                    return None, False
+                    return None, False, False
                 props = await sess.try_get_media_properties_async()
                 if props is None:
-                    return None, False
+                    return None, False, False
                 title = props.title.strip() if props.title else ""
                 artist = props.artist.strip() if props.artist else ""
-                return (title, artist), True
+
+                is_short = False
+                if getattr(self, "_filter_shorts", True) and title:
+                    if is_shorts_track(title, artist):
+                        is_short = True
+                    else:
+                        try:
+                            source_id = (sess.source_app_user_model_id or "").lower()
+                            if any(b in source_id for b in BROWSER_APP_IDS):
+                                tl = sess.get_timeline_properties()
+                                if tl and getattr(tl, "end_time", None) is not None:
+                                    dur_s = tl.end_time.total_seconds()
+                                    if 0.0 < dur_s <= SHORTS_MAX_DURATION_S:
+                                        is_short = True
+                        except Exception as e:
+                            log.debug("GSMTC timeline check error: %s", e)
+
+                return (title, artist), True, is_short
             except Exception as ex:
                 log.debug("GSMTC poll error: %s", ex)
-                return None, False
+                return None, False, False
 
         try:
             mgr = loop.run_until_complete(_get_manager())
@@ -4806,14 +4856,20 @@ class MediaWatcher(QThread):
                     mgr = loop.run_until_complete(_get_manager())
                     continue
 
-                track, is_playing = loop.run_until_complete(_check_session(mgr))
+                track, is_playing, is_short = loop.run_until_complete(_check_session(mgr))
                 if is_playing and track and track[0]:
-                    if track != self._last_track_id:
-                        self._last_track_id = track
+                    if is_short:
+                        if track != self._last_track_id:
+                            self._last_track_id = track
+                            log.info("Ignoring YouTube Short / reel playback: '%s' by '%s'", track[0], track[1] or "Unknown")
                         self._last_playing = True
-                        self.song_started.emit(track[0], track[1])
                     else:
-                        self._last_playing = True
+                        if track != self._last_track_id:
+                            self._last_track_id = track
+                            self._last_playing = True
+                            self.song_started.emit(track[0], track[1])
+                        else:
+                            self._last_playing = True
                 else:
                     if self._last_playing:
                         self._last_playing = False
@@ -4886,13 +4942,20 @@ class YellowsPixelBuddies(QWidget):
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = -9999.0
         self._keep_response_anim: bool = False
-        self._pending_song_announcement: tuple[str, list[str]] | None = None
+        self._pending_song_announcement: tuple | None = None
+        self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
+        self._last_ai_song_comment_time: float = -9999.0
+        self._filter_shorts_enabled: bool = SONG_FILTER_SHORTS_ENABLED
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
         if SONG_DETECTION_ENABLED:
             try:
-                self._media_watcher = MediaWatcher(poll_interval_ms=SONG_DETECTION_INTERVAL_MS, parent=self)
+                self._media_watcher = MediaWatcher(
+                    poll_interval_ms=SONG_DETECTION_INTERVAL_MS,
+                    filter_shorts=self._filter_shorts_enabled,
+                    parent=self
+                )
                 self._media_watcher.song_started.connect(self._on_song_started)
                 self._media_watcher.start()
             except Exception as err:
@@ -5361,8 +5424,12 @@ class YellowsPixelBuddies(QWidget):
             if self._is_dialogue_convo_active():
                 self._pending_song_announcement = pending_data
                 return
-            line, extra = pending_data
+            line, extra = pending_data[:2]
+            clean_title = pending_data[2] if len(pending_data) > 2 else ""
+            clean_artist = pending_data[3] if len(pending_data) > 3 else ""
             self._say(line, force=True, extra_queue=extra, dialogue_category=("toby_fox_familiar" if extra else "song_detection"))
+            if clean_title:
+                self._trigger_ai_song_comment(clean_title, clean_artist)
 
         QTimer.singleShot(400, _play_deferred)
 
@@ -5976,6 +6043,10 @@ class YellowsPixelBuddies(QWidget):
         if not clean_title:
             return
 
+        if getattr(self, "_filter_shorts_enabled", True) and is_shorts_track(clean_title, clean_artist):
+            log.info("Ignoring YouTube Short in _on_song_started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
+            return
+
         log.info("Song started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
 
         # Format title & artist to fit neatly in dialogue bubble
@@ -6002,10 +6073,135 @@ class YellowsPixelBuddies(QWidget):
         # If on chat (typing, waiting for AI response, or dialogue box is visible), defer announcement
         if self._is_dialogue_convo_active():
             log.info("Dialogue/chat is active: deferring song announcement for '%s'", display_title)
-            self._pending_song_announcement = (line, extra_queue)
+            self._pending_song_announcement = (line, extra_queue, clean_title, clean_artist)
             return
 
         self._say(line, force=True, extra_queue=extra_queue, dialogue_category=("toby_fox_familiar" if extra_queue else "song_detection"))
+        self._trigger_ai_song_comment(clean_title, clean_artist)
+
+    def _trigger_ai_song_comment(self, title: str, artist: str) -> None:
+        """Trigger an autonomous Gemini AI reaction/commentary on the newly started song."""
+        if not getattr(self, "_ai_song_comment_enabled", True):
+            return
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            return
+
+        now = time.perf_counter()
+        if now - getattr(self, "_last_ai_song_comment_time", -9999.0) < AI_SONG_COMMENT_COOLDOWN_S:
+            log.info("Skipping AI song comment: cooldown active (%.1fs remaining)",
+                     AI_SONG_COMMENT_COOLDOWN_S - (now - getattr(self, "_last_ai_song_comment_time", -9999.0)))
+            return
+
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            log.info("Gemini thread is busy; skipping AI song comment.")
+            return
+
+        self._last_ai_song_comment_time = now
+
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        reminders = self._memory.get_reminders_prompt()
+        if reminders:
+            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
+
+        clean_artist = artist.strip()
+        clean_title = title.strip()
+        check_str = f"{clean_artist} {clean_title}".lower()
+        is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
+
+        prompt_label = f"[Music played: '{clean_title}' by '{clean_artist or 'Unknown'}']"
+        song_prompt = (
+            f"[System event: A new music track just started playing on the user's computer: "
+            f"\"{clean_title}\" by \"{clean_artist or 'Unknown'}\".]\n"
+            f"React in-character to this song being played on desktop!\n"
+            f"Requirements:\n"
+            f"- Concise: 1 to 2 short lines starting with '* ' (under 35 words total).\n"
+            f"- Express genuine musical opinion or commentary: comment on the track title, artist, genre, vibe/energy, or playfully tease the user's music taste.\n"
+            f"- Personality: Tsundere ghost snark, childlike doll excitement, or dramatic bickering.\n"
+            f"- Append an emotion tag [anim: ...] at the end (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], or [anim: angry])."
+        )
+        if is_toby:
+            song_prompt += (
+                f"\n- SPECIAL LORE: This track is by Toby Fox (your creator / home universe)! "
+                f"React with strange nostalgic recognition, emotional deja vu, or tsundere wonder about why this tune feels so deeply familiar."
+            )
+
+        self._gemini_thread = GeminiWorkerThread(
+            api_key=api_key,
+            user_prompt=song_prompt,
+            system_instruction=system_inst,
+            history=self._memory.history,
+            screenshot_b64=None,
+            model_name=GEMINI_MODEL,
+            is_auto_peek=False,
+            parent=self,
+        )
+        self._gemini_thread.response_ready.connect(
+            lambda spoken, anim, is_ghost, seen="", u=prompt_label: self._on_gemini_song_comment(u, spoken, anim, is_ghost)
+        )
+        self._gemini_thread.error_occurred.connect(
+            lambda err: log.info("AI song comment query failed or timed out: %s", err)
+        )
+        self._gemini_thread.start()
+
+    def _on_gemini_song_comment(self, user_label: str, spoken_text: str, anim: str, is_ghost: bool = False) -> None:
+        """Deliver Pink's Gemini AI commentary on the currently playing song."""
+        if not spoken_text or not spoken_text.strip():
+            return
+        if not self._dialogue_enabled or not getattr(self, "_ai_song_comment_enabled", True):
+            return
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+            return
+
+        self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+        steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=False)
+        if not steps:
+            return
+
+        first_step = steps[0]
+        remaining_steps = steps[1:] if len(steps) > 1 else None
+
+        # If speech bubble is currently showing the "Now playing" title, queue comment right behind it!
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            log.info("Dialogue bubble active: appending AI song comment to sequence queue")
+            for step in steps:
+                self._dialogue_overlay.append_queue(step)
+            return
+
+        # Otherwise, speak the comment directly
+        self._keep_response_anim = True
+        self._apply_dialogue_step(first_step.anim, first_step.is_ghost)
+        self._say(
+            first_step.text,
+            force=True,
+            auto_dismiss=True,
+            record_memory=False,
+            is_ghost=first_step.is_ghost,
+            extra_queue=remaining_steps,
+            step_anim=first_step.anim,
+        )
+
+    def _toggle_ai_song_comment(self, checked: bool) -> None:
+        """Toggle autonomous AI commentary on newly detected music tracks."""
+        self._ai_song_comment_enabled = checked
+        log.info("AI song commentary %s", "enabled" if checked else "disabled")
+
+    def _toggle_filter_shorts(self, checked: bool) -> None:
+        """Toggle ignoring YouTube Shorts and short-form video reels."""
+        self._filter_shorts_enabled = checked
+        if hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            self._media_watcher.set_filter_shorts(checked)
+        log.info("Filter YouTube Shorts %s", "enabled" if checked else "disabled")
 
     # -------------------------------------------------------------- animation
     def _can_play(self, state: str) -> bool:
@@ -7592,6 +7788,16 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_action.setChecked(self._dialogue_enabled)
         self._dialogue_action.toggled.connect(self._toggle_dialogue)
 
+        self._song_comment_action = tray_menu.addAction("AI Song Commentary 🎵")
+        self._song_comment_action.setCheckable(True)
+        self._song_comment_action.setChecked(self._ai_song_comment_enabled)
+        self._song_comment_action.toggled.connect(self._toggle_ai_song_comment)
+
+        self._filter_shorts_action = tray_menu.addAction("Filter YouTube Shorts 🔕")
+        self._filter_shorts_action.setCheckable(True)
+        self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
+        self._filter_shorts_action.toggled.connect(self._toggle_filter_shorts)
+
         tray_menu.addSeparator()
         exit_action = tray_menu.addAction("Exit")
         exit_action.triggered.connect(self._quit)
@@ -7628,6 +7834,14 @@ class YellowsPixelBuddies(QWidget):
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(self._dialogue_enabled)
             self._dialogue_action.blockSignals(False)
+        if hasattr(self, "_song_comment_action") and self._song_comment_action is not None:
+            self._song_comment_action.blockSignals(True)
+            self._song_comment_action.setChecked(self._ai_song_comment_enabled)
+            self._song_comment_action.blockSignals(False)
+        if hasattr(self, "_filter_shorts_action") and self._filter_shorts_action is not None:
+            self._filter_shorts_action.blockSignals(True)
+            self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
+            self._filter_shorts_action.blockSignals(False)
 
     def _toggle_dialogue(self, checked: bool) -> None:
         """Enable or disable speech bubble popups."""

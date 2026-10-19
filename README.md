@@ -47,7 +47,9 @@
 
 ### 🎵 Windows GSMTC Music & Song Detection
 - Detects media playback across Windows (Spotify, YouTube, browser, media players) via the Windows GSMTC API.
-- Pink announces the song title and artist when a track starts, with special Easter egg reactions when Toby Fox music is detected.
+- Pink announces the song title and artist when a track starts.
+- **Autonomous AI Song Commentary**: Powered by Gemini AI, Pink spontaneously comments on whatever song, artist, or genre is currently playing (teasing your taste, hyping up beats, or having nostalgic deja vu with Toby Fox songs). Can be toggled on/off in the system tray.
+- **Smart YouTube Shorts & Reel Filtering**: Automatically filters out YouTube Shorts, short clips, and video reels (duration $\le 60$s from browsers or titles containing `#shorts`/`#reels`/`#tiktok`) so Pink won't spam speech bubbles while you scroll. Can be toggled in the system tray.
 
 ### 🖥️ Window Switch & Flashbang Reactions
 - **Maximized App Startle**: Switching to any maximized window startles Pink (`shocked`, 30s cooldown).
@@ -79,6 +81,8 @@ Right-click the tray icon in your Windows notification area (`^`) to:
 - **Hide Pink 🐾**: Send Pink to her peeking spot.
 - **Bomb Attack Mode**: Toggle cursor bomb throws and tune odds with the embedded slider.
 - **Dialogue Bubbles**: Toggle speech bubbles on or off in real time.
+- **AI Song Commentary 🎵**: Toggle autonomous music track commentary on or off.
+- **Filter YouTube Shorts 🔕**: Toggle ignoring YouTube Shorts and short video reels.
 - **Exit**: Cleanly terminate the application.
 
 ### ⚙️ Transparent, Click-Through & High-DPI Ready
