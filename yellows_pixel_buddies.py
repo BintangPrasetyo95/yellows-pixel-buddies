@@ -2975,7 +2975,7 @@ class MemoryManager:
             if not self.facts_path.exists():
                 default_facts = {
                     "user_name": "Dork",
-                    "notes": ["The user created Yellow's Pixel Buddies"],
+                    "notes": [],
                 }
                 self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
             if not self.reminders_path.exists():
@@ -7052,7 +7052,7 @@ class YellowsPixelBuddies(QWidget):
             )
         if is_toby:
             song_prompt += (
-                f"\n- Toby Fox universe context: This track is from your creator's universe (Undertale / Deltarune / related projects)! "
+                f"\n- Toby Fox universe context: This track is from the Toby Fox universe (Undertale / Deltarune / related projects)! "
                 f"Tap into the lore, the boss or area this track plays in, or the feeling of deja vu and community memes about this specific track!"
             )
 
