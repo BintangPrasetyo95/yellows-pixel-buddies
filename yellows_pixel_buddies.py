@@ -5918,7 +5918,7 @@ class YellowsPixelBuddies(QWidget):
         """Pick an active, specific memory or context detail to center the question around."""
         if getattr(self, "_current_song", None) and self._current_song[0]:
             title, artist = self._current_song
-            return f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. Ask what they think of it, critique the song title, or tease their taste in music!"
+            return f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. If you know this song, ask what they think of its actual content, lyrics, vibe, or internet reputation/memes, or tease their taste in music!"
 
         reminders = self._memory.get_active_reminders() if hasattr(self._memory, "get_active_reminders") else []
         if reminders:
@@ -7035,10 +7035,12 @@ class YellowsPixelBuddies(QWidget):
         song_prompt = (
             f"[System event: A music track just started playing: \"{comment_title}\""
             f"{f' by {clean_artist}' if clean_artist else ''}.]\n"
-            f"React in-character to this song, FOCUSING ON THE SONG TITLE \"{comment_title}\"!\n"
+            f"React in-character to this song: \"{comment_title}\"{f' by {clean_artist}' if clean_artist else ''}!\n"
             f"Requirements:\n"
-            f"- COMMENT ON THE TITLE: React directly to the track's TITLE (\"{comment_title}\"). What does the name sound like? Is it dramatic, funny, edgy, cute, mysterious, or chaotic? Focus on the words and theme of the title itself, NOT just the artist/author name!\n"
-            f"- Avoid generic author commentary: Do not just talk about who made it, do not merely praise or name-drop the artist. Playfully critique, tease, or hype the song title itself!\n"
+            f"- RECOGNIZE THE SONG & ITS REPUTATION: If you know this song (its lyrics, actual musical vibe, history, or community memes), TAP INTO THAT! What is this song known for? Why do people listen to it? (e.g. boss fight PTSD, crying at 3 AM, anime training arc, nostalgia, legendary guitar solo or bass drop, meme culture, hype gym anthem). Mention or tease what this song is actually about or how people feel listening to it!\n"
+            f"- SASSY OPINION & TEASING: Tease the user's music taste or mood based on what kind of song this is. (e.g. 'Are we fighting a secret boss or what?!', 'Why are you listening to villain origin story music?!', 'Who hurt you to be listening to this at this hour?!', 'Minion, don't tell me you actually listen to this unironically!').\n"
+            f"- If obscure / unrecognized: Judge the track title and artist name with dramatic imagination.\n"
+            f"- Avoid generic praise: Do NOT just say 'Great song by [Artist]!'. React like a bratty, funny cat doll living on their desktop!\n"
             f"- Personality: Tsundere ghost snark, childlike doll excitement, or dramatic bickering.\n"
             f"- Concise: 1 to 2 short lines starting with '* ' (under 35 words total).\n"
             f"- Emotion tag: End with an emotion tag like [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], or [anim: angry]."
@@ -7046,12 +7048,12 @@ class YellowsPixelBuddies(QWidget):
         if skip_count > 0:
             song_prompt += (
                 f"\n- Playlist context: The user rapidly skipped past {skip_count} track(s) before stopping on this song. "
-                f"You can playfully tease their indecisiveness before reacting to this track title."
+                f"You can playfully mock their indecisiveness before reacting to this track!"
             )
         if is_toby:
             song_prompt += (
-                f"\n- Toby Fox universe context: This track is from your creator's universe! "
-                f"Still focus on the specific track title \"{comment_title}\" (e.g. what memories or deja vu this specific title brings up), rather than just saying Toby Fox."
+                f"\n- Toby Fox universe context: This track is from your creator's universe (Undertale / Deltarune / related projects)! "
+                f"Tap into the lore, the boss or area this track plays in, or the feeling of deja vu and community memes about this specific track!"
             )
 
         target_song_tag = clean_title
