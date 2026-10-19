@@ -106,7 +106,8 @@ from PyQt5.QtGui import (
     QPainter, QPalette, QPen, QPixmap, QRegion, QTextOption, QTransform
 )
 from PyQt5.QtWidgets import (
-    QAction, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+    QAction, QApplication, QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QMenu, QMessageBox,
     QPlainTextEdit, QPushButton, QSlider, QStyle, QStyleOptionSlider,
     QSystemTrayIcon, QVBoxLayout, QWidget, QWidgetAction
 )
@@ -558,10 +559,13 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * In your recent screen episodic memory, your desktop observations during this session are recorded!
   * You remember what you saw! If the user asks about what was on their screen, past tasks, or bugs, refer to those recorded sights!
 
-- DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...]):
+- DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
   * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, names, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
   * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
+  * When the user asks to remove, delete, or complete a reminder (e.g. "delete reminder 2", "remove the reminder about song comment", "check off task..."), append [delete_reminder: <number_or_text>] to your answer!
+  * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
   * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
+  * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -3070,13 +3074,13 @@ class MemoryManager:
 
         return active
 
-    def get_reminders_prompt(self) -> str:
-        """Format active reminders into a concise list for system prompt injection."""
+    def get_reminders_prompt(self, numbered: bool = True) -> str:
+        """Format active reminders into a concise numbered list for prompt injection and user viewing."""
         active = self.get_active_reminders()
         if not active:
             return ""
         lines = []
-        for r in active:
+        for idx, r in enumerate(active, 1):
             text = r.get("text", "").strip()
             created_str = r.get("created_at", "")
             date_label = ""
@@ -3086,7 +3090,8 @@ class MemoryManager:
                     date_label = f" (Added {dt.strftime('%b %d, %Y')})"
                 except Exception:
                     pass
-            lines.append(f"- {text}{date_label}")
+            prefix = f"{idx}. " if numbered else "- "
+            lines.append(f"{prefix}{text}{date_label}")
         return "\n".join(lines)
 
     def add_reminder(self, reminder_text: str) -> bool:
@@ -3111,6 +3116,94 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not save reminder: %s", err)
             return False
+
+    def _find_reminder_index(self, active: list[dict], identifier: str | int) -> int | None:
+        """Helper to find the 0-based index in active reminders by 1-based index, ID, or text match."""
+        if not active or identifier is None:
+            return None
+
+        if isinstance(identifier, int):
+            idx = identifier - 1
+            return idx if 0 <= idx < len(active) else None
+
+        clean = str(identifier).strip()
+        if not clean:
+            return None
+
+        target_str = clean[1:] if clean.startswith("#") else clean
+        if target_str.isdigit():
+            idx = int(target_str) - 1
+            if 0 <= idx < len(active):
+                return idx
+
+        clean_lower = clean.lower()
+
+        # 1. Exact match on id
+        for idx, r in enumerate(active):
+            if r.get("id", "").lower() == clean_lower:
+                return idx
+
+        # 2. Exact match on text
+        for idx, r in enumerate(active):
+            if r.get("text", "").strip().lower() == clean_lower:
+                return idx
+
+        # 3. Substring match on text
+        for idx, r in enumerate(active):
+            if clean_lower in r.get("text", "").strip().lower():
+                return idx
+
+        return None
+
+    def delete_reminder(self, identifier: str | int) -> tuple[bool, str]:
+        """Delete an active reminder by 1-based index, ID, or text match.
+        Returns (success, deleted_text)."""
+        active = self.get_active_reminders()
+        idx = self._find_reminder_index(active, identifier)
+        if idx is None:
+            return False, ""
+        deleted = active.pop(idx)
+        deleted_text = deleted.get("text", "").strip()
+        try:
+            self.reminders_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Deleted reminder [%s]: %s", deleted.get("id"), deleted_text)
+            return True, deleted_text
+        except Exception as err:
+            log.warning("Could not delete reminder: %s", err)
+            return False, ""
+
+    def edit_reminder(self, identifier: str | int, new_text: str) -> tuple[bool, str]:
+        """Edit an active reminder by 1-based index, ID, or text match.
+        Returns (success, old_text)."""
+        clean_new = new_text.strip()
+        if not clean_new:
+            return False, ""
+        active = self.get_active_reminders()
+        idx = self._find_reminder_index(active, identifier)
+        if idx is None:
+            return False, ""
+        old_text = active[idx].get("text", "").strip()
+        active[idx]["text"] = clean_new
+        active[idx]["updated_at"] = datetime.datetime.now().isoformat()
+        try:
+            self.reminders_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Edited reminder [%s]: '%s' -> '%s'", active[idx].get("id"), old_text, clean_new)
+            return True, old_text
+        except Exception as err:
+            log.warning("Could not edit reminder: %s", err)
+            return False, ""
+
+    def clear_all_reminders(self) -> int:
+        """Clear all active reminders. Returns count of removed reminders."""
+        active = self.get_active_reminders()
+        count = len(active)
+        try:
+            self.reminders_path.write_text("[]", encoding="utf-8")
+            log.info("Cleared all %d reminders.", count)
+            return count
+        except Exception as err:
+            log.warning("Could not clear reminders: %s", err)
+            return 0
 
     def record_turn(self, user_text: str, pink_response: str, anim: str, had_screen: bool = False, seen: str = "") -> None:
         """Record turn in history and persist to session file."""
@@ -3416,6 +3509,249 @@ class MemoryManager:
         return "RELEVANT PAST MEMORIES FOUND FROM OLDER SESSIONS:\n" + "\n".join(matches)
 
 
+class RemindersDialog(QDialog):
+    """An interactive window to view, add, edit, or delete active 30-day reminders."""
+
+    def __init__(self, memory: "MemoryManager", font_family: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._memory = memory
+        self._font_family = font_family
+        self.setWindowTitle("Pink's Active Reminders 📝")
+        self.resize(540, 440)
+        self.setMinimumSize(420, 320)
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
+
+        self._init_ui()
+        self.refresh_reminders()
+
+    def _init_ui(self) -> None:
+        font = QFont(self._font_family)
+        font.setPixelSize(14)
+
+        self.setStyleSheet(
+            "QDialog {"
+            "  background-color: #18181b;"
+            "  color: #f4f4f5;"
+            "}"
+            "QLabel {"
+            "  color: #f4f4f5;"
+            "}"
+            "QListWidget {"
+            "  background-color: #09090b;"
+            "  color: #f4f4f5;"
+            "  border: 1px solid #3f3f46;"
+            "  border-radius: 6px;"
+            "  padding: 4px;"
+            "  outline: none;"
+            "}"
+            "QListWidget::item {"
+            "  padding: 8px 10px;"
+            "  border-bottom: 1px solid #27272a;"
+            "  border-radius: 4px;"
+            "}"
+            "QListWidget::item:hover {"
+            "  background-color: #27272a;"
+            "}"
+            "QListWidget::item:selected {"
+            "  background-color: #3b82f6;"
+            "  color: #ffffff;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton {"
+            "  background-color: #27272a;"
+            "  color: #f4f4f5;"
+            "  border: 1px solid #3f3f46;"
+            "  border-radius: 4px;"
+            "  padding: 6px 14px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #3f3f46;"
+            "  border-color: #71717a;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #18181b;"
+            "}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Header Title
+        title_label = QLabel("🐾 Active Reminders & To-Dos", self)
+        title_font = QFont(self._font_family)
+        title_font.setPixelSize(16)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("color: #fbbf24;")
+        layout.addWidget(title_label)
+
+        # Subtitle / Hint
+        hint_label = QLabel("Reminders auto-expire after 30 days. Double-click any item to edit.", self)
+        hint_font = QFont(self._font_family)
+        hint_font.setPixelSize(11)
+        hint_label.setFont(hint_font)
+        hint_label.setStyleSheet("color: #a1a1aa;")
+        layout.addWidget(hint_label)
+
+        # List Widget
+        self._list_widget = QListWidget(self)
+        self._list_widget.setFont(font)
+        self._list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
+        layout.addWidget(self._list_widget, stretch=1)
+
+        # Status count label
+        self._count_label = QLabel("", self)
+        self._count_label.setFont(hint_font)
+        self._count_label.setStyleSheet("color: #71717a;")
+        layout.addWidget(self._count_label)
+
+        # Action Buttons Layout
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        self._add_btn = QPushButton("➕ Add", self)
+        self._add_btn.setFont(font)
+        self._add_btn.setCursor(Qt.PointingHandCursor)
+        self._add_btn.setStyleSheet("QPushButton { background-color: #065f46; border-color: #059669; color: #a7f3d0; } QPushButton:hover { background-color: #047857; }")
+        self._add_btn.clicked.connect(self._on_add_clicked)
+        btn_layout.addWidget(self._add_btn)
+
+        self._edit_btn = QPushButton("✏️ Edit", self)
+        self._edit_btn.setFont(font)
+        self._edit_btn.setCursor(Qt.PointingHandCursor)
+        self._edit_btn.setStyleSheet("QPushButton { background-color: #1e3a8a; border-color: #2563eb; color: #bfdbfe; } QPushButton:hover { background-color: #1d4ed8; }")
+        self._edit_btn.clicked.connect(self._on_edit_clicked)
+        btn_layout.addWidget(self._edit_btn)
+
+        self._del_btn = QPushButton("🗑️ Delete", self)
+        self._del_btn.setFont(font)
+        self._del_btn.setCursor(Qt.PointingHandCursor)
+        self._del_btn.setStyleSheet("QPushButton { background-color: #7f1d1d; border-color: #dc2626; color: #fecaca; } QPushButton:hover { background-color: #991b1b; }")
+        self._del_btn.clicked.connect(self._on_delete_clicked)
+        btn_layout.addWidget(self._del_btn)
+
+        self._clear_btn = QPushButton("🧹 Clear All", self)
+        self._clear_btn.setFont(font)
+        self._clear_btn.setCursor(Qt.PointingHandCursor)
+        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        btn_layout.addWidget(self._clear_btn)
+
+        btn_layout.addStretch(1)
+
+        close_btn = QPushButton("Close", self)
+        close_btn.setFont(font)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Delete:
+            self._on_delete_clicked()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def refresh_reminders(self) -> None:
+        """Reload active reminders from MemoryManager and populate the list."""
+        self._list_widget.clear()
+        active = self._memory.get_active_reminders()
+        for idx, r in enumerate(active, 1):
+            text = r.get("text", "").strip()
+            created_str = r.get("created_at", "")
+            date_label = ""
+            if created_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(created_str)
+                    date_label = f"  ({dt.strftime('%b %d, %Y')})"
+                except Exception:
+                    pass
+            item = QListWidgetItem(f"{idx}. {text}{date_label}")
+            item.setData(Qt.UserRole, r)
+            self._list_widget.addItem(item)
+
+        count = len(active)
+        self._count_label.setText(f"Total: {count} active reminder{'s' if count != 1 else ''}")
+        has_items = count > 0
+        self._edit_btn.setEnabled(has_items)
+        self._del_btn.setEnabled(has_items)
+        self._clear_btn.setEnabled(has_items)
+
+    def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
+        self._edit_item(item)
+
+    def _on_add_clicked(self) -> None:
+        text, ok = QInputDialog.getText(
+            self,
+            "Add Reminder",
+            "Enter reminder / task description:",
+            QLineEdit.Normal,
+            "",
+        )
+        if ok and text.strip():
+            self._memory.add_reminder(text.strip())
+            self.refresh_reminders()
+
+    def _on_edit_clicked(self) -> None:
+        current_item = self._list_widget.currentItem()
+        if not current_item:
+            return
+        self._edit_item(current_item)
+
+    def _edit_item(self, item: QListWidgetItem) -> None:
+        r_data = item.data(Qt.UserRole)
+        if not r_data:
+            return
+        old_text = r_data.get("text", "")
+        item_id = r_data.get("id", "")
+        new_text, ok = QInputDialog.getText(
+            self,
+            "Edit Reminder",
+            "Update reminder text:",
+            QLineEdit.Normal,
+            old_text,
+        )
+        if ok and new_text.strip() and new_text.strip() != old_text:
+            self._memory.edit_reminder(item_id, new_text.strip())
+            self.refresh_reminders()
+
+    def _on_delete_clicked(self) -> None:
+        current_item = self._list_widget.currentItem()
+        if not current_item:
+            return
+        r_data = current_item.data(Qt.UserRole)
+        if not r_data:
+            return
+        item_id = r_data.get("id", "")
+        text_preview = r_data.get("text", "")[:40]
+        reply = QMessageBox.question(
+            self,
+            "Delete Reminder",
+            f"Are you sure you want to delete this reminder?\n\n\"{text_preview}...\"",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self._memory.delete_reminder(item_id)
+            self.refresh_reminders()
+
+    def _on_clear_clicked(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Clear All Reminders",
+            "Are you sure you want to delete ALL active reminders?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._memory.clear_all_reminders()
+            self.refresh_reminders()
+
+
 def split_dual_dialogue(
     raw_text: str,
     default_anim: str = "peace_sign",
@@ -3450,7 +3786,7 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[:anim_match.start()] + l[anim_match.end():]
 
-        l = re.sub(r"\[(?:seen|add_fact|add_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
+        l = re.sub(r"\[(?:seen|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
         l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
@@ -3912,8 +4248,16 @@ class GeminiWorkerThread(QThread):
                             r_val = m.group(1).strip()
                             if r_val:
                                 memory.add_reminder(r_val)
-                    chosen_cand = re.sub(r"\[add_fact:\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
-                    chosen_cand = re.sub(r"\[add_reminder:\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                        for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            d_val = m.group(1).strip()
+                            if d_val:
+                                memory.delete_reminder(d_val)
+                        for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            t_val = m.group(1).strip()
+                            n_val = m.group(2).strip()
+                            if t_val and n_val:
+                                memory.edit_reminder(t_val, n_val)
+                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -3972,8 +4316,16 @@ class GeminiWorkerThread(QThread):
                 r_val = m.group(1).strip()
                 if r_val:
                     memory.add_reminder(r_val)
-        raw_text = re.sub(r"\[add_fact:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
-        raw_text = re.sub(r"\[add_reminder:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+            for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                d_val = m.group(1).strip()
+                if d_val:
+                    memory.delete_reminder(d_val)
+            for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                t_val = m.group(1).strip()
+                n_val = m.group(2).strip()
+                if t_val and n_val:
+                    memory.edit_reminder(t_val, n_val)
+        raw_text = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
 
@@ -5087,6 +5439,45 @@ class YellowsPixelBuddies(QWidget):
                 reply = f"* Mew! Reminder saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That reminder is already active, silly!"
                 self._say(reply, force=True, record_memory=True)
                 return
+        elif lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ")):
+            target = clean_input.split(" ", 1)[1].strip()
+            if target:
+                ok, deleted_text = self._memory.delete_reminder(target)
+                if ok:
+                    reply = f"* Deleted reminder, mew:\n* \"{deleted_text}\""
+                else:
+                    reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
+                self._say(reply, force=True, record_memory=False)
+                return
+        elif lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ")):
+            rest = clean_input.split(" ", 1)[1].strip()
+            if "|" in rest:
+                parts = rest.split("|", 1)
+                target = parts[0].strip()
+                new_text = parts[1].strip()
+            else:
+                parts = rest.split(" ", 1)
+                target = parts[0].strip()
+                new_text = parts[1].strip() if len(parts) > 1 else ""
+            if target and new_text:
+                ok, old_text = self._memory.edit_reminder(target, new_text)
+                if ok:
+                    reply = f"* Reminder updated, mew!\n* New: \"{new_text}\""
+                else:
+                    reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
+            else:
+                reply = "* Format: /edit_reminder <number> <new text>, minion!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/clear_reminders", "/clear_todos"):
+            count = self._memory.clear_all_reminders()
+            reply = f"* Cleared {count} reminder{'s' if count != 1 else ''}, mew! Clean slate!" if count else "* No active reminders to clear, silly!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/reminders_ui", "/manage_reminders"):
+            self._open_reminders_dialog()
+            self._say("* Opened the reminder manager for you, mew!", force=True, record_memory=False)
+            return
         elif lower_input in ("/reminders", "/reminder", "/todos", "/todo"):
             reminders_text = self._memory.get_reminders_prompt()
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
@@ -5562,6 +5953,15 @@ class YellowsPixelBuddies(QWidget):
         self._say("* Session memory cleared! A clean slate for our chats, mew!", force=True, record_memory=False)
         if self._can_play("peace_sign"):
             self._play("peace_sign")
+
+    def _open_reminders_dialog(self) -> None:
+        """Open the interactive Reminders Management dialog."""
+        if not hasattr(self, "_reminders_dialog") or self._reminders_dialog is None:
+            self._reminders_dialog = RemindersDialog(self._memory, self._font_family, self)
+        self._reminders_dialog.refresh_reminders()
+        self._reminders_dialog.show()
+        self._reminders_dialog.raise_()
+        self._reminders_dialog.activateWindow()
 
     def _on_song_started(self, title: str, artist: str) -> None:
         """React to newly started music playback via Windows GSMTC."""
@@ -7160,6 +7560,8 @@ class YellowsPixelBuddies(QWidget):
         self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)
 
         memory_menu = tray_menu.addMenu("Memory Storage 🧠")
+        manage_reminders_action = memory_menu.addAction("Manage Reminders 📝")
+        manage_reminders_action.triggered.connect(self._open_reminders_dialog)
         open_mem_action = memory_menu.addAction("Open Memory Folder 📂")
         open_mem_action.triggered.connect(self._open_memory_folder)
         reset_mem_action = memory_menu.addAction("Clear Current Session 🧹")
@@ -7335,6 +7737,8 @@ class YellowsPixelBuddies(QWidget):
             self._dialogue_overlay.close()
         if hasattr(self, "_chat_input"):
             self._chat_input.close()
+        if hasattr(self, "_reminders_dialog") and self._reminders_dialog is not None:
+            self._reminders_dialog.close()
         if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
             self._gemini_thread.terminate()
             self._gemini_thread.wait(500)
