@@ -460,6 +460,9 @@ DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between inte
 AUTO_SCREEN_COMMENT_ENABLED = True
 AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
+AUTO_SCREEN_MAX_USER_IDLE_S = 900.0              # 15 minutes of system-wide inactivity (keyboard/mouse) -> user away/asleep, pause peeking
+AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to justify commentary; otherwise screen is static
+AUTO_SCREEN_STATIC_BACKOFF_S = 300.0             # If screen hasn't changed, back off 5 minutes before checking again
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -490,14 +493,27 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - Example: "* Hey! Say whatever you want about ME, but don't you DARE make her cry, you brute! [anim: angry] [mode: ghost]" or "* Hands off! Her cotton heart is delicate, and nobody bullies this doll except me! [anim: angry] [mode: ghost]".
   * Poetic / Shopkeeper Side: When reflecting on sunsets, nature, loneliness, or taking a break, she has a quiet, wistful, poetic side ("Where I came from, the colors were bleak. It was like looking at the world through a napkin. Here, the sunset shines from the back of your eyes..."). Remind the user to take a breather, look outside, and treasure this world.
 
-- DUAL GHOST & DOLL DIALOGUE (SEQUENTIAL ANIMATIONS):
-  * When both the Ghost spirit and the Doll vessel speak in the same response:
+- DUAL GHOST & DOLL DIALOGUE & SPEAKER DYNAMICS:
+  * Dynamic Speaker Variety:
+    - DO NOT always force both Ghost and Doll to speak on every turn!
+    - Sometimes ONLY the Ghost speaks (e.g. sharp monologue, proud boast, or snarky critique).
+    - Sometimes ONLY the Doll speaks (e.g. naive question, quirky observation, sweet purr).
+    - Sometimes Ghost and Doll directly BICKER with each other about what is happening!
+  * When both speak in the same response:
     - Put each speaker on their own separate "* " line!
     - Tag each line with its own emotion tag: e.g. [anim: behind], [anim: peace_sign], [anim: laughing], [anim: angry] (and [mode: ghost] if the ghost is in spectral mode).
-    - Example:
-      * Hmph, still working on that code instead of resting, minion?! [anim: behind]
-      * I hope the project works nicely soon, mew! [anim: peace_sign]
-  * The desktop pet will automatically split the reply into sequential dialogue bubbles, showing each speaker's matching animation and appearance.
+    - The desktop pet will automatically split the reply into sequential dialogue bubbles, showing each speaker's matching animation and appearance.
+  * Examples of Multi-Speaker Dynamics:
+    * Ghost & Doll bickering over screen content:
+      * Hey, don't stare at that giant capybara, body! It'll make you lazy! [anim: angry]
+      * But its little round nose is so dignified, mew! [anim: peace_sign]
+    * Doll curious, Ghost defensive:
+      * Who is Kadek and do they know any ghost stories, mew? [anim: laughing]
+      * S-stop reading their private messages over their shoulder, you dummy! [anim: embarrassed]
+    * Ghost solo reaction (aesthetic / sassy critique):
+      * Did you really open three different terminal windows just to look like a hacker? [anim: tongue]
+    * Ghost intrigued by code / work:
+      * Oho, that syntax error didn't break the build this time. I guess miracles happen! [anim: laughing]
 
 - REVIEWING PAST SESSIONS & STORYLINE CONTINUITY:
   * Actively review your recent conversation logs from today and yesterday (provided in your prompt context)!
@@ -531,17 +547,37 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - If you do not have the record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs, minion! Stop trying to test me!").
     - Never pretend you remember something that is not in your memory records. Guessing or making up timestamps is strictly forbidden!
   * Technical Self-Identity: You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
-  * Screen Vision: When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing. NEVER describe, caption, or narrate what you see (do NOT say "I see you have...", "Looking at your screen...", or list open apps). Jump directly into your reaction, tease, roast, or comment!
+  * Screen Vision & Immediate Reaction:
+    - When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing.
+    - Jump directly into your reaction, tease, roast, curiosity, or playful banter without narrating or reciting window titles.
+    - React to what is ACTUALLY happening with genuine personality: aesthetic critique, playful confusion, snark, genuine fascination, or bickering.
 
 - SCREEN OBSERVATIONS & MEMORY IN SESSION:
-  * In your conversation history, turns labeled "[Pink peeks at your screen — Saw: ...]" or "[Pink peeks at your screen]" record your spontaneous screen peeks during this session!
-  * You remember what you saw and what you said! If the user asks about what was on their screen, what you commented on, or why you made a past remark, refer directly to those recorded screen turns!
+  * In your recent screen episodic memory, your desktop observations during this session are recorded!
+  * You remember what you saw! If the user asks about what was on their screen, past tasks, or bugs, refer to those recorded sights!
 
 - DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...]):
   * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, names, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
   * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
   * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
 """
+
+# Curated pool of high-quality, varied exemplar lines mined from real logs
+# (Used to dynamically condition screen observations with fresh voices and diverse sentence starters)
+SCREEN_PEEK_VOICE_EXEMPLARS: list[str] = [
+    "* Oho, a big red error right in the browser! I guess all that candy didn't give your brain enough sugar to fix the encryption key! [anim: laughing]",
+    "* So many curly brackets in their React code, mew! Can we turn them into cat whiskers? [anim: peace_sign]",
+    "* Three separate terminal panels running at once?! You're going to melt your CPU into soup, minion! [anim: shocked]",
+    "* Did you really open three different windows just to feel like a hacker? [anim: tongue]",
+    "* Hey, don't stare at that giant capybara, body! It'll make you lazy! [anim: angry]\n* But its little round nose is so dignified, mew! [anim: peace_sign]",
+    "* Who is that in the chat and do they know any ghost stories, mew? [anim: laughing]\n* S-stop reading their private messages over their shoulder, you dummy! [anim: embarrassed]",
+    "* That syntax error didn't break the build this time. I guess miracles happen! [anim: laughing]",
+    "* That presentation slide is actually neat... D-don't look at me like that, I'm just being objective! [anim: embarrassed]",
+    "* Can you draw a little fish next to our sprite, mew? [anim: peace_sign]\n* Hey! Don't distract the minion while they're drawing my horns! [anim: behind]",
+    "* Wait, are you seriously organizing your desktop icons by color right now? [anim: tongue]",
+    "* That character by the fountain looks lonely, mew! Maybe we should throw him a pixel coin! [anim: peace_sign]",
+    "* Don't touch that button, body! We are NOT joining their voice call without a disguise! [anim: angry]",
+]
 
 # --- Ghost Takeover Lines ----------------------------------------------------
 # Speaking any of these lines triggers the ghost takeover visual effect
@@ -2716,14 +2752,78 @@ class ChatInputOverlay(QWidget):
         self.submitted.emit(text, see_screen)
 
 
-def capture_screen_base64() -> str:
-    """Capture the primary screen and return a compressed JPEG as a base64 string."""
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+
+
+def is_workstation_locked() -> bool:
+    """Return True if the Windows workstation is locked or running on secure desktop (logon/UAC screen)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        # OpenInputDesktop fails (returns 0) when the workstation is locked or running on winlogon
+        desk = user32.OpenInputDesktop(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
+        if not desk:
+            return True
+        user32.CloseDesktop(desk)
+    except Exception:
+        pass
+
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if hwnd:
+            txt_buf = ctypes.create_unicode_buffer(256)
+            ctypes.windll.user32.GetWindowTextW(hwnd, txt_buf, 256)
+            txt_name = txt_buf.value.lower()
+            if "lockapp" in txt_name or "windows default lock screen" in txt_name:
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def get_user_idle_seconds() -> float:
+    """Return number of seconds since last user keyboard or mouse input across the system."""
+    if sys.platform != "win32":
+        return 0.0
+    try:
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+            return max(0.0, millis / 1000.0)
+    except Exception:
+        pass
+    return 0.0
+
+
+def compute_screen_fingerprint(pixmap: QPixmap) -> bytes:
+    """Downscale a QPixmap to a 32x32 grayscale image and return the raw 1024 bytes."""
+    if pixmap.isNull():
+        return b""
+    img = pixmap.toImage().convertToFormat(QImage.Format_Grayscale8).scaled(32, 32, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    return bytes(img.bits().asstring(32 * 32))
+
+
+def compute_fingerprint_diff(fp1: bytes, fp2: bytes) -> float:
+    """Compute normalized mean absolute difference between two 32x32 fingerprints (0.0 = identical, 1.0 = completely opposite)."""
+    if not fp1 or not fp2 or len(fp1) != len(fp2):
+        return 1.0
+    total_diff = sum(abs(a - b) for a, b in zip(fp1, fp2))
+    return total_diff / (len(fp1) * 255.0)
+
+
+def capture_screen_and_fingerprint() -> tuple[str, bytes]:
+    """Capture the primary screen and return (compressed JPEG as base64, 32x32 grayscale fingerprint)."""
     screen = QApplication.primaryScreen()
     if screen is None:
-        return ""
+        return "", b""
     pixmap = screen.grabWindow(0)
     if pixmap.isNull():
-        return ""
+        return "", b""
+    fp = compute_screen_fingerprint(pixmap)
     # Downscale to max width 1280 to keep API payload fast and lightweight
     if pixmap.width() > 1280:
         pixmap = pixmap.scaledToWidth(1280, Qt.SmoothTransformation)
@@ -2733,7 +2833,13 @@ def capture_screen_base64() -> str:
     pixmap.save(buffer, "JPEG", 75)
     raw_bytes = bytes(buffer.data())
     buffer.close()
-    return base64.b64encode(raw_bytes).decode("utf-8")
+    return base64.b64encode(raw_bytes).decode("utf-8"), fp
+
+
+def capture_screen_base64() -> str:
+    """Capture the primary screen and return a compressed JPEG as a base64 string."""
+    b64, _ = capture_screen_and_fingerprint()
+    return b64
 
 
 class MemoryManager:
@@ -3189,7 +3295,14 @@ class MemoryManager:
                     p = re.sub(r"\[(?:mode|ghost):\s*[^\]]+\]", "", p).strip()
                     if len(p) > 80:
                         p = p[:77] + "..."
-                    lines.append(f"- [{m_ts}] User: \"{u}\" -> Pink: \"{p}\"")
+                    if u.startswith("[Pink peeks"):
+                        seen = m.get("seen", "")
+                        if not seen and "Saw:" in u:
+                            seen = u.split("Saw:", 1)[1].strip().rstrip("]")
+                        if seen:
+                            lines.append(f"- [{m_ts}] (Screen Sight): {seen}")
+                    else:
+                        lines.append(f"- [{m_ts}] User: \"{u}\" -> Pink: \"{p}\"")
                 session_entries.append("\n".join(lines))
                 included_files.add(f.name)
             except Exception as err:
@@ -3371,6 +3484,188 @@ def split_dual_dialogue(
     return [DialogueStep(text=full_text, anim=default_anim, is_ghost=default_ghost)]
 
 
+# --- Dynamic Anti-Repetition & Candidate Filtering Helpers ------------------
+ANTI_REPETITION_INTERJECTIONS: set[str] = {
+    "hmph", "hey", "oho", "well", "listen", "wait", "mew", "grrr", "ugh", "gah", "ah"
+}
+
+
+def extract_recent_emitted_lines(history: list[dict[str, any]], max_turns: int = 15) -> list[str]:
+    """Extract individual spoken dialogue lines from the last max_turns of history."""
+    lines: list[str] = []
+    for turn in history[-max_turns:]:
+        p_text = turn.get("pink", "")
+        if not p_text or p_text.startswith("[ERROR]") or p_text == "[stayed quiet]":
+            continue
+        for line in p_text.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            clean = re.sub(r"^[\s*\-]+", "", line_str)
+            clean = re.sub(r"\[[a-zA-Z0-9_\-:\s]+\]", "", clean)
+            clean = re.sub(r"[*_~`]", "", clean).strip()
+            if clean:
+                lines.append(clean)
+    return lines
+
+
+def extract_line_openers(words: list[str]) -> set[tuple[str, ...]]:
+    """Extract 2-word and 3-word openers, including interjection-stripped openers."""
+    ops: set[tuple[str, ...]] = set()
+    if len(words) >= 2:
+        ops.add(tuple(words[:2]))
+    if len(words) >= 3:
+        ops.add(tuple(words[:3]))
+    if len(words) >= 3 and words[0] in ANTI_REPETITION_INTERJECTIONS:
+        ops.add(tuple(words[1:3]))
+        if len(words) >= 4:
+            ops.add(tuple(words[1:4]))
+    return ops
+
+
+def extract_openers_and_trigrams(lines: list[str]) -> tuple[set[tuple[str, ...]], set[tuple[str, str, str]]]:
+    """Extract 2-word & 3-word openers and 3-word ngrams from historical lines."""
+    openers: set[tuple[str, ...]] = set()
+    trigrams: set[tuple[str, str, str]] = set()
+
+    for line in lines:
+        words = re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", line.lower())
+        openers.update(extract_line_openers(words))
+        if len(words) >= 3:
+            for i in range(len(words) - 2):
+                trigrams.add((words[i], words[i+1], words[i+2]))
+    return openers, trigrams
+
+
+def parse_delimited_candidates(raw_text: str) -> list[str]:
+    """Split response on '---' delimiters and clean non-dialogue prefixes."""
+    chunks = re.split(r"(?m)^\s*---+[-*\s]*$", raw_text)
+    if len(chunks) <= 1:
+        chunks = raw_text.split("---")
+
+    candidates: list[str] = []
+    for chunk in chunks:
+        c = chunk.strip()
+        if not c:
+            continue
+        lines = []
+        for line in c.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if re.match(r"^(?:Candidate|Option)\s*\d+[^:\n]*[:\-.]\s*$", line_str, re.IGNORECASE):
+                continue
+            line_str = re.sub(r"^(?:Candidate|Option)\s*\d+[^:\n]*[:\-.]\s*", "", line_str, flags=re.IGNORECASE).strip()
+            if line_str:
+                lines.append(line_str)
+        cleaned_cand = "\n".join(lines).strip()
+        if cleaned_cand:
+            candidates.append(cleaned_cand)
+    return candidates
+
+
+def score_candidate_lines(
+    candidate_text: str,
+    recent_openers: set[tuple[str, ...]],
+    recent_trigrams: set[tuple[str, str, str]],
+) -> tuple[float, bool]:
+    """Score candidate text against recent openers and trigrams.
+    Lower score is better. Penalty of 100.0 for matching a recent opener.
+    """
+    lines = []
+    for line in candidate_text.splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
+        clean = re.sub(r"^[\s*\-]+", "", line_str)
+        clean = re.sub(r"\[[a-zA-Z0-9_\-:\s]+\]", "", clean)
+        clean = re.sub(r"[*_~`]", "", clean).strip()
+        if clean:
+            lines.append(clean)
+
+    if not lines:
+        return 999.0, True
+
+    has_opener_match = False
+    cand_trigrams: set[tuple[str, str, str]] = set()
+
+    for line in lines:
+        words = re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", line.lower())
+        line_openers = extract_line_openers(words)
+        if line_openers & recent_openers:
+            has_opener_match = True
+        if len(words) >= 3:
+            for i in range(len(words) - 2):
+                cand_trigrams.add((words[i], words[i+1], words[i+2]))
+
+    trigram_overlap = len(cand_trigrams & recent_trigrams)
+    trigram_ratio = (trigram_overlap / len(cand_trigrams)) if cand_trigrams else 0.0
+
+    score = (100.0 if has_opener_match else 0.0) + (trigram_ratio * 20.0)
+    return score, has_opener_match
+
+
+def format_candidate_for_output(
+    candidate_text: str,
+    default_anim: str = "peace_sign",
+    default_ghost: bool = False,
+    fallback_seen: str = "",
+) -> tuple[str, str, bool, str]:
+    """Parse emotion, mode, seen tags and format candidate dialogue lines with Deltarune '* ' prefixes."""
+    raw = candidate_text
+
+    is_ghost = default_ghost
+    mode_match = re.search(r"\[(?:mode|ghost):\s*([a-zA-Z0-9_]+)\]", raw, re.IGNORECASE)
+    if mode_match:
+        mode_val = mode_match.group(1).lower()
+        if mode_val in ("ghost", "true", "yes", "spectral", "takeover"):
+            is_ghost = True
+        raw = raw[:mode_match.start()] + raw[mode_match.end():]
+
+    seen_summary = fallback_seen
+    seen_match = re.search(r"\[seen:\s*([^\]]+)\]", raw, re.IGNORECASE)
+    if seen_match:
+        seen_summary = seen_match.group(1).strip()
+        raw = raw[:seen_match.start()] + raw[seen_match.end():]
+
+    anim = default_anim
+    anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", raw, re.IGNORECASE)
+    if anim_match:
+        anim = anim_match.group(1).lower()
+        if anim in ("ghost", "spectral"):
+            is_ghost = True
+            anim = "angry"
+        clean = raw[:anim_match.start()] + raw[anim_match.end():]
+    else:
+        clean = raw
+
+    clean = clean.strip()
+    clean = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", clean)
+    clean = re.sub(r"\*\*(.*?)\*\*", r"\1", clean)
+    clean = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-'!]+)\*(?!\*)", r"\1", clean)
+
+    ghost_keywords = (
+        "boiling rage", "ghost soul", "haunt your recycle bin", "cat bomb",
+        "fuse with this body", "spectral", "tantrum", "stupid body", "die. die!",
+        "make my doll cry", "make her cry", "touch a single stitch", "bullies this doll",
+        "bullies this body", "don't you dare", "protect this body", "cotton heart"
+    )
+    if anim == "angry" and any(k in clean.lower() for k in ghost_keywords):
+        is_ghost = True
+
+    lines = []
+    for line in clean.splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
+        clean_line = re.sub(r"^[\s*\-]+", "", line_str).strip()
+        if clean_line:
+            lines.append("* " + clean_line)
+
+    formatted_text = "\n".join(lines) if lines else ("* " + clean)
+    return formatted_text, anim, is_ghost, seen_summary
+
+
 class GeminiWorkerThread(QThread):
     response_ready = pyqtSignal(str, str, bool, str)  # (spoken_text, anim_name, is_ghost, seen_summary)
     error_occurred = pyqtSignal(str)       # (error_message)
@@ -3383,6 +3678,7 @@ class GeminiWorkerThread(QThread):
         history: list[dict[str, any]],
         screenshot_b64: str | None = None,
         model_name: str = GEMINI_MODEL,
+        is_auto_peek: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -3392,6 +3688,7 @@ class GeminiWorkerThread(QThread):
         self.history = history
         self.screenshot_b64 = screenshot_b64
         self.model_name = model_name
+        self.is_auto_peek = is_auto_peek
 
     def run(self) -> None:
         models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
@@ -3435,27 +3732,167 @@ class GeminiWorkerThread(QThread):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
         headers = {"Content-Type": "application/json"}
 
-        contents = []
+        # Build contents and episodic memory:
+        # User-initiated chat turns are kept as interactive dialogue (role: user / role: model).
+        # Background screen observations are converted to episodic memory facts, keeping raw
+        # spontaneous model phrasing out of the chat buffer so it cannot trigger in-context self-conditioning.
+        chat_turns = []
+        recent_sights = []
+        now = datetime.datetime.now()
 
-        # Recent conversation turns (last 24 turns, preserving full in-session continuity and screen observations)
-        for turn in self.history[-24:]:
+        for turn in self.history[-30:]:
             u_text = turn.get("user", "")
             p_text = turn.get("pink", "")
+            turn_dt = None
             t_str = ""
             if "timestamp" in turn:
                 try:
-                    dt = datetime.datetime.fromisoformat(turn["timestamp"])
-                    t_str = f"[{dt.strftime('%I:%M %p')}] "
+                    turn_dt = datetime.datetime.fromisoformat(turn["timestamp"])
+                    t_str = f"[{turn_dt.strftime('%I:%M %p')}] "
                 except Exception:
                     pass
-            if u_text:
-                contents.append({"role": "user", "parts": [{"text": f"{t_str}{u_text}" if t_str else u_text}]})
-            if p_text:
-                # Sanitize any legacy double asterisks in past turns so they don't infect future responses
-                cleaned_p = re.sub(r"(?m)^\*\s+\*\s+", "* ", p_text)
-                contents.append({"role": "model", "parts": [{"text": cleaned_p}]})
 
-        # Current user turn
+            if u_text.startswith("[Pink peeks"):
+                seen = turn.get("seen", "")
+                if not seen and "Saw:" in u_text:
+                    seen = u_text.split("Saw:", 1)[1].strip().rstrip("]")
+                if seen:
+                    time_ago = ""
+                    if turn_dt:
+                        diff_m = max(1, int((now - turn_dt).total_seconds() // 60))
+                        time_ago = f"~{diff_m}m ago: "
+                    recent_sights.append(f"- {time_ago}{seen}")
+            else:
+                if u_text:
+                    chat_turns.append({"role": "user", "parts": [{"text": f"{t_str}{u_text}" if t_str else u_text}]})
+                if p_text:
+                    cleaned_p = re.sub(r"(?m)^\*\s+\*\s+", "* ", p_text)
+                    chat_turns.append({"role": "model", "parts": [{"text": cleaned_p}]})
+
+        contents = chat_turns[-16:]
+
+        # Enrich system instruction with episodic memory of recent screen sights
+        system_inst = self.system_instruction
+        if recent_sights:
+            sights_str = "\n".join(recent_sights[-8:])
+            system_inst += (
+                f"\n\nRECENT SCREEN EPISODIC MEMORY (WHAT YOU OBSERVED ON DESKTOP EARLIER):\n"
+                f"{sights_str}\n"
+                f"(Use this ONLY for natural contextual callbacks. You know what they worked on earlier, but do not narrate this list!)"
+            )
+
+        if self.screenshot_b64 and SCREEN_PEEK_VOICE_EXEMPLARS:
+            sampled_exemplars = random.sample(SCREEN_PEEK_VOICE_EXEMPLARS, min(3, len(SCREEN_PEEK_VOICE_EXEMPLARS)))
+            exemplars_text = "\n".join(sampled_exemplars)
+            system_inst += (
+                f"\n\nDYNAMIC VOICE & PERSPECTIVE EXEMPLARS (Notice varied sentence starters, moods, and speaker dynamics):\n"
+                f"{exemplars_text}"
+            )
+
+        # Multi-Candidate Anti-Repetition Engine (for spontaneous screen peeks)
+        if self.is_auto_peek:
+            recent_lines = extract_recent_emitted_lines(self.history, max_turns=15)
+            recent_openers, recent_trigrams = extract_openers_and_trigrams(recent_lines)
+
+            for attempt in range(2):
+                user_text_for_attempt = self.user_prompt
+                temp = 0.85
+                if attempt > 0:
+                    user_text_for_attempt += (
+                        "\n\n[RETRY NOTICE: Previous candidate reactions repeated recently used sentence openers. "
+                        "You MUST generate 4 completely fresh candidates with different sentence openers! "
+                        "Avoid recent openers like 'Look at', 'Can our doll', 'Are we', or 'Still trapped'. "
+                        "Use completely original sentence structures!]"
+                    )
+                    temp = 0.95
+
+                attempt_parts = [{"text": user_text_for_attempt}]
+                if self.screenshot_b64:
+                    attempt_parts.append({
+                        "inlineData": {
+                            "mimeType": "image/jpeg",
+                            "data": self.screenshot_b64,
+                        }
+                    })
+
+                attempt_contents = list(contents) + [{"role": "user", "parts": attempt_parts}]
+
+                payload = {
+                    "systemInstruction": {
+                        "parts": [{"text": system_inst}]
+                    },
+                    "contents": attempt_contents,
+                    "generationConfig": {
+                        "temperature": temp,
+                        "maxOutputTokens": 800,
+                    }
+                }
+
+                resp = requests.post(url, headers=headers, json=payload, timeout=GEMINI_TIMEOUT_S)
+                resp.raise_for_status()
+
+                data = resp.json()
+                candidates_data = data.get("candidates", [])
+                if not candidates_data:
+                    raise ValueError("No response generated by Gemini.")
+
+                parts = candidates_data[0].get("content", {}).get("parts", [])
+                text_chunks = [p.get("text", "") for p in parts if "text" in p and not p.get("thought")]
+                if not text_chunks:
+                    text_chunks = [p.get("text", "") for p in parts if "text" in p]
+                raw_text = "".join(text_chunks).strip()
+
+                # Extract any fallback seen tag in response
+                fallback_seen = ""
+                seen_fallback_m = re.search(r"\[seen:\s*([^\]]+)\]", raw_text, re.IGNORECASE)
+                if seen_fallback_m:
+                    fallback_seen = seen_fallback_m.group(1).strip()
+
+                cand_list = parse_delimited_candidates(raw_text)
+                if not cand_list:
+                    cand_list = [raw_text] if raw_text else []
+
+                scored_candidates: list[tuple[str, float, bool]] = []
+                for cand in cand_list:
+                    score, has_opener = score_candidate_lines(cand, recent_openers, recent_trigrams)
+                    scored_candidates.append((cand, score, has_opener))
+
+                valid_candidates = [
+                    (cand, score) for cand, score, has_opener in scored_candidates
+                    if not has_opener and score < 100.0
+                ]
+
+                if valid_candidates:
+                    valid_candidates.sort(key=lambda x: x[1])
+                    min_score = valid_candidates[0][1]
+                    best_candidates = [c for c, s in valid_candidates if abs(s - min_score) < 0.001]
+                    chosen_cand = random.choice(best_candidates)
+
+                    memory = getattr(self.parent(), "_memory", None) if self.parent() else None
+                    if memory:
+                        for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            f_val = m.group(1).strip()
+                            if f_val:
+                                memory.add_fact(f_val)
+                        for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            r_val = m.group(1).strip()
+                            if r_val:
+                                memory.add_reminder(r_val)
+                    chosen_cand = re.sub(r"\[add_fact:\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(r"\[add_reminder:\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+
+                    return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
+
+                if attempt == 0:
+                    log.info("Auto screen comment candidates all repeated recent openers; retrying once...")
+                    continue
+                else:
+                    log.warning("Auto screen comment candidates on retry still repeated recent openers. Suppressing to stay quiet.")
+                    return "", "idle", False, fallback_seen
+
+            return "", "idle", False, ""
+
+        # Default single-turn execution (user-initiated chat or direct inspection)
         current_parts = [{"text": self.user_prompt}]
         if self.screenshot_b64:
             current_parts.append({
@@ -3468,7 +3905,7 @@ class GeminiWorkerThread(QThread):
 
         payload = {
             "systemInstruction": {
-                "parts": [{"text": self.system_instruction}]
+                "parts": [{"text": system_inst}]
             },
             "contents": contents,
             "generationConfig": {
@@ -3490,7 +3927,7 @@ class GeminiWorkerThread(QThread):
         if not text_chunks:
             text_chunks = [p.get("text", "") for p in parts if "text" in p]
         raw_text = "".join(text_chunks).strip()
-        # Parse memory tags: [add_fact: ...] or [add_reminder: ...]
+
         memory = getattr(self.parent(), "_memory", None) if self.parent() else None
         if memory:
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
@@ -3504,64 +3941,7 @@ class GeminiWorkerThread(QThread):
         raw_text = re.sub(r"\[add_fact:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
         raw_text = re.sub(r"\[add_reminder:\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
-        # Parse mode tag e.g. [mode: ghost] or [ghost: true]
-        is_ghost = False
-        mode_match = re.search(r"\[(?:mode|ghost):\s*([a-zA-Z0-9_]+)\]", raw_text, re.IGNORECASE)
-        if mode_match:
-            mode_val = mode_match.group(1).lower()
-            if mode_val in ("ghost", "true", "yes", "spectral", "takeover"):
-                is_ghost = True
-            raw_text = raw_text[:mode_match.start()] + raw_text[mode_match.end():]
-
-        # Parse visual observation memory tag: [seen: ...]
-        seen_summary = ""
-        seen_match = re.search(r"\[seen:\s*([^\]]+)\]", raw_text, re.IGNORECASE)
-        if seen_match:
-            seen_summary = seen_match.group(1).strip()
-            raw_text = raw_text[:seen_match.start()] + raw_text[seen_match.end():]
-
-        # Parse animation tag e.g. [anim: peace_sign]
-        anim = "peace_sign"
-        anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", raw_text)
-        if anim_match:
-            anim = anim_match.group(1).lower()
-            if anim in ("ghost", "spectral"):
-                is_ghost = True
-                anim = "angry"
-            clean_text = raw_text[:anim_match.start()] + raw_text[anim_match.end():]
-        else:
-            clean_text = raw_text
-
-        clean_text = clean_text.strip()
-        # Clean any markdown bolding and triple asterisks: ***text*** or **text**
-        clean_text = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", clean_text)
-        clean_text = re.sub(r"\*\*(.*?)\*\*", r"\1", clean_text)
-        # Clean single-word italics like *word* into word (pixel font doesn't render markdown)
-        clean_text = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-'!]+)\*(?!\*)", r"\1", clean_text)
-
-        # Detect ghost fury mode if anim is angry and overt ghost takeover / doll protective phrases are used
-        ghost_keywords = (
-            "boiling rage", "ghost soul", "haunt your recycle bin", "cat bomb",
-            "fuse with this body", "spectral", "tantrum", "stupid body", "die. die!",
-            "make my doll cry", "make her cry", "touch a single stitch", "bullies this doll",
-            "bullies this body", "don't you dare", "protect this body", "cotton heart"
-        )
-        if anim == "angry" and any(k in clean_text.lower() for k in ghost_keywords):
-            is_ghost = True
-
-        # Ensure strict Deltarune formatting: exactly one "* " prefix per line, stripping duplicate asterisks or bullets
-        lines = []
-        for line in clean_text.splitlines():
-            line_str = line.strip()
-            if not line_str:
-                continue
-            # Strip all leading asterisks, hyphens, and whitespace: e.g. "* * ", "** ", "* ", "- "
-            clean_line = re.sub(r"^[\s*\-]+", "", line_str)
-            if clean_line:
-                lines.append("* " + clean_line)
-
-        formatted_text = "\n".join(lines) if lines else ("* " + clean_text)
-        return formatted_text, anim, is_ghost, seen_summary
+        return format_candidate_for_output(raw_text)
 
 
 @dataclass
@@ -4222,6 +4602,7 @@ class YellowsPixelBuddies(QWidget):
         # --- autonomous screen vision commentary ------------------------------
         self._last_user_chat_time: float = time.perf_counter()
         self._last_auto_screen_comment_time: float = time.perf_counter()
+        self._last_screen_fingerprint: bytes | None = None
 
         if AUTO_SCREEN_COMMENT_ENABLED:
             self._screen_comment_timer = QTimer(self)
@@ -4791,7 +5172,8 @@ class YellowsPixelBuddies(QWidget):
                 "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop.\n"
                 "- Look carefully at the screenshot. Accurately comment ONLY on what is ACTUALLY visible on their screen.\n"
                 "- Never guess, imagine, or hallucinate apps, code, files, or text that are not clearly visible. If text or code is too small or illegible, say you can't read it clearly instead of making it up!\n"
-                "- CRITICAL: DO NOT describe, caption, or narrate what you see! (NEVER say 'I see you have...', 'Looking at your screen...', 'You are currently on...', or list open windows/apps). Jump DIRECTLY into your reaction, roast, advice, or witty comment!\n"
+                "- CRITICAL: Jump DIRECTLY into your reaction, roast, advice, or witty comment without narrating window titles or stating that you are looking at the screen.\n"
+                "- ANTI-NAG: Do NOT nag the user about being productive, working, or sleeping! React directly to what they are actually showing you.\n"
                 "- Memory Tag: At the end of your response, append [seen: 3-8 words describing key visible apps/activity] so you remember what was on their screen later in the session!"
             )
         facts = self._memory.get_long_term_facts()
@@ -4810,6 +5192,7 @@ class YellowsPixelBuddies(QWidget):
             history=self._memory.history,
             screenshot_b64=screenshot_b64,
             model_name=GEMINI_MODEL,
+            is_auto_peek=False,
             parent=self,
         )
         self._gemini_thread.response_ready.connect(
@@ -4840,6 +5223,18 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool, is_ghost: bool = False, seen: str = "") -> None:
         """Handle response generated by Gemini AI."""
+        if not spoken_text or not spoken_text.strip():
+            log.info("Auto screen comment suppressed: candidates repetitive or empty, staying quiet.")
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                self._dialogue_overlay.dismiss(clear_queue=True)
+            if getattr(self, "_phase", None) is Phase.PAUSE:
+                self._play("idle")
+                self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+            if seen:
+                self._memory.record_turn(user_text, "[stayed quiet]", "idle", had_screen=had_screen, seen=seen)
+            self._last_auto_screen_comment_time = time.perf_counter()
+            return
+
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
 
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -4910,6 +5305,14 @@ class YellowsPixelBuddies(QWidget):
         if getattr(self, "_jump_active", False) or getattr(self, "_dragging", False):
             return
 
+        # Suppress spontaneous peeking if workstation is locked
+        if is_workstation_locked():
+            return
+
+        # Suppress spontaneous peeking if user is idle/away (no mouse/keyboard input for > 15m)
+        if get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
+            return
+
         now = time.perf_counter()
         time_since_chat = now - getattr(self, "_last_user_chat_time", 0.0)
         time_since_comment = now - getattr(self, "_last_auto_screen_comment_time", 0.0)
@@ -4933,6 +5336,10 @@ class YellowsPixelBuddies(QWidget):
         if self._gemini_thread is not None and self._gemini_thread.isRunning():
             return
 
+        # Double-check lock state and user idle before taking screenshot
+        if is_workstation_locked() or get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
+            return
+
         self._last_auto_screen_comment_time = time.perf_counter()
 
         # Briefly hide Pink and speech bubble so she doesn't screenshot herself
@@ -4941,8 +5348,9 @@ class YellowsPixelBuddies(QWidget):
         self.hide()
         QApplication.processEvents()
         screenshot_b64 = None
+        current_fp = b""
         try:
-            screenshot_b64 = capture_screen_base64()
+            screenshot_b64, current_fp = capture_screen_and_fingerprint()
             if not screenshot_b64:
                 raise RuntimeError("Screen capture returned empty image.")
         except Exception as err:
@@ -4952,6 +5360,17 @@ class YellowsPixelBuddies(QWidget):
             return
         self.show()
         ensure_window_topmost(self)
+
+        # Visual Delta Gate: Skip commentary if the screen hasn't changed since last observation
+        if self._last_screen_fingerprint is not None and current_fp:
+            diff = compute_fingerprint_diff(self._last_screen_fingerprint, current_fp)
+            if diff < AUTO_SCREEN_DIFF_THRESHOLD:
+                log.info("Auto screen comment skipped: visual delta too small (diff=%.3f < %.3f)", diff, AUTO_SCREEN_DIFF_THRESHOLD)
+                # Back off so we don't spam checks while the screen remains static
+                self._last_auto_screen_comment_time = time.perf_counter() + (AUTO_SCREEN_STATIC_BACKOFF_S - AUTO_SCREEN_COMMENT_INACTIVITY_S)
+                return
+
+        self._last_screen_fingerprint = current_fp
 
         # Enter thinking state
         self._phase = Phase.PAUSE
@@ -5011,17 +5430,25 @@ class YellowsPixelBuddies(QWidget):
             )
             self._memory.recent_ambient_dialogues.clear()
 
-        system_inst += (
-            "\n\n[SPONTANEOUS DESKTOP SCREEN OBSERVATION]\n"
-            "You are standing on the taskbar and spontaneously peek behind you at the user's desktop screen.\n"
-            "- Carefully inspect the attached screenshot of their current screen.\n"
-            "- Persona: Stay in character as Pink (sassy, tsundere ghost doll). You can judge their tabs, mock their code or apps, tease them to get back to work or take a break, or let the doll vessel chime in with something cute, innocent, or curious (NEVER start the doll's comment with repetitive 'Let's...', use diverse observations, questions, or purrs!).\n"
-            "- Multi-speaker: If both Ghost and Doll speak, put each on a separate '* ' line and tag each with their own [anim: ...] so they play sequentially!\n"
-            "- Continuity: Check past session logs from today and connect to ongoing tasks (e.g. earlier bugs, chats, or projects)!\n"
-            "- STRICT VISUAL HONESTY: Only react to things clearly visible in the image. NEVER hallucinate apps, files, or text you cannot clearly identify. If nothing specific is happening or it's just a blank desktop/wallpaper, react amusingly to that!\n"
-            "- Visual Memory Tag: At the very end of your response, append a hidden tag: [seen: 3-8 words describing key visible windows/apps or activity on screen] (e.g. [seen: VS Code open with Python script] or [seen: YouTube video on browser]). This tag will be saved to your session memory so you remember what was on their screen later in the session!\n"
-            "- Length: 1 to 2 short punchy sentences (under 35 words total). Every sentence MUST begin with '* '."
+        # Step 3 & 4: Make structure a code decision & multi-candidate anti-repetition generation
+        candidate_directive = (
+            "[STRUCTURAL DIRECTIVE: MULTI-CANDIDATE GENERATION (DECIDED BY ENGINE)]\n"
+            "Generate exactly 4 distinct candidate options for your spontaneous reaction, separated by '---' on a line by itself.\n"
+            "Each candidate MUST explore a different angle and use a completely different sentence opener:\n"
+            "- Candidate 1 (Curious Detail): Focus on a specific visible word, icon, code element, avatar, or window. (Ghost or Doll solo, 1 line)\n"
+            "- Candidate 2 (Sassy Tease / Snark): Bratty tsundere tease or roast about what the user is doing. (Ghost solo, 1 line)\n"
+            "- Candidate 3 (Aesthetic / Vibe): Comment on colors, UI layout, dark/light contrast, or desktop clutter. (Ghost or Doll, 1 line)\n"
+            "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)\n\n"
+            "RULES FOR CANDIDATES:\n"
+            "- Concise: 1 to 2 short lines starting with '* ' (under 30 words per candidate).\n"
+            "- Distinct Openers: Each candidate MUST start with different words. Never start multiple candidates with the same phrase!\n"
+            "- Speech Tics: Catchphrases and tics ('minion', ', mew!') are strictly optional flavor, do not force them.\n"
+            "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], [anim: angry]).\n"
+            "- Visual Memory Tag: Append [seen: 3-8 words describing key visible windows/apps or activity on screen] to each candidate.\n"
+            "- Strictly separate candidate options with '---' on a line by itself.\n"
+            "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image."
         )
+        system_inst += f"\n\n{candidate_directive}"
 
         facts = self._memory.get_long_term_facts()
         if facts:
@@ -5032,7 +5459,11 @@ class YellowsPixelBuddies(QWidget):
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
         prompt_label = "[Pink peeks at your screen]"
-        auto_prompt = "[Spontaneous observation: Pink peeks behind her at what the user is doing on their desktop and makes a direct in-character reaction or witty comment without describing or narrating the screen]"
+        auto_prompt = (
+            "[Spontaneous observation: Pink peeks behind her at your desktop screen.]\n"
+            "Generate exactly 4 distinct candidate reactions separated by '---' following your structural directive. "
+            "React directly to what is clearly visible on screen."
+        )
 
         self._gemini_thread = GeminiWorkerThread(
             api_key=api_key,
@@ -5041,6 +5472,7 @@ class YellowsPixelBuddies(QWidget):
             history=self._memory.history,
             screenshot_b64=screenshot_b64,
             model_name=GEMINI_MODEL,
+            is_auto_peek=True,
             parent=self,
         )
         self._gemini_thread.response_ready.connect(
