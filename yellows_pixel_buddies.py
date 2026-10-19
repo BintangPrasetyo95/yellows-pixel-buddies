@@ -455,6 +455,8 @@ SONG_DETECTION_INTERVAL_MS = 1500     # Media playback polling interval in milli
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
 DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between interactive questions
+CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat input overlay (2 minutes)
+CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
@@ -2342,6 +2344,7 @@ class ChatTextEdit(QPlainTextEdit):
 
     returnPressed = pyqtSignal()
     escapePressed = pyqtSignal()
+    userTyped = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -2359,11 +2362,13 @@ class ChatTextEdit(QPlainTextEdit):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             if event.modifiers() & Qt.ShiftModifier:
                 super().keyPressEvent(event)
+                self.userTyped.emit()
             else:
                 self.returnPressed.emit()
                 event.accept()
             return
         super().keyPressEvent(event)
+        self.userTyped.emit()
 
     def text(self) -> str:
         return self.toPlainText()
@@ -2380,6 +2385,7 @@ class ChatInputOverlay(QWidget):
 
     submitted = pyqtSignal(str, bool)
     cancelled = pyqtSignal()
+    timed_out = pyqtSignal()
 
     def __init__(self, font_family: str, box_png_path: Path, parent: QWidget | None = None) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -2404,6 +2410,10 @@ class ChatInputOverlay(QWidget):
         self._eye_off_icon: QIcon | None = None
         self._eye_on_icon: QIcon | None = None
         self._load_eye_icons()
+
+        self._timeout_timer = QTimer(self)
+        self._timeout_timer.setSingleShot(True)
+        self._timeout_timer.timeout.connect(self._on_timeout)
 
         self._init_ui()
 
@@ -2449,6 +2459,7 @@ class ChatInputOverlay(QWidget):
                 self._eye_on_icon = QIcon(scaled_on)
 
     def _on_vision_toggled(self, checked: bool) -> None:
+        self.reset_timeout()
         if checked:
             if self._eye_on_icon and not self._eye_on_icon.isNull():
                 self._vision_btn.setIcon(self._eye_on_icon)
@@ -2527,6 +2538,7 @@ class ChatInputOverlay(QWidget):
         self._text_edit.returnPressed.connect(self._on_submit)
         self._text_edit.escapePressed.connect(self.cancel)
         self._text_edit.textChanged.connect(self._on_text_changed)
+        self._text_edit.userTyped.connect(self.reset_timeout)
         layout.addWidget(self._text_edit, stretch=1)
 
         btn_h = round(16 * self._scale)
@@ -2627,6 +2639,7 @@ class ChatInputOverlay(QWidget):
         return max(1, count)
 
     def _on_text_changed(self) -> None:
+        self.reset_timeout()
         line_count = self._get_line_count()
         clamped_lines = min(4, max(1, line_count))
         fm = self._text_edit.fontMetrics()
@@ -2725,6 +2738,16 @@ class ChatInputOverlay(QWidget):
 
         self.move(round(target_x), round(target_y))
 
+    def reset_timeout(self) -> None:
+        """Reset the inactivity timeout countdown to 2 minutes."""
+        self._timeout_timer.start(CHAT_INPUT_TIMEOUT_MS)
+
+    def _on_timeout(self) -> None:
+        """Handle chat input inactivity timeout (no typing for 2 minutes)."""
+        self._timeout_timer.stop()
+        self.hide()
+        self.timed_out.emit()
+
     def open_at(self, pet_x: float, pet_y: float) -> None:
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -2740,16 +2763,27 @@ class ChatInputOverlay(QWidget):
         ensure_window_topmost(self)
         self.activateWindow()
         self._text_edit.setFocus()
+        self.reset_timeout()
 
     def cancel(self) -> None:
+        self._timeout_timer.stop()
         self.hide()
         self.cancelled.emit()
 
     def _on_submit(self) -> None:
+        self._timeout_timer.stop()
         text = self._text_edit.toPlainText().strip()
         see_screen = self._vision_btn.isChecked()
         self.hide()
         self.submitted.emit(text, see_screen)
+
+    def hideEvent(self, event) -> None:
+        self._timeout_timer.stop()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:
+        self._timeout_timer.stop()
+        super().closeEvent(event)
 
 
 class LASTINPUTINFO(ctypes.Structure):
@@ -4488,6 +4522,7 @@ class YellowsPixelBuddies(QWidget):
         self._chat_input = ChatInputOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._chat_input.submitted.connect(self._on_chat_submitted)
         self._chat_input.cancelled.connect(self._on_chat_cancelled)
+        self._chat_input.timed_out.connect(self._on_chat_timeout)
         self._memory = MemoryManager(_base_dir)
         self._gemini_thread: GeminiWorkerThread | None = None
         self._is_ghost_talking: bool = False
@@ -5004,6 +5039,14 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_chat_cancelled(self) -> None:
         """Resume normal behavior if user closes the chat box without sending."""
+        if self._phase == Phase.PAUSE:
+            self._pause_elapsed = False
+            self._brain_timer.start(AFTER_SPECIAL_REST_MS)
+        self._check_and_play_pending_song()
+
+    def _on_chat_timeout(self) -> None:
+        """Resume normal behavior if chat input overlay closes after 2 minutes of typing inactivity."""
+        log.info("Chat input timed out after 2 minutes of inactivity")
         if self._phase == Phase.PAUSE:
             self._pause_elapsed = False
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
