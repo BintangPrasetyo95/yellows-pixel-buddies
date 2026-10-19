@@ -2926,17 +2926,28 @@ class MemoryManager:
         self._load_token_stats()
 
         self._ensure_dirs()
-        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
+        self._generate_new_session_file()
         self.history: list[dict[str, any]] = []
         # Temporary in-memory only storage for immediate ambient dialogue reactions (never saved to disk)
         self.recent_ambient_dialogues: deque[dict[str, any]] = deque(maxlen=4)
-        self._init_session_file()
+
+    def _generate_new_session_file(self) -> None:
+        """Generate a unique session file path for a fresh session."""
+        now = datetime.datetime.now()
+        base_id = now.strftime("%Y%m%d_%H%M%S")
+        candidate = self.sessions_dir / f"session_{base_id}.json"
+        counter = 1
+        while candidate.exists():
+            candidate = self.sessions_dir / f"session_{base_id}_{counter}.json"
+            counter += 1
+        self._session_id = candidate.stem.replace("session_", "")
+        self.session_file = candidate
 
     def _ensure_dirs(self) -> None:
         try:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
             self.sessions_dir.mkdir(parents=True, exist_ok=True)
+            self.prune_empty_sessions()
             if not self.facts_path.exists():
                 default_facts = {
                     "user_name": "Dork",
@@ -2948,16 +2959,45 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not initialize memory directories/facts: %s", err)
 
-    def _init_session_file(self) -> None:
-        init_data = {
-            "session_id": self._session_id,
-            "started_at": datetime.datetime.now().isoformat(),
-            "messages": [],
-        }
+    def prune_empty_sessions(self) -> int:
+        """Prune any historical 0-message empty session files from memory/sessions/.
+        Returns count of pruned files."""
+        if not self.sessions_dir.exists():
+            return 0
+        pruned_count = 0
         try:
-            self.session_file.write_text(json.dumps(init_data, indent=2), encoding="utf-8")
+            for f in self.sessions_dir.glob("session_*.json"):
+                try:
+                    size = f.stat().st_size
+                    if size == 0:
+                        f.unlink(missing_ok=True)
+                        pruned_count += 1
+                        continue
+                    if size <= 120:  # Fast path for ~105 byte empty files with "messages": []
+                        data = json.loads(f.read_text(encoding="utf-8"))
+                        if not data.get("messages"):
+                            f.unlink(missing_ok=True)
+                            pruned_count += 1
+                except Exception:
+                    pass
         except Exception as err:
-            log.warning("Could not initialize session file: %s", err)
+            log.warning("Could not prune empty sessions: %s", err)
+        if pruned_count > 0:
+            log.info("Pruned %d empty session files from %s", pruned_count, self.sessions_dir)
+        return pruned_count
+
+    def _ensure_session_file(self) -> None:
+        """Create session file on disk only when first message is ready to be written (lazy creation)."""
+        if not self.session_file.exists():
+            init_data = {
+                "session_id": self._session_id,
+                "started_at": datetime.datetime.now().isoformat(),
+                "messages": [],
+            }
+            try:
+                self.session_file.write_text(json.dumps(init_data, indent=2), encoding="utf-8")
+            except Exception as err:
+                log.warning("Could not initialize session file: %s", err)
 
     def get_api_key(self) -> str:
         """Retrieve Gemini API key from environment, .env file, or memory/config.json."""
@@ -3263,6 +3303,7 @@ class MemoryManager:
             turn["seen"] = seen
         self.history.append(turn)
 
+        self._ensure_session_file()
         try:
             data = json.loads(self.session_file.read_text(encoding="utf-8"))
             data["messages"].append(turn)
@@ -3291,6 +3332,7 @@ class MemoryManager:
         }
         self.history.append(turn)
 
+        self._ensure_session_file()
         try:
             data = json.loads(self.session_file.read_text(encoding="utf-8"))
             data["messages"].append(turn)
@@ -3302,9 +3344,15 @@ class MemoryManager:
         """Reset current in-memory history and start a fresh session file."""
         self.history.clear()
         self.recent_ambient_dialogues.clear()
-        self._session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_file = self.sessions_dir / f"session_{self._session_id}.json"
-        self._init_session_file()
+        # If previous session file on disk was empty (0 messages), prune it
+        if hasattr(self, "session_file") and self.session_file.exists():
+            try:
+                data = json.loads(self.session_file.read_text(encoding="utf-8"))
+                if not data.get("messages"):
+                    self.session_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+        self._generate_new_session_file()
 
     def record_ambient_dialogue(
         self,
@@ -3415,9 +3463,18 @@ class MemoryManager:
         for d_str in target_dates:
             all_target_files.extend(sorted(self.sessions_dir.glob(f"session_{d_str}_*.json")))
 
-        # Filter out current active session file
-        candidate_files = [f for f in all_target_files if f.name != self.session_file.name]
-        # Keep the most recent max_sessions
+        # Filter out current active session file and empty sessions (size <= 120 bytes)
+        candidate_files = []
+        for f in all_target_files:
+            if f.name == self.session_file.name:
+                continue
+            try:
+                if f.stat().st_size <= 120:
+                    continue
+                candidate_files.append(f)
+            except Exception:
+                continue
+        # Keep the most recent max_sessions with actual conversations
         selected_files = candidate_files[-max_sessions:]
 
         session_entries = []
@@ -3518,6 +3575,8 @@ class MemoryManager:
             if f.name in exclude:
                 continue
             try:
+                if f.stat().st_size <= 120:
+                    continue
                 data = json.loads(f.read_text(encoding="utf-8"))
                 msgs = data.get("messages", [])
                 for m in reversed(msgs):
