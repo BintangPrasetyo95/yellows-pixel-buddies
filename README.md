@@ -49,7 +49,13 @@
 ### 🎵 Windows GSMTC Music & Song Detection
 - Detects media playback across Windows (Spotify, YouTube, browser, media players) via the Windows GSMTC API.
 - Pink announces the song title and artist when a track starts.
-- **Autonomous AI Song Commentary**: Powered by Gemini AI, Pink spontaneously comments on whatever song, artist, or genre is currently playing (teasing your taste, hyping up beats, or having nostalgic deja vu with Toby Fox songs). Can be toggled on/off in the system tray.
+- **Autonomous AI Song Commentary**: Powered by Gemini AI, Pink spontaneously comments on newly played songs. Rather than repeating generic author praises, Pink specifically reacts to the **song title itself**—its theme, drama, wordplay, and vibe (with special Toby Fox lore deja vu when applicable). Can be toggled on/off in the system tray.
+- **Normal Song Loading & Thoughtful Pauses**: After announcing a song, Pink enters her signature Undertale-style listening/loading bubble (`* ...`) before delivering commentary.
+- **Instant Skip Abort**: Skipping a track immediately stops and aborts the previous song's loading bubble and background query, preventing stale commentary from lagging behind or playing out of sync.
+- **Playlist Skip Stress & Confusion Mechanic**: Rapidly skipping songs within 8 seconds stresses Pink out!
+  - **Skip 1**: Mild curiosity (`* ...?`).
+  - **Skip 2**: Impatient listening (`* ...?! (Wait, make up your mind!)` with her `behind` sprite).
+  - **Skip 3+ (Overwhelmed & Dizzy)**: Pink reaches her breaking point—she gets dizzy and confused, screaming in shocked or angry sprites about her spinning cotton head and playlist whiplash while saving Gemini tokens! Continuous playback for $\ge 8$ seconds calms her back down.
 - **Smart YouTube Shorts & Reel Filtering**: Automatically filters out YouTube Shorts, short clips, and video reels (duration $\le 60$s from browsers or titles containing `#shorts`/`#reels`/`#tiktok`) so Pink won't spam speech bubbles while you scroll. Can be toggled in the system tray.
 
 ### 🖥️ Window Switch & Flashbang Reactions

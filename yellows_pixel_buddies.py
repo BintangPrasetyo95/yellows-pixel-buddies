@@ -456,7 +456,18 @@ AI_SONG_COMMENT_ENABLED = True        # Generate Gemini AI in-character commenta
 AI_SONG_COMMENT_COOLDOWN_S = 8.0      # Cooldown in seconds between AI song comments to prevent track skip spam
 SONG_FILTER_SHORTS_ENABLED = True     # Ignore/filter YouTube Shorts & short-form video reels from media detection
 SHORTS_MAX_DURATION_S = 61.0          # Max duration in seconds for browser media to be classified as a short/clip
+SONG_SKIP_RAPID_THRESHOLD_S = 8.0     # Maximum seconds between songs to count as a rapid playlist skip
+SONG_SKIP_STRESS_THRESHOLD = 3        # Rapid skip count threshold where Pink gets confused/stressed out
 
+STRESSED_SKIP_LINES: list[tuple[str, str]] = [
+    ("* W-WAIT! Stop skipping so fast, minion! My cotton head is spinning, mew!", "shocked"),
+    ("* PICK A SONG ALREADY! Are you speedrunning your playlist or what?!", "angry"),
+    ("* (Dizzy ghost noises... which melody was I even supposed to listen to?!)", "shocked"),
+    ("* Hey! My ears can't process ten songs at once! Hands off the skip button, dummy!", "angry"),
+    ("* Argh! Playlist whiplash! Give my poor plush doll brain a second to breathe!", "shocked"),
+    ("* STOP! Did a hyperactive squirrel take over your media player, mew?!", "angry"),
+    ("* ... (Pink's eyes are swirling like hypnotic spirals. She looks thoroughly dizzy.)", "shocked"),
+]
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
 DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
@@ -4958,6 +4969,19 @@ def is_shorts_track(title: str, artist: str = "") -> bool:
     return bool(SHORTS_TAG_REGEX.search(check_text))
 
 
+def clean_song_title(title: str) -> str:
+    """Clean common metadata tags (e.g. '(Official Music Video)', '[MV]') from title for commentary."""
+    if not title:
+        return ""
+    cleaned = re.sub(
+        r"(?i)\s*[\(\[](?:official\s+(?:music\s+)?video|official\s+audio|lyric\s+video|lyrics|audio|mv|hd|4k|visualizer|remastered|extended\s+mix)[\)\]]",
+        "",
+        title,
+    )
+    cleaned = re.sub(r"\s*[-–—]\s*$", "", cleaned).strip()
+    return cleaned or title
+
+
 class MediaWatcher(QThread):
     """Monitors system-wide media playback (Spotify, YouTube, browser, etc.) using Windows GSMTC."""
     song_started = pyqtSignal(str, str)  # title, artist
@@ -5146,7 +5170,11 @@ class YellowsPixelBuddies(QWidget):
         self._pending_song_announcement: tuple | None = None
         self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
         self._last_ai_song_comment_time: float = -9999.0
+        self._ai_comment_target_song: str = ""
+        self._song_skip_count: int = 0
+        self._last_song_start_time: float = -9999.0
         self._filter_shorts_enabled: bool = SONG_FILTER_SHORTS_ENABLED
+        self._is_handling_user_chat: bool = False
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -5396,6 +5424,16 @@ class YellowsPixelBuddies(QWidget):
             return True
         return False
 
+    def _is_user_chat_or_choice_active(self) -> bool:
+        """Returns True if the user is typing in chat, waiting for user chat reply, or answering choices."""
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            return True
+        if getattr(self, "_is_handling_user_chat", False):
+            return True
+        if hasattr(self, "_dialogue_overlay") and bool(getattr(self._dialogue_overlay, "_choices", None)):
+            return True
+        return False
+
     def _say(
         self,
         category_or_text: str,
@@ -5616,21 +5654,22 @@ class YellowsPixelBuddies(QWidget):
         """If a song announcement was deferred while dialogue or chat was active, play it now."""
         if getattr(self, "_pending_song_announcement", None) is None:
             return
-        if self._is_dialogue_convo_active():
+        if self._is_user_chat_or_choice_active():
             return
         pending_data = self._pending_song_announcement
         self._pending_song_announcement = None
 
         def _play_deferred() -> None:
-            if self._is_dialogue_convo_active():
+            if self._is_user_chat_or_choice_active():
                 self._pending_song_announcement = pending_data
                 return
             line, extra = pending_data[:2]
             clean_title = pending_data[2] if len(pending_data) > 2 else ""
             clean_artist = pending_data[3] if len(pending_data) > 3 else ""
+            skip_count = pending_data[4] if len(pending_data) > 4 else 0
             self._say(line, force=True, extra_queue=extra, dialogue_category=("toby_fox_familiar" if extra else "song_detection"))
-            if clean_title:
-                self._trigger_ai_song_comment(clean_title, clean_artist)
+            if clean_title and skip_count < SONG_SKIP_STRESS_THRESHOLD and getattr(self, "_ai_song_comment_enabled", True) and self._memory.get_api_key():
+                self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=skip_count)
 
         QTimer.singleShot(400, _play_deferred)
 
@@ -5659,6 +5698,7 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_chat_cancelled(self) -> None:
         """Resume normal behavior if user closes the chat box without sending."""
+        self._is_handling_user_chat = False
         if self._phase == Phase.PAUSE:
             self._pause_elapsed = False
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
@@ -5667,6 +5707,7 @@ class YellowsPixelBuddies(QWidget):
     def _on_chat_timeout(self) -> None:
         """Resume normal behavior if chat input overlay closes after 2 minutes of typing inactivity."""
         log.info("Chat input timed out after 2 minutes of inactivity")
+        self._is_handling_user_chat = False
         if self._phase == Phase.PAUSE:
             self._pause_elapsed = False
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
@@ -5911,6 +5952,7 @@ class YellowsPixelBuddies(QWidget):
         self._gemini_thread.error_occurred.connect(
             lambda err_msg, u=text, s=see_screen: self._on_gemini_error(u, err_msg, s)
         )
+        self._is_handling_user_chat = True
         self._gemini_thread.start()
 
     def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
@@ -5933,6 +5975,7 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_gemini_response(self, user_text: str, spoken_text: str, anim: str, had_screen: bool, is_ghost: bool = False, seen: str = "") -> None:
         """Handle response generated by Gemini AI."""
+        self._is_handling_user_chat = False
         if not spoken_text or not spoken_text.strip():
             log.info("Auto screen comment suppressed: candidates repetitive or empty, staying quiet.")
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -5980,6 +6023,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
+        if not is_auto:
+            self._is_handling_user_chat = False
         self._last_auto_screen_comment_time = time.perf_counter()
         if is_auto:
             log.warning("Auto screen comment error: %s", error_msg)
@@ -6248,6 +6293,32 @@ class YellowsPixelBuddies(QWidget):
         self._reminders_dialog.raise_()
         self._reminders_dialog.activateWindow()
 
+    def _cancel_previous_song_loading(self) -> None:
+        """Immediately stop any active Gemini worker thread and pending dialogue queue for previous song commentary."""
+        self._ai_comment_target_song = ""
+        self._pending_song_announcement = None
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            if not getattr(self, "_is_handling_user_chat", False):
+                try:
+                    self._gemini_thread.response_ready.disconnect()
+                except Exception:
+                    pass
+                try:
+                    self._gemini_thread.error_occurred.disconnect()
+                except Exception:
+                    pass
+                log.info("Aborted previous song's AI commentary thread upon skip.")
+
+    def _on_gemini_song_error(self, err_msg: str, target_song: str = "") -> None:
+        """Handle failure or timeout in AI song commentary generation."""
+        log.info("AI song comment query failed or timed out for '%s': %s", target_song, err_msg)
+        if target_song and target_song == getattr(self, "_ai_comment_target_song", ""):
+            self._ai_comment_target_song = ""
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                loading_texts = ("* ...", "* ...?", "* ...?! (Wait, make up your mind!)")
+                if getattr(self._dialogue_overlay, "_full_text", "") in loading_texts:
+                    self._dialogue_overlay.dismiss(clear_queue=True)
+
     def _on_song_started(self, title: str, artist: str) -> None:
         """React to newly started music playback via Windows GSMTC."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
@@ -6265,7 +6336,20 @@ class YellowsPixelBuddies(QWidget):
             log.info("Ignoring YouTube Short in _on_song_started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
             return
 
-        log.info("Song started: '%s' by '%s'", clean_title, clean_artist or "Unknown")
+        # Immediately stop and cancel any running AI loading or thread from previous song
+        self._cancel_previous_song_loading()
+
+        now = time.perf_counter()
+        elapsed_since_last_song = now - getattr(self, "_last_song_start_time", -9999.0)
+        self._last_song_start_time = now
+
+        if elapsed_since_last_song < SONG_SKIP_RAPID_THRESHOLD_S:
+            self._song_skip_count += 1
+            log.info("Rapid song skip detected (%.1fs elapsed): skip count = %d", elapsed_since_last_song, self._song_skip_count)
+        else:
+            self._song_skip_count = 0
+
+        log.info("Song started: '%s' by '%s' (skip count: %d)", clean_title, clean_artist or "Unknown", self._song_skip_count)
 
         # Format title & artist to fit neatly in dialogue bubble
         display_title = clean_title if len(clean_title) <= 50 else clean_title[:47] + "..."
@@ -6276,9 +6360,22 @@ class YellowsPixelBuddies(QWidget):
         else:
             line = f"* Now playing: {display_title}"
 
-        extra_queue: list[str] = []
+        # If Pink is stressed out by rapid song skipping (skip count >= threshold):
+        if self._song_skip_count >= SONG_SKIP_STRESS_THRESHOLD:
+            stressed_text, stressed_anim = random.choice(STRESSED_SKIP_LINES)
+            self._ai_comment_target_song = ""
+            extra_queue = [DialogueStep(stressed_text, anim=stressed_anim)]
+            if self._is_user_chat_or_choice_active():
+                log.info("Dialogue/chat is active: deferring stressed song announcement for '%s'", display_title)
+                self._pending_song_announcement = (line, extra_queue, "", "", self._song_skip_count)
+                return
+            self._say(line, force=True, extra_queue=extra_queue, dialogue_category="stressed_skip")
+            return
+
+        extra_queue: list[str | DialogueStep] = []
         check_str = f"{clean_artist} {clean_title}".lower()
-        if "toby fox" in check_str or "toby 'radiation' fox" in check_str:
+        is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
+        if is_toby:
             toby_lines = DIALOGUE_LINES.get("toby_fox_familiar", [
                 "* (Wait... this sounds strangely familiar...)",
                 "* (... Huh? Have I heard this song before?)",
@@ -6288,33 +6385,52 @@ class YellowsPixelBuddies(QWidget):
             ])
             extra_queue.append(random.choice(toby_lines))
 
-        # If on chat (typing, waiting for AI response, or dialogue box is visible), defer announcement
-        if self._is_dialogue_convo_active():
+        # Multi-tier loading indicator before AI commentary
+        ai_enabled = getattr(self, "_ai_song_comment_enabled", True) and bool(self._memory.get_api_key())
+        if ai_enabled:
+            if self._song_skip_count == 0:
+                loading_step = DialogueStep("* ...", anim="idle")
+            elif self._song_skip_count == 1:
+                loading_step = DialogueStep("* ...?", anim="idle")
+            else:
+                loading_step = DialogueStep("* ...?! (Wait, make up your mind!)", anim="behind")
+            extra_queue.append(loading_step)
+
+        # If on chat (typing, waiting for AI response, or active choices), defer announcement
+        if self._is_user_chat_or_choice_active():
             log.info("Dialogue/chat is active: deferring song announcement for '%s'", display_title)
-            self._pending_song_announcement = (line, extra_queue, clean_title, clean_artist)
+            self._pending_song_announcement = (line, extra_queue, clean_title, clean_artist, self._song_skip_count)
             return
 
-        self._say(line, force=True, extra_queue=extra_queue, dialogue_category=("toby_fox_familiar" if extra_queue else "song_detection"))
-        self._trigger_ai_song_comment(clean_title, clean_artist)
+        self._say(line, force=True, extra_queue=extra_queue, dialogue_category=("toby_fox_familiar" if is_toby else "song_detection"))
+        if ai_enabled:
+            self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=self._song_skip_count)
 
-    def _trigger_ai_song_comment(self, title: str, artist: str) -> None:
-        """Trigger an autonomous Gemini AI reaction/commentary on the newly started song."""
+    def _trigger_ai_song_comment(self, title: str, artist: str, skip_count: int = 0) -> None:
+        """Trigger an autonomous Gemini AI reaction/commentary on the newly started song, focusing on the title."""
         if not getattr(self, "_ai_song_comment_enabled", True):
             return
         api_key = self._memory.get_api_key()
         if not api_key:
             return
 
+        clean_artist = artist.strip()
+        clean_title = title.strip()
+        if not clean_title:
+            return
+
+        # Target song must match for response to be accepted
+        self._ai_comment_target_song = clean_title
+
+        # If busy with user chat, do not interrupt
+        if getattr(self, "_is_handling_user_chat", False):
+            log.info("Gemini thread is busy with user chat; skipping AI song comment.")
+            return
+
+        # Clean metadata fluff from title for sharper commentary
+        comment_title = clean_song_title(clean_title)
+
         now = time.perf_counter()
-        if now - getattr(self, "_last_ai_song_comment_time", -9999.0) < AI_SONG_COMMENT_COOLDOWN_S:
-            log.info("Skipping AI song comment: cooldown active (%.1fs remaining)",
-                     AI_SONG_COMMENT_COOLDOWN_S - (now - getattr(self, "_last_ai_song_comment_time", -9999.0)))
-            return
-
-        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
-            log.info("Gemini thread is busy; skipping AI song comment.")
-            return
-
         self._last_ai_song_comment_time = now
 
         now_dt = datetime.datetime.now()
@@ -6329,28 +6445,33 @@ class YellowsPixelBuddies(QWidget):
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
-        clean_artist = artist.strip()
-        clean_title = title.strip()
         check_str = f"{clean_artist} {clean_title}".lower()
         is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
 
-        prompt_label = f"[Music played: '{clean_title}' by '{clean_artist or 'Unknown'}']"
+        prompt_label = f"[Music played: '{comment_title}' by '{clean_artist or 'Unknown'}']"
         song_prompt = (
-            f"[System event: A new music track just started playing on the user's computer: "
-            f"\"{clean_title}\" by \"{clean_artist or 'Unknown'}\".]\n"
-            f"React in-character to this song being played on desktop!\n"
+            f"[System event: A music track just started playing: \"{comment_title}\""
+            f"{f' by {clean_artist}' if clean_artist else ''}.]\n"
+            f"React in-character to this song, FOCUSING ON THE SONG TITLE \"{comment_title}\"!\n"
             f"Requirements:\n"
-            f"- Concise: 1 to 2 short lines starting with '* ' (under 35 words total).\n"
-            f"- Express genuine musical opinion or commentary: comment on the track title, artist, genre, vibe/energy, or playfully tease the user's music taste.\n"
+            f"- COMMENT ON THE TITLE: React directly to the track's TITLE (\"{comment_title}\"). What does the name sound like? Is it dramatic, funny, edgy, cute, mysterious, or chaotic? Focus on the words and theme of the title itself, NOT just the artist/author name!\n"
+            f"- Avoid generic author commentary: Do not just talk about who made it, do not merely praise or name-drop the artist. Playfully critique, tease, or hype the song title itself!\n"
             f"- Personality: Tsundere ghost snark, childlike doll excitement, or dramatic bickering.\n"
-            f"- Append an emotion tag [anim: ...] at the end (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], or [anim: angry])."
+            f"- Concise: 1 to 2 short lines starting with '* ' (under 35 words total).\n"
+            f"- Emotion tag: End with an emotion tag like [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], or [anim: angry]."
         )
+        if skip_count > 0:
+            song_prompt += (
+                f"\n- Playlist context: The user rapidly skipped past {skip_count} track(s) before stopping on this song. "
+                f"You can playfully tease their indecisiveness before reacting to this track title."
+            )
         if is_toby:
             song_prompt += (
-                f"\n- SPECIAL LORE: This track is by Toby Fox (your creator / home universe)! "
-                f"React with strange nostalgic recognition, emotional deja vu, or tsundere wonder about why this tune feels so deeply familiar."
+                f"\n- Toby Fox universe context: This track is from your creator's universe! "
+                f"Still focus on the specific track title \"{comment_title}\" (e.g. what memories or deja vu this specific title brings up), rather than just saying Toby Fox."
             )
 
+        target_song_tag = clean_title
         self._gemini_thread = GeminiWorkerThread(
             api_key=api_key,
             user_prompt=song_prompt,
@@ -6362,14 +6483,14 @@ class YellowsPixelBuddies(QWidget):
             parent=self,
         )
         self._gemini_thread.response_ready.connect(
-            lambda spoken, anim, is_ghost, seen="", u=prompt_label: self._on_gemini_song_comment(u, spoken, anim, is_ghost)
+            lambda spoken, anim, is_ghost, seen="", u=prompt_label, s=target_song_tag: self._on_gemini_song_comment(u, spoken, anim, is_ghost, target_song=s)
         )
         self._gemini_thread.error_occurred.connect(
-            lambda err: log.info("AI song comment query failed or timed out: %s", err)
+            lambda err, s=target_song_tag: self._on_gemini_song_error(err, target_song=s)
         )
         self._gemini_thread.start()
 
-    def _on_gemini_song_comment(self, user_label: str, spoken_text: str, anim: str, is_ghost: bool = False) -> None:
+    def _on_gemini_song_comment(self, user_label: str, spoken_text: str, anim: str, is_ghost: bool = False, target_song: str = "") -> None:
         """Deliver Pink's Gemini AI commentary on the currently playing song."""
         if not spoken_text or not spoken_text.strip():
             return
@@ -6377,7 +6498,17 @@ class YellowsPixelBuddies(QWidget):
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
+
+        # Stale comment prevention: ensure this commentary matches the active target song
+        if target_song and target_song != getattr(self, "_ai_comment_target_song", ""):
+            log.info("Discarding stale AI song comment for '%s' (active song is '%s')",
+                     target_song, getattr(self, "_ai_comment_target_song", ""))
+            return
+
         if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+            return
+        if getattr(self, "_is_handling_user_chat", False):
             self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
             return
 
@@ -6389,11 +6520,16 @@ class YellowsPixelBuddies(QWidget):
         first_step = steps[0]
         remaining_steps = steps[1:] if len(steps) > 1 else None
 
-        # If speech bubble is currently showing the "Now playing" title, queue comment right behind it!
+        # If speech bubble is currently showing "Now playing" or loading step, queue comment right behind it!
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             log.info("Dialogue bubble active: appending AI song comment to sequence queue")
             for step in steps:
                 self._dialogue_overlay.append_queue(step)
+            # If currently holding on a loading indicator, shorten remaining hold to 800ms for responsiveness
+            loading_texts = ("* ...", "* ...?", "* ...?! (Wait, make up your mind!)")
+            if getattr(self._dialogue_overlay, "_full_text", "") in loading_texts:
+                if self._dialogue_overlay._hold_timer.isActive():
+                    self._dialogue_overlay._hold_timer.start(800)
             return
 
         # Otherwise, speak the comment directly
