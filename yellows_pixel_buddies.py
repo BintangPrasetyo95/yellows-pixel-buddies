@@ -3308,11 +3308,15 @@ class MemoryManager:
         if had_screen and seen and user_text.startswith("[Pink peeks"):
             display_user = f"[Pink peeks at your screen — Saw: {seen}]"
 
+        # Clean any raw [anim: ...] or [mode: ...] tags from recorded Pink response
+        clean_pink = re.sub(r"\[anim:\s*[^\\\]]+\]", "", pink_response)
+        clean_pink = re.sub(r"\[mode:\s*[^\\\]]+\]", "", clean_pink).strip()
+
         turn = {
             "timestamp": datetime.datetime.now().isoformat(),
             "status": "ok",
             "user": display_user,
-            "pink": pink_response,
+            "pink": clean_pink,
             "anim": anim,
             "had_screen": had_screen,
         }
@@ -3393,6 +3397,9 @@ class MemoryManager:
             clean_text = str(text.text).strip()
         else:
             clean_text = str(text).strip()
+
+        clean_text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", clean_text)
+        clean_text = re.sub(r"\[mode:\s*[^\\\]]+\]", "", clean_text).strip()
 
         if extra_lines:
             clean_extras = []
@@ -5435,6 +5442,8 @@ class YellowsPixelBuddies(QWidget):
         self._is_handling_user_chat: bool = False
         self._question_thread: GeminiQuestionWorkerThread | None = None
         self._current_song: tuple[str, str] | None = None
+        self._recent_question_texts: list[str] = []
+        self._recent_reminder_highlights: list[str] = []
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -5918,13 +5927,35 @@ class YellowsPixelBuddies(QWidget):
         """Pick an active, specific memory or context detail to center the question around."""
         if getattr(self, "_current_song", None) and self._current_song[0]:
             title, artist = self._current_song
-            return f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. If you know this song, ask what they think of its actual content, lyrics, vibe, or internet reputation/memes, or tease their taste in music!"
+            return (
+                f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. "
+                f"If you know this song, ask what they think of its actual content, lyrics, vibe, or internet reputation/memes, or tease their taste in music!"
+            )
+
+        if not hasattr(self, "_recent_reminder_highlights"):
+            self._recent_reminder_highlights = []
 
         reminders = self._memory.get_active_reminders() if hasattr(self._memory, "get_active_reminders") else []
         if reminders:
-            chosen_r = random.choice(reminders)
+            fresh_reminders = [
+                r for r in reminders
+                if r.get("id") not in self._recent_reminder_highlights and r.get("text") not in self._recent_reminder_highlights
+            ]
+            chosen_r = random.choice(fresh_reminders if fresh_reminders else reminders)
             r_text = chosen_r.get("text", "")
-            return f"Active to-do/reminder: '{r_text}'. Ask if they completed it yet, or tease them for slacking!"
+            r_id = chosen_r.get("id", "")
+            if r_id:
+                self._recent_reminder_highlights.append(r_id)
+            elif r_text:
+                self._recent_reminder_highlights.append(r_text)
+            if len(self._recent_reminder_highlights) > 5:
+                self._recent_reminder_highlights.pop(0)
+
+            return (
+                f"Active to-do/reminder: '{r_text}'. "
+                f"Situational guidance: If the user is currently busy with high-priority work (like competition slides, exams, or urgent coding), "
+                f"do NOT badger or nag them to drop their work. Instead, ask if they want to push it to later, make a light joke, or ask how their current priority compares!"
+            )
 
         facts_str = self._memory.get_long_term_facts() if hasattr(self._memory, "get_long_term_facts") else ""
         if facts_str:
@@ -5953,9 +5984,27 @@ class YellowsPixelBuddies(QWidget):
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
+        # Feed ongoing conversation history from the active session so Pink has situational awareness
+        active_session_turns = []
+        if hasattr(self, "_memory") and hasattr(self._memory, "history") and self._memory.history:
+            for turn in self._memory.history[-12:]:
+                u_txt = turn.get("user", "")
+                p_txt = turn.get("pink", "")
+                if u_txt.startswith("[Pink asked:"):
+                    active_session_turns.append(f"{u_txt}\nPink reaction: {p_txt}")
+                elif not u_txt.startswith("["):
+                    active_session_turns.append(f"User: {u_txt}\nPink: {p_txt}")
+                elif u_txt.startswith("[Pink peeks") and turn.get("seen"):
+                    active_session_turns.append(f"[Observation: User was seen with {turn['seen']}]")
+                elif u_txt.startswith("[Music played:"):
+                    active_session_turns.append(f"{u_txt}\nPink: {p_txt}")
+
+        if active_session_turns:
+            system_inst += f"\n\nCURRENT ONGOING SESSION CONVERSATION & USER STATUS (CRITICAL CONTEXT):\n" + "\n---\n".join(active_session_turns)
+
         recent_history, _ = self._memory.get_recent_sessions_overview(max_days=2, max_sessions=4)
         if recent_history:
-            system_inst += f"\n\nRECENT PAST CONVERSATION LOGS:\n{recent_history}"
+            system_inst += f"\n\nPAST SESSION ARCHIVES:\n{recent_history}"
 
         ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
         if ambient_ctx:
@@ -5964,6 +6013,25 @@ class YellowsPixelBuddies(QWidget):
         if getattr(self, "_current_song", None) and self._current_song[0]:
             title, artist = self._current_song
             system_inst += f"\n\nCURRENTLY PLAYING MUSIC TRACK:\n\"{title}\" by \"{artist or 'Unknown'}\""
+
+        # Pass recently asked questions to enforce non-repetition
+        recent_qs = getattr(self, "_recent_question_texts", [])
+        if recent_qs:
+            system_inst += (
+                "\n\nQUESTIONS ALREADY ASKED RECENTLY IN THIS SESSION (STRICTLY FORBIDDEN TO REPEAT OR REPHRASE):\n"
+                + "\n".join(f"- {q}" for q in recent_qs[-6:])
+            )
+
+        system_inst += (
+            "\n\nSITUATIONAL AWARENESS & REPETITION RULES:\n"
+            "1. RESPECT USER PRIORITIES: If the user recently stated in chat what they are working on, why they are busy "
+            "(e.g. grinding for finals, competition, presentation slides, urgent project, working till morning), "
+            "or that tasks are paused: DO NOT ask them 'what are you doing' or 'are you making a presentation?' and DO NOT "
+            "demand they explain that app. And DO NOT nag them about uncompleted reminders! Instead, cheer them on, ask how a "
+            "specific part/slide is going, tease their lack of sleep, or offer mischievous encouragement.\n"
+            "2. DO NOT REPEAT QUESTIONS: Never ask the same question, suggest the same choices, or repeat recent themes "
+            "(like cat bombs or repeatedly asking about the same app/task).\n"
+        )
 
         format_spec = (
             "\n\nCRITICAL OUTPUT FORMAT REQUIREMENTS:\n"
@@ -5998,8 +6066,9 @@ class YellowsPixelBuddies(QWidget):
                 "[Interactive Question from Screen Observation]\n"
                 "Pink is peeking over her shoulder at the user's desktop screen right now.\n"
                 "Carefully inspect what the user is actively doing on screen (open applications, IDE/code, browser tabs, media, game, documents, or desktop clutter).\n"
-                "Ask an interactive question DIRECTLY about what you see on their screen! "
-                "Tease them, ask what they're working on or watching, roast their open windows or clutter, or demand an explanation."
+                "Ask an interactive question DIRECTLY related to what you see on screen.\n"
+                "IMPORTANT: If the user ALREADY explained what they are doing with this application (e.g. they already said they're working on competition slides in Canva), "
+                "DO NOT ask 'what are you doing' or 'are you making a presentation'. Instead, ask about a specific detail you notice on screen (slide layout, color choices, specific numbers, a typo, a cool diagram), cheer them on, or playfully rate their progress!"
             )
         elif source == "memory":
             highlight = self._get_best_memory_highlight()
@@ -6012,9 +6081,14 @@ class YellowsPixelBuddies(QWidget):
         else:
             user_prompt = (
                 "[Interactive Question from Doll/Ghost Persona]\n"
-                "Pink is strolling or resting on the taskbar and asking a spontaneous, whimsical question!\n"
-                "Themes: declaring herself ruler of the desktop, asking what they'd do if a cat bomb landed near their mouse, doll vessel oddities, dark world secrets, or funny human-vs-doll dilemmas.\n"
-                "Ask an interactive question that invites the user to play along!"
+                "Pink is strolling or resting on the taskbar and asking a spontaneous, whimsical, completely fresh question!\n"
+                "Inspirations (pick something surprising and new every time, NEVER repeat a recent theme):\n"
+                "- Playful doll philosophy (what it feels like being trapped in a pixel vessel)\n"
+                "- Dark world secrets, magic spells, or imaginary pixel kingdom decrees\n"
+                "- Funny human dilemmas (coffee vs sleep, snack heists, weird keyboard habits)\n"
+                "- Desktop territory claims (declaring your taskbar, mousepad, or wallpaper her royal empire)\n"
+                "- Silly 'what-if' or would-you-rather scenarios fitting Toby Fox style humor\n"
+                "Invent a UNIQUE scenario that you haven't asked before!"
             )
 
         return system_inst, user_prompt
@@ -6101,6 +6175,11 @@ class YellowsPixelBuddies(QWidget):
 
         self._last_question_item = q_item
         self._last_dialogue = q_item.question
+        if not hasattr(self, "_recent_question_texts"):
+            self._recent_question_texts = []
+        self._recent_question_texts.append(q_item.question)
+        if len(self._recent_question_texts) > 8:
+            self._recent_question_texts.pop(0)
 
         if hasattr(self, "_memory"):
             options_preview = [c[0] for c in q_item.choices]
@@ -6133,6 +6212,11 @@ class YellowsPixelBuddies(QWidget):
             q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
             self._last_question_item = q_item
             self._last_dialogue = q_item.question
+            if not hasattr(self, "_recent_question_texts"):
+                self._recent_question_texts = []
+            self._recent_question_texts.append(q_item.question)
+            if len(self._recent_question_texts) > 8:
+                self._recent_question_texts.pop(0)
             if hasattr(self, "_memory"):
                 options_preview = [c[0] for c in q_item.choices]
                 self._memory.record_ambient_dialogue(
