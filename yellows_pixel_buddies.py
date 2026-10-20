@@ -456,6 +456,7 @@ AI_SONG_COMMENT_ENABLED = True        # Generate Gemini AI in-character commenta
 AI_SONG_COMMENT_COOLDOWN_S = 8.0      # Cooldown in seconds between AI song comments to prevent track skip spam
 SONG_FILTER_SHORTS_ENABLED = True     # Ignore/filter YouTube Shorts & short-form video reels from media detection
 SHORTS_MAX_DURATION_S = 61.0          # Max duration in seconds for browser media to be classified as a short/clip
+SONG_MIN_DURATION_S = 20.0            # Minimum track duration in seconds to announce or comment on songs
 SONG_SKIP_RAPID_THRESHOLD_S = 8.0     # Maximum seconds between songs to count as a rapid playlist skip
 SONG_SKIP_STRESS_THRESHOLD = 3        # Rapid skip count threshold where Pink gets confused/stressed out
 
@@ -479,6 +480,7 @@ CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 AUTO_SCREEN_COMMENT_ENABLED = True
 AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
+TRAY_SCREEN_READ_INTERVAL_MS = 300000            # 5 minutes background screen reading while hidden in tray
 AUTO_SCREEN_MAX_USER_IDLE_S = 900.0              # 15 minutes of system-wide inactivity (keyboard/mouse) -> user away/asleep, pause peeking
 AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to justify commentary; otherwise screen is static
 AUTO_SCREEN_STATIC_BACKOFF_S = 300.0             # If screen hasn't changed, back off 5 minutes before checking again
@@ -5259,6 +5261,7 @@ class MediaWatcher(QThread):
         self._last_track_id: tuple[str, str] = ("", "")
         self._last_playing = False
         self._filter_shorts = filter_shorts
+        self._current_duration_s: float = 0.0
 
     def set_filter_shorts(self, enabled: bool) -> None:
         self._filter_shorts = enabled
@@ -5289,37 +5292,46 @@ class MediaWatcher(QThread):
             try:
                 sess = mgr.get_current_session()
                 if sess is None:
-                    return None, False, False
+                    return None, False, False, 0.0
                 pb = sess.get_playback_info()
                 is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
                 if not is_playing:
-                    return None, False, False
+                    return None, False, False, 0.0
                 props = await sess.try_get_media_properties_async()
                 if props is None:
-                    return None, False, False
+                    return None, False, False, 0.0
                 title = props.title.strip() if props.title else ""
                 artist = props.artist.strip() if props.artist else ""
 
                 is_short = False
-                if getattr(self, "_filter_shorts", True) and title:
-                    if is_shorts_track(title, artist):
+                dur_s = 0.0
+                try:
+                    tl = sess.get_timeline_properties()
+                    if tl and getattr(tl, "end_time", None) is not None:
+                        dur_s = tl.end_time.total_seconds()
+                except Exception as e:
+                    log.debug("GSMTC timeline check error: %s", e)
+
+                if title:
+                    # Ignore tracks under SONG_MIN_DURATION_S (e.g. short clips, notification chimes, sound effects)
+                    if 0.0 < dur_s < SONG_MIN_DURATION_S:
                         is_short = True
-                    else:
-                        try:
-                            source_id = (sess.source_app_user_model_id or "").lower()
-                            if any(b in source_id for b in BROWSER_APP_IDS):
-                                tl = sess.get_timeline_properties()
-                                if tl and getattr(tl, "end_time", None) is not None:
-                                    dur_s = tl.end_time.total_seconds()
+                    elif getattr(self, "_filter_shorts", True):
+                        if is_shorts_track(title, artist):
+                            is_short = True
+                        else:
+                            try:
+                                source_id = (sess.source_app_user_model_id or "").lower()
+                                if any(b in source_id for b in BROWSER_APP_IDS):
                                     if 0.0 < dur_s <= SHORTS_MAX_DURATION_S:
                                         is_short = True
-                        except Exception as e:
-                            log.debug("GSMTC timeline check error: %s", e)
+                            except Exception as e:
+                                log.debug("GSMTC source_id check error: %s", e)
 
-                return (title, artist), True, is_short
+                return (title, artist), True, is_short, dur_s
             except Exception as ex:
                 log.debug("GSMTC poll error: %s", ex)
-                return None, False, False
+                return None, False, False, 0.0
 
         try:
             mgr = loop.run_until_complete(_get_manager())
@@ -5329,12 +5341,15 @@ class MediaWatcher(QThread):
                     mgr = loop.run_until_complete(_get_manager())
                     continue
 
-                track, is_playing, is_short = loop.run_until_complete(_check_session(mgr))
+                track, is_playing, is_short, dur_s = loop.run_until_complete(_check_session(mgr))
+                self._current_duration_s = dur_s
                 if is_playing and track and track[0]:
                     if is_short:
                         if track != self._last_track_id:
                             self._last_track_id = track
-                            log.info("Ignoring YouTube Short / reel playback: '%s' by '%s'", track[0], track[1] or "Unknown")
+                            min_threshold = SONG_MIN_DURATION_S if (0.0 < dur_s < SONG_MIN_DURATION_S) else SHORTS_MAX_DURATION_S
+                            log.info("Ignoring short audio / track playback (<%.0fs): '%s' by '%s' (duration: %.1fs)",
+                                     min_threshold, track[0], track[1] or "Unknown", dur_s)
                         self._last_playing = True
                     else:
                         if track != self._last_track_id:
@@ -5444,6 +5459,12 @@ class YellowsPixelBuddies(QWidget):
         self._current_song: tuple[str, str] | None = None
         self._recent_question_texts: list[str] = []
         self._recent_reminder_highlights: list[str] = []
+        self._hidden_in_tray: bool = False
+        self._tray_hidden_at: float = 0.0
+        self._tray_observations: list[dict] = []
+        self._tray_screen_timer: QTimer = QTimer(self)
+        self._tray_screen_timer.setInterval(TRAY_SCREEN_READ_INTERVAL_MS)
+        self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -5718,6 +5739,8 @@ class YellowsPixelBuddies(QWidget):
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return
+        if getattr(self, "_hidden_in_tray", False):
             return
         if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
@@ -6097,6 +6120,8 @@ class YellowsPixelBuddies(QWidget):
         """Trigger an AI-generated interactive question from screen, memory, or doll personality."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return False
+        if getattr(self, "_hidden_in_tray", False):
+            return False
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -6313,6 +6338,12 @@ class YellowsPixelBuddies(QWidget):
             clean_title = pending_data[2] if len(pending_data) > 2 else ""
             clean_artist = pending_data[3] if len(pending_data) > 3 else ""
             skip_count = pending_data[4] if len(pending_data) > 4 else 0
+
+            # If playback already ended while user was chatting, drop the announcement
+            if self._current_song is None or self._current_song[0] != clean_title:
+                log.info("Deferred song '%s' is no longer playing; dropping announcement.", clean_title)
+                return
+
             self._say(line, force=True, extra_queue=extra, dialogue_category=("toby_fox_familiar" if extra else "song_detection"))
             if clean_title and skip_count < SONG_SKIP_STRESS_THRESHOLD and getattr(self, "_ai_song_comment_enabled", True) and self._memory.get_api_key():
                 self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=skip_count)
@@ -6423,6 +6454,9 @@ class YellowsPixelBuddies(QWidget):
             else:
                 reply = "* Format: /edit_reminder <number> <new text>, minion!"
             self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/hide_tray", "/tray", "/hide_to_tray", "/minimize_tray"):
+            self._hide_to_tray()
             return
         elif lower_input in ("/clear_reminders", "/clear_todos"):
             count = self._memory.clear_all_reminders()
@@ -6704,6 +6738,8 @@ class YellowsPixelBuddies(QWidget):
         """Periodically check if Pink should spontaneously inspect the user's screen and comment."""
         if not AUTO_SCREEN_COMMENT_ENABLED:
             return
+        if getattr(self, "_hidden_in_tray", False):
+            return
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -6982,19 +7018,42 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_song_ended(self) -> None:
         """Clear currently playing song track state upon playback stop/end."""
+        now = time.perf_counter()
+        elapsed = now - getattr(self, "_last_song_start_time", 0.0)
+        if elapsed < SONG_MIN_DURATION_S:
+            log.info("Song stopped before %ss (played for %.1fs): cancelled pending commentary for '%s'",
+                     SONG_MIN_DURATION_S, elapsed, getattr(self, "_ai_comment_target_song", ""))
+            self._cancel_previous_song_loading()
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                loading_texts = ("* ...", "* ...?", "* ...?! (Wait, make up your mind!)")
+                if getattr(self._dialogue_overlay, "_full_text", "") in loading_texts:
+                    self._dialogue_overlay.dismiss(clear_queue=True)
         self._current_song = None
 
-    def _on_song_started(self, title: str, artist: str) -> None:
+    def _on_song_started(self, title: str, artist: str, duration_s: float = 0.0) -> None:
         """React to newly started music playback via Windows GSMTC."""
+        clean_title = title.strip()
+        clean_artist = artist.strip()
+        if not clean_title:
+            return
+
+        # Check track duration against minimum threshold (< 20 seconds)
+        dur_s = duration_s
+        if dur_s <= 0.0 and hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            dur_s = getattr(self._media_watcher, "_current_duration_s", 0.0)
+        if 0.0 < dur_s < SONG_MIN_DURATION_S:
+            log.info("Ignoring track under %ss in _on_song_started: '%s' by '%s' (duration: %.1fs)",
+                     SONG_MIN_DURATION_S, clean_title, clean_artist or "Unknown", dur_s)
+            return
+
+        if getattr(self, "_hidden_in_tray", False):
+            self._current_song = (clean_title, clean_artist)
+            return
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
-            return
-        clean_title = title.strip()
-        clean_artist = artist.strip()
-        if not clean_title:
             return
 
         self._current_song = (clean_title, clean_artist)
@@ -7016,7 +7075,7 @@ class YellowsPixelBuddies(QWidget):
         else:
             self._song_skip_count = 0
 
-        log.info("Song started: '%s' by '%s' (skip count: %d)", clean_title, clean_artist or "Unknown", self._song_skip_count)
+        log.info("Song started: '%s' by '%s' (duration: %.1fs, skip count: %d)", clean_title, clean_artist or "Unknown", dur_s, self._song_skip_count)
 
         # Format title & artist to fit neatly in dialogue bubble
         display_title = clean_title if len(clean_title) <= 50 else clean_title[:47] + "..."
@@ -7073,8 +7132,12 @@ class YellowsPixelBuddies(QWidget):
         if ai_enabled:
             self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=self._song_skip_count)
 
-    def _trigger_ai_song_comment(self, title: str, artist: str, skip_count: int = 0) -> None:
+    def _trigger_ai_song_comment(self, title: str, artist: str, skip_count: int = 0, duration_s: float = 0.0, **kwargs) -> None:
         """Trigger an autonomous Gemini AI reaction/commentary on the newly started song, focusing on the title."""
+        dur = duration_s or (getattr(self._media_watcher, "_current_duration_s", 0.0) if hasattr(self, "_media_watcher") and self._media_watcher else 0.0)
+        if 0.0 < dur < SONG_MIN_DURATION_S:
+            log.info("Song duration %.1fs is under %ss; skipping AI commentary.", dur, SONG_MIN_DURATION_S)
+            return
         if not getattr(self, "_ai_song_comment_enabled", True):
             return
         api_key = self._memory.get_api_key()
@@ -7172,6 +7235,23 @@ class YellowsPixelBuddies(QWidget):
         if target_song and target_song != getattr(self, "_ai_comment_target_song", ""):
             log.info("Discarding stale AI song comment for '%s' (active song is '%s')",
                      target_song, getattr(self, "_ai_comment_target_song", ""))
+            return
+
+        # Check if duration of the target song is under the minimum threshold
+        dur_s = 0.0
+        if hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            dur_s = getattr(self._media_watcher, "_current_duration_s", 0.0)
+        if 0.0 < dur_s < SONG_MIN_DURATION_S:
+            log.info("Discarding AI song comment for '%s': track duration %.1fs is under %ss",
+                     target_song, dur_s, SONG_MIN_DURATION_S)
+            return
+
+        # Check if playback stopped prematurely before reaching the minimum duration
+        now = time.perf_counter()
+        elapsed = now - getattr(self, "_last_song_start_time", 0.0)
+        if self._current_song is None and elapsed < SONG_MIN_DURATION_S:
+            log.info("Discarding AI song comment for '%s': playback stopped after only %.1fs (<%ss)",
+                     target_song, elapsed, SONG_MIN_DURATION_S)
             return
 
         if hasattr(self, "_chat_input") and self._chat_input.isVisible():
@@ -7624,6 +7704,8 @@ class YellowsPixelBuddies(QWidget):
         self._last_tick = now
         cursor = QCursor.pos()                      # THE cursor sample of this tick (no extra timer)
         self._track_cursor(cursor, now, real_dt)
+        if getattr(self, "_hidden_in_tray", False):
+            return
         if getattr(self, "_is_ghost_talking", False):
             self.update()
         if self._dragging:                          # held by the mouse: stand still
@@ -7828,6 +7910,223 @@ class YellowsPixelBuddies(QWidget):
 
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
         self._pause_elapsed = False
+
+    # ---------------------------------------------------- hide to tray & background screen reading
+    def _toggle_hide_to_tray(self) -> None:
+        """Toggle hiding Pink in the system tray vs restoring her to the screen."""
+        if getattr(self, "_hidden_in_tray", False):
+            self._restore_from_tray()
+        else:
+            self._hide_to_tray()
+
+    def _hide_to_tray(self) -> None:
+        """Hide Pink completely from the screen into the system tray.
+        While hidden, she remains invisible on screen but reads the screen every 5 minutes
+        to maintain context and keep the session active. She can only be brought back
+        to the screen via the system tray icon.
+        """
+        if getattr(self, "_hidden_in_tray", False):
+            return
+
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.cancel()
+        if hasattr(self, "_vfx_overlay"):
+            self._stop_overlay()
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay.close()
+
+        self._brain_timer.stop()
+        self._reset_jump_state()
+        self._interrupted_state = None
+        self._in_angry_spam = False
+        self._click_times.clear()
+        self._dragging = False
+        self._press_global = None
+
+        self._hidden_in_tray = True
+        self._tray_hidden_at = time.time()
+        self._tray_observations = []
+        self.hide()
+
+        # Update tray actions
+        if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
+            self._hide_tray_action.setText("Restore Pink from Tray \U0001f4e4")
+        if hasattr(self, "_bring_action") and self._bring_action is not None:
+            self._bring_action.setText("Restore Pink from Tray \U0001f4e4")
+
+        # Show brief balloon message from tray
+        if hasattr(self, "_tray_icon") and self._tray_icon is not None and self._tray_icon.isVisible():
+            self._tray_icon.showMessage(
+                "Pink is watching from the tray!",
+                "She's invisible on screen, but reading your screen every 5 minutes to keep context. Click the tray icon to bring her back!",
+                QIcon(str(ICON_PATH)) if ICON_PATH.exists() else self.windowIcon(),
+                3500,
+            )
+
+        # Start 5-minute background screen reading timer
+        if not hasattr(self, "_tray_screen_timer"):
+            self._tray_screen_timer = QTimer(self)
+            self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
+        self._tray_screen_timer.setInterval(TRAY_SCREEN_READ_INTERVAL_MS)
+        self._tray_screen_timer.start()
+
+        log.info("Pink hidden to system tray; 5-minute background screen reading active.")
+
+    def _restore_from_tray(self) -> None:
+        """Restore Pink from the system tray back onto the primary taskbar."""
+        if not getattr(self, "_hidden_in_tray", False):
+            return
+
+        if hasattr(self, "_tray_screen_timer") and self._tray_screen_timer.isActive():
+            self._tray_screen_timer.stop()
+
+        self._hidden_in_tray = False
+
+        bounds = self._bounds()
+        min_x, max_x, _min_y, ground_y = bounds
+        self._x = float((min_x + max_x) // 2)
+        self._y = float(ground_y)
+        self._vy = 0.0
+        self._vx = 0.0
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+
+        self._sync_window_position()
+        self.show()
+        ensure_window_topmost(self)
+        self._play("peace_sign")
+
+        if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
+            self._hide_tray_action.setText("Hide to Tray \U0001f4e5")
+        if hasattr(self, "_bring_action") and self._bring_action is not None:
+            self._bring_action.setText("Bring to Taskbar")
+
+        # Contextual return line acknowledging what Pink saw while in tray
+        obs = getattr(self, "_tray_observations", [])
+        if obs:
+            last_obs = obs[-1]
+            clean_seen = last_obs.get("seen", "").strip()
+            if clean_seen:
+                greeting = f"* Oho! Summoned me back from the tray, minion?\n* While I was hidden, I saw you working on {clean_seen}, mew!"
+            else:
+                greeting = "* Peekaboo! I was keeping watch from the system tray the whole time, mew!"
+        else:
+            greeting = "* Peekaboo! Did you miss my charming presence on your taskbar already, mew?"
+
+        self._say(greeting, force=True, record_memory=True, step_anim="peace_sign")
+        self._tray_observations = []
+
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        log.info("Pink restored to screen from system tray.")
+
+    def _read_screen_while_in_tray(self) -> None:
+        """Periodic 5-minute screen reading while Pink is hidden in tray to maintain active session and context."""
+        if not getattr(self, "_hidden_in_tray", False):
+            return
+
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            return
+
+        if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
+            return
+
+        if is_workstation_locked() or get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
+            log.info("Tray screen reading skipped: workstation locked or user away.")
+            return
+
+        screenshot_b64 = None
+        current_fp = b""
+        try:
+            screenshot_b64, current_fp = capture_screen_and_fingerprint()
+            if not screenshot_b64:
+                return
+        except Exception as err:
+            log.warning("Tray screen capture failed: %s", err)
+            return
+
+        if self._last_screen_fingerprint is not None and current_fp:
+            diff = compute_fingerprint_diff(self._last_screen_fingerprint, current_fp)
+            if diff < AUTO_SCREEN_DIFF_THRESHOLD:
+                log.info("Tray screen reading skipped: screen visual delta too small (diff=%.3f)", diff)
+                return
+
+        self._last_screen_fingerprint = current_fp
+
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        reminders = self._memory.get_reminders_prompt()
+        if reminders:
+            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
+
+        candidate_directive = (
+            "[STRUCTURAL DIRECTIVE: TRAY BACKGROUND SCREEN OBSERVATION]\n"
+            "Pink is quietly keeping watch from the system tray while remaining invisible on screen.\n"
+            "Observe what is clearly visible on the user's screen right now.\n"
+            "REQUIRED FORMAT:\n"
+            "- 1 to 2 short lines starting with '* '.\n"
+            "- Emotion tag: [anim: laughing|peace_sign|behind|wistful|shocked|angry]\n"
+            "- Visual Memory Tag: [seen: 3-8 words describing open windows, apps, or activities on screen]\n"
+            "Only comment on what is clearly visible on screen."
+        )
+        system_inst += f"\n\n{candidate_directive}"
+
+        prompt_label = "[Pink peeks at your screen while hidden in tray]"
+        tray_prompt = (
+            "[Background Tray Observation: Pink inspects the desktop screen from the system tray.]\n"
+            "Carefully observe what the user is actively working on or viewing. Describe it concisely with [seen: ...] tag."
+        )
+
+        self._gemini_thread = GeminiWorkerThread(
+            api_key=api_key,
+            user_prompt=tray_prompt,
+            system_instruction=system_inst,
+            history=self._memory.history,
+            screenshot_b64=screenshot_b64,
+            model_name=GEMINI_MODEL,
+            is_auto_peek=True,
+            parent=self,
+        )
+        self._gemini_thread.response_ready.connect(
+            lambda spoken_text, anim, is_ghost, seen="", u=prompt_label: self._on_tray_gemini_response(u, spoken_text, anim, seen)
+        )
+        self._gemini_thread.error_occurred.connect(
+            lambda err_msg: log.info("Tray screen reading Gemini error: %s", err_msg)
+        )
+        self._gemini_thread.start()
+        log.info("Triggered 5-minute background screen reading while in system tray...")
+
+    def _on_tray_gemini_response(self, user_label: str, spoken_text: str, anim: str, seen: str = "") -> None:
+        """Record tray background screen observation into session history without opening any UI on screen."""
+        if not spoken_text or not spoken_text.strip():
+            return
+
+        self._memory.record_turn(user_label, spoken_text, anim, had_screen=True, seen=seen)
+        self._memory.record_ambient_dialogue(
+            spoken_text,
+            category="tray_screen_observation",
+            context=f"Pink observed screen from tray: {seen}" if seen else "Screen observation while hidden in tray",
+        )
+
+        if not hasattr(self, "_tray_observations"):
+            self._tray_observations = []
+        self._tray_observations.append({
+            "seen": seen,
+            "text": spoken_text,
+            "anim": anim,
+            "timestamp": datetime.datetime.now().isoformat(),
+        })
+        log.info("Recorded background tray observation (seen: '%s'): %s", seen, spoken_text[:60])
 
     # ---------------------------------------------------- hide sequence (outro)
     def _start_hide_sequence(self) -> None:
@@ -8610,7 +8909,8 @@ class YellowsPixelBuddies(QWidget):
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
             menu.addSeparator()
-        hide_action = menu.addAction("Hide 🐾")
+        hide_tray_action = menu.addAction("Hide to Tray 📥")
+        hide_action = menu.addAction("Hide (Peek Ears) 🐾")
         menu.addSeparator()
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
@@ -8621,6 +8921,8 @@ class YellowsPixelBuddies(QWidget):
             self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
+        elif chosen is hide_tray_action:
+            self._hide_to_tray()
         elif chosen is hide_action:
             self._start_hide_sequence()
         elif chosen is talk_action:
@@ -8791,8 +9093,11 @@ class YellowsPixelBuddies(QWidget):
         token_usage_action = memory_menu.addAction("AI Token Usage 📊")
         token_usage_action.triggered.connect(self._show_token_usage_dialogue)
 
-        self._hide_tray_action = tray_menu.addAction("Hide Pink 🐾")
-        self._hide_tray_action.triggered.connect(self._start_hide_sequence)
+        self._hide_tray_action = tray_menu.addAction("Hide to Tray 📥")
+        self._hide_tray_action.triggered.connect(self._toggle_hide_to_tray)
+
+        hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
+        hide_peek_action.triggered.connect(self._start_hide_sequence)
 
         self._bomb_action = tray_menu.addAction("Bomb Attack Mode")
         self._bomb_action.setCheckable(True)
@@ -8922,6 +9227,9 @@ class YellowsPixelBuddies(QWidget):
 
     def _reset_to_taskbar(self) -> None:
         """Emergency reset or manual summon: place the pet safely back on the primary taskbar."""
+        if getattr(self, "_hidden_in_tray", False):
+            self._restore_from_tray()
+            return
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
             self._start_summon_intro()
             return
@@ -8941,7 +9249,9 @@ class YellowsPixelBuddies(QWidget):
         if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
-            if self._phase == Phase.HIDE_PEEK:
+            if getattr(self, "_hidden_in_tray", False):
+                self._restore_from_tray()
+            elif self._phase == Phase.HIDE_PEEK:
                 self._on_peek_ears_clicked()
             elif self._phase == Phase.SUMMON_DIALOGUE:
                 self._start_summon_intro()
@@ -8964,6 +9274,8 @@ class YellowsPixelBuddies(QWidget):
             timers.append(self._window_timer)
         if hasattr(self, "_screen_comment_timer"):
             timers.append(self._screen_comment_timer)
+        if hasattr(self, "_tray_screen_timer"):
+            timers.append(self._tray_screen_timer)
         for timer in timers:
             timer.stop()
         self._stop_overlay()

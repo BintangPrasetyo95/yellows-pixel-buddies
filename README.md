@@ -57,6 +57,7 @@
   - **Skip 2**: Impatient listening (`* ...?! (Wait, make up your mind!)` with her `behind` sprite).
   - **Skip 3+ (Overwhelmed & Dizzy)**: Pink reaches her breaking point—she gets dizzy and confused, screaming in shocked or angry sprites about her spinning cotton head and playlist whiplash while saving Gemini tokens! Continuous playback for $\ge 8$ seconds calms her back down.
 - **Smart YouTube Shorts & Reel Filtering**: Automatically filters out YouTube Shorts, short clips, and video reels (duration $\le 60$s from browsers or titles containing `#shorts`/`#reels`/`#tiktok`) so Pink won't spam speech bubbles while you scroll. Can be toggled in the system tray.
+- **Short Audio & Minimum Track Duration Filter ($\ge 20$s)**: Automatically ignores any audio clips, sound effects, meme sounds, and tracks shorter than 20 seconds. Also aborts in-flight commentary if playback stops in under 20 seconds so premature skips or stopped sounds never generate unwanted comments.
 
 ### 🖥️ Window Switch & Flashbang Reactions
 - **Maximized App Startle**: Switching to any maximized window startles Pink (`shocked`, 30s cooldown).
@@ -64,15 +65,16 @@
 - Pauses current movement or pauses, plays the reaction, and resumes her schedule cleanly.
 
 ### 🐾 Hiding & Cinematic Summoning
+- **Hide to Tray 📥**: Completely vanish Pink from the desktop into the system tray via right-click, tray menu, or `/hide_tray`. While hidden, she remains invisible on screen but reads your screen in the background every 5 minutes to keep conversation context and maintain an active session. When you click or double-click the tray icon, she returns to the taskbar with a contextual greeting referencing what she observed while hidden!
 - **Ghost Ear Peeking**: While in hide mode, Pink rests invisibly below the taskbar with only her ghost ears peeking out at the bottom-right corner.
-- **Hide on Demand**: Right-click Pink or use the tray menu to choose **Hide 🐾**—she sprints offscreen to the right and surfaces at the hiding spot.
+- **Hide on Demand**: Right-click Pink or use the tray menu to choose **Hide (Peek Ears) 🐾**—she sprints offscreen to the right and surfaces at the hiding spot.
 - **Cinematic Summoning**: Click her peeking ears (or select **Call Pink 🐾** from the tray) to summon her: she floats up as a spectral ghost (`ghost/`), looks around, dashes offscreen, and dramatically pops onto the taskbar in her physical doll body (`shocked`)!
 
 ### 🖱️ Interactive Mouse Controls
 - **Single Left-click**: Plays a friendly random animation (`peace_sign`, `laughing`, or `shocked`) without speech dialogue.
 - **Double Left-click**: Opens the interactive **Chat Input Overlay ("Talk to Pink 💬")**.
 - **Left-click + drag**: Pick up and carry Pink around the screen (loops `shocked` while held). Release to watch gravity pull her back to the taskbar.
-- **Right-click**: Opens a context menu with **Talk to Pink 💬**, **Hide 🐾**, and **Exit**.
+- **Right-click**: Opens a context menu with **Talk to Pink 💬**, **Ask me something ❓**, **Hide to Tray 📥**, **Hide (Peek Ears) 🐾**, and **Exit**.
 - **Sprint to Exit**: Selecting **Exit** triggers a high-speed sprint to the furthest screen edge before cleanly closing the application.
 
 ### 🎛️ System Tray & Hidden Icons Control Center
@@ -86,7 +88,8 @@ Right-click the tray icon in your Windows notification area (`^`) to:
   - **Open Memory Folder 📂**: Opens `memory/` in Windows File Explorer.
   - **Clear Current Session 🧹**: Flushes in-memory context and initializes a clean session file.
   - **AI Token Usage 📊**: Pop up a dialogue bubble with live token analytics and context window headroom.
-- **Hide Pink 🐾**: Send Pink to her peeking spot.
+- **Hide to Tray 📥 / Restore Pink from Tray 📤**: Vanish completely into tray with 5-minute background screen reading, or restore to taskbar.
+- **Hide (Peek Ears) 🐾**: Send Pink to her peeking spot behind the taskbar.
 - **Bomb Attack Mode**: Toggle cursor bomb throws and tune odds with the embedded slider.
 - **Dialogue Bubbles**: Toggle speech bubbles on or off in real time.
 - **AI Song Commentary 🎵**: Toggle autonomous music track commentary on or off.
