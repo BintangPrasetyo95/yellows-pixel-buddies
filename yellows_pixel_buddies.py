@@ -6547,6 +6547,7 @@ class YellowsPixelBuddies(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)   # per-pixel transparency
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)   # don't grab focus when shown
         self.setFixedSize(SPRITE_SIZE, SPRITE_SIZE)            # window == one sprite
+        self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
         self.setWindowTitle("Yellow's Pixel Buddies")
         if ICON_PATH.exists():
@@ -7507,12 +7508,7 @@ class YellowsPixelBuddies(QWidget):
             changed = False
             for a in active:
                 if a.get("state") == "ringing":
-                    if a.get("type") == "timer" or a.get("repeat") == "once":
-                        a["state"] = "completed"
-                        a["finished_at"] = time.time()
-                        changed = True
-            if changed:
-                self._memory.save_alarms(active)
+                    self._memory.dismiss_alarm(a.get("id"))
         if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
             return
         if self._phase is Phase.SUMMON_DIALOGUE:
@@ -8013,6 +8009,11 @@ class YellowsPixelBuddies(QWidget):
 
     def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
         """Trigger the burnt state with foreground explosion VFX upon detecting an error."""
+        now = time.perf_counter()
+        if getattr(self, "_in_error_burnt", False) and (now - getattr(self, "_last_error_burnt_time", 0.0) < 3.0):
+            return
+        self._in_error_burnt = True
+        self._last_error_burnt_time = now
         self._interrupted_state = None
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
@@ -10426,6 +10427,18 @@ class YellowsPixelBuddies(QWidget):
             log.info("Debug jump skipped: the cursor is not above her hands - move it higher")
 
     # ------------------------------------------------------------------- mouse
+    def enterEvent(self, event) -> None:
+        if self._phase == Phase.HIDE_PEEK:
+            self.setCursor(Qt.PointingHandCursor)
+        elif not self._dragging:
+            self.setCursor(Qt.OpenHandCursor)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self._dragging:
+            self.setCursor(Qt.ArrowCursor)
+        super().leaveEvent(event)
+
     def mousePressEvent(self, event) -> None:
         if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             event.accept()
@@ -10461,6 +10474,8 @@ class YellowsPixelBuddies(QWidget):
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
         if self._press_global is None or not (event.buttons() & Qt.LeftButton):
+            if not self._dragging:
+                self.setCursor(Qt.OpenHandCursor)
             return
         if not self._dragging:
             # Only treat it as a drag after moving a few pixels, so plain clicks stay clicks.
@@ -10492,6 +10507,7 @@ class YellowsPixelBuddies(QWidget):
         if self._dragging:
             self._end_drag()
             return
+        self.setCursor(Qt.OpenHandCursor)
 
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW) or self._post_throw_laugh:
             # A plain click in mid-air or during post-throw victory laugh changes nothing: it must not
@@ -11044,6 +11060,10 @@ class YellowsPixelBuddies(QWidget):
             timers.append(self._screen_comment_timer)
         if hasattr(self, "_tray_screen_timer"):
             timers.append(self._tray_screen_timer)
+        if hasattr(self, "_alarm_ticker"):
+            timers.append(self._alarm_ticker)
+        if hasattr(self, "_single_click_timer"):
+            timers.append(self._single_click_timer)
         for timer in timers:
             timer.stop()
         self._stop_overlay()
