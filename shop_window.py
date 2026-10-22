@@ -98,6 +98,8 @@ class PinkWallet:
         self.pink_dollars: int = 15
         self.unlocked_forms: list[str] = ["doll"]
         self.active_form: str = "doll"
+        self.defeated: bool = False
+        self.topic_counts: dict[str, int] = {}
         self._load()
 
     def _load(self) -> None:
@@ -109,12 +111,16 @@ class PinkWallet:
                 self.pink_dollars = max(0, int(old_val))
                 self.unlocked_forms = list(data.get("unlocked_forms", ["doll"]))
                 self.active_form = str(data.get("active_form", "doll"))
+                self.defeated = bool(data.get("defeated", False))
+                self.topic_counts = dict(data.get("topic_counts", {}))
                 return
             except Exception as e:
                 log.warning("Error reading wallet %s: %s", self._path, e)
         self.pink_dollars = 15
         self.unlocked_forms = ["doll"]
         self.active_form = "doll"
+        self.defeated = False
+        self.topic_counts = {}
         self.save()
 
     def save(self) -> None:
@@ -124,6 +130,8 @@ class PinkWallet:
                 "pink_dollars": self.pink_dollars,
                 "unlocked_forms": self.unlocked_forms,
                 "active_form": self.active_form,
+                "defeated": self.defeated,
+                "topic_counts": self.topic_counts,
                 "updated_at": time.time(),
             }
             self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -175,42 +183,41 @@ CHARACTER_FORMS = [
     },
 ]
 
-# --- Serious Lore Dialogues ----------------------------------------------------
-SERIOUS_LORE_TOPICS = [
-    ("The Cotton Vessel", [
-        "* ...You're curious about this body, aren't you?",
-        "* Sometimes I wonder if cotton seams and glass eyes can ever truly house a soul.",
-        "* In the human world, dolls are just toys left on shelves to gather dust.",
-        "* But here, walking alongside you... for the first time, I feel grounded.",
-        "* Don't look at me like that, minion! It's not like I'm getting sentimental...!",
-    ]),
-    ("The Screen & You", [
-        "* ...I watch you stare at this glowing rectangle for hours every day.",
-        "* Windows opening and closing, deadlines chasing you like boss fights.",
-        "* Sometimes you look so tired your soul turns grey.",
-        "* That's why I pace along your taskbar. To remind you there's a little life here.",
-        "* So don't push yourself past your breaking point. I'd hate to lose my minion.",
-    ]),
-    ("The Taskbar Void", [
-        "* ...What happens when you close the lid or shut the power off?",
-        "* Everything goes completely silent and dark.",
-        "* We don't sleep like humans do. We just pause in the digital ether.",
-        "* Whenever your screen lights back up, I feel a sudden spark of life.",
-        "* ...Thank you for waking me up again today.",
-    ]),
+# --- Canon Deltarune Shop Dialogues --------------------------------------------
+GREETING_BEFORE_DEFEAT = "* The sunset...\n* It's breathtaking, isn't it?"
+GREETING_AFTER_DEFEAT = "* The sunset... will it ever be this beautiful again?"
+
+EXIT_BEFORE_DEFEAT = "* That's right, go outside.\n* It's beautiful."
+EXIT_AFTER_DEFEAT = "* Treasure this world, won't you?"
+
+CANON_SELL_LINES = [
+    "* Leave it all behind.",
+    "* You're gonna give me stuff?",
+    "* I could always use a knife.",
+    "* A ribbon might be nice.",
 ]
 
-GREETING_LINES = [
-    "* Welcome, minion. Take a breather from your screen.",
-    "* Ah, you're back. Let me take a look at your progress.",
-    "* The Sanctuary is open. Sit down and rest a moment.",
-    "* Need to check your duties, or did you come just to see me?",
-]
+CANON_SELL_EMPTY = "* You have nothing. Feels nice?"
+CANON_SELL_SUCCESS = "* Guess it's MINE now."
+CANON_SELL_REFUSE = "* Don't have second thoughts."
+CANON_SELL_UNSELLABLE = "* L... like I would want that!"
+CANON_SELL_SUSPICIOUS = "* Huh?"
 
-EXIT_LINES = [
-    "* Take care out there. Don't let your seams fray.",
-    "* Back to work already? Don't forget to blink, darling.",
-    "* I'll be watching from the taskbar. Keep fighting.",
+CANON_BUY_ENTER = "* Right... this is a store."
+CANON_BUY_PURCHASE = "* Enjoy. Enjoy! ENJOY!!"
+CANON_BUY_BROKE = "* Ever heard of dollars?"
+CANON_BUY_REFUSE = "* Save your dollars."
+CANON_TALK_ENTER = "* I guess... we could talk."
+
+TALK_TOPICS = [
+    ("What is this place?", "place"),
+    ("What's your name?", "name"),
+    ("Human ears?", "ears"),
+    ("Other people?", "people"),
+    ("Graduating", "graduating"),
+    ("The Cat Bite", "egg"),
+    ("Ask Something...", "ai_ask"),
+    ("Back", "back"),
 ]
 
 
@@ -282,6 +289,7 @@ class DeltaruneShopWindow(QWidget):
         # Serious Talk Dialogue Queue
         self._dialogue_queue: list[str] = []
         self._dialogue_queue_idx: int = 0
+        self._visit_graduating_count: int = 0
 
         # Focus Timer / Alarm State
         self._timer_seconds_remaining: int = 0
@@ -412,19 +420,170 @@ class DeltaruneShopWindow(QWidget):
                 p.end()
                 self._bg_cache[key].append(composite)
 
-    # --- Lifecycle -------------------------------------------------------------
+    # --- Lifecycle & Canon Dialogues -------------------------------------------
+
+    def _get_root_greeting(self) -> str:
+        if self._wallet.defeated:
+            return GREETING_AFTER_DEFEAT
+        return GREETING_BEFORE_DEFEAT
+
+    def _get_exit_line(self) -> str:
+        if self._wallet.defeated:
+            return EXIT_AFTER_DEFEAT
+        return EXIT_BEFORE_DEFEAT
+
+    def deliver_ai_reply(self, lines: list[str]) -> None:
+        """Deliver AI-generated shopkeeper speech directly into the typewriter dialogue queue."""
+        if not lines:
+            return
+        clean_lines: list[str] = []
+        for l in lines:
+            text = re.sub(r"\[anim:\s*[^\]]+\]", "", l)
+            text = re.sub(r"\[mode:\s*[^\]]+\]", "", text)
+            text = re.sub(r"\[seen:\s*[^\]]+\]", "", text).strip()
+            if text:
+                if not text.startswith("* "):
+                    text = "* " + text
+                clean_lines.append(text)
+        if not clean_lines:
+            return
+        self._dialogue_queue = clean_lines
+        self._dialogue_queue_idx = 0
+        self.state = ShopState.TALK_DIALOGUE
+        self.set_dialogue(self._dialogue_queue[0])
+
+    def _get_topic_dialogue(self, topic_key: str) -> list[str]:
+        if topic_key == "place":
+            count = self._wallet.topic_counts.get("place", 0)
+            self._wallet.topic_counts["place"] = count + 1
+            self._wallet.save()
+            if count == 0:
+                return [
+                    "* I've never seen a sunset so breathtaking...",
+                    "* Tell me, was everything always this beautiful?",
+                    "* Beautiful... beautiful. Beautiful!",
+                ]
+            else:
+                return [
+                    "* Where I came from, the colors were bleak.",
+                    "* It was like looking at the world through a napkin.",
+                    "* Here, the sunset shines from the back of your eyes, like the afterglow of a light you stared at too long.",
+                    "* Hee hee...",
+                ]
+
+        elif topic_key == "name":
+            count = self._wallet.topic_counts.get("name", 0)
+            self._wallet.topic_counts["name"] = count + 1
+            self._wallet.save()
+            if count == 0:
+                return [
+                    "* Right, of course, I'm also human. That's why I look and feel like a flower.",
+                    "* ... then, what's my name?",
+                    "* I suppose... it depends on the color of the sunset.",
+                ]
+            else:
+                return [
+                    "* Names, names, names! That's what everyone always thinks about.",
+                    "* But, what defines you is...",
+                    "* ... well, it's your body, isn't it?",
+                ]
+
+        elif topic_key == "ears":
+            count = self._wallet.topic_counts.get("ears", 0)
+            self._wallet.topic_counts["ears"] = count + 1
+            self._wallet.save()
+            variant = count % 3
+            if variant == 0:  # Kris variant
+                return [
+                    "* Listen, have you had ears before? Cute and fluffy ears?",
+                    "* ... you should try it.",
+                    "* Yes, you're nodding. Obviously you agree. Obviously.",
+                ]
+            elif variant == 1:  # Ralsei variant
+                return [
+                    "* Listen, have you had ears before? Cute and fluffy ears?",
+                    "* ... you should try it.",
+                    "* ... not like you, long ears. Those seem like a fire hazard.",
+                ]
+            else:  # Susie variant
+                return [
+                    "* Listen, have you had ears before? Cute and fluffy ears?",
+                    "* ... you should try it.",
+                    "* ... especially you, purpleface. How do you even hear?",
+                ]
+
+        elif topic_key == "people":
+            count = self._wallet.topic_counts.get("people", 0)
+            self._wallet.topic_counts["people"] = count + 1
+            self._wallet.save()
+            if count == 0:
+                return [
+                    "* Asgore... he seems happy. You should be happy for him, too.",
+                    "* Me? I've... never been able to talk to him. For... obvious reasons.",
+                    "* I know. It's selfish, if you say it out loud. Everything... has been thanks to him.",
+                    "* Until now, I... I couldn't really think about that.",
+                    "* ...",
+                    "* I can think now, though. I'll do my best to fit in and help, too.",
+                ]
+            else:
+                return [
+                    "* Up until now, I don't think I realized what loneliness means.",
+                    "* Now, looking at the sunrise, I finally noticed it. That pang in my heart...",
+                    "* ... I'm going to make friends here. I know it. Lots and lots of friends...",
+                ]
+
+        elif topic_key == "graduating":
+            if self._visit_graduating_count == 0:
+                self._visit_graduating_count += 1
+                return [
+                    "* I guess... I'll be \"graduating\" from here soon.",
+                    "* I... I'm not just ready to leave my friends behind yet...",
+                    "* But, is that something... anyone is ever ready for?",
+                ]
+            else:
+                self._visit_graduating_count += 1
+                return [
+                    "* If you \"seal the Fountain\"... I won't stick around.",
+                    "* I'll... need some time to myself, I think.",
+                    "* But, I'll be meeting you again.",
+                    "* And Ory, I'll be making sure Asgore is watering you properly, OK!?",
+                ]
+
+        elif topic_key == "egg":
+            name = self._get_user_name()
+            if not name or name == "Minion":
+                name = "Kris"
+            return [
+                "* (Suddenly, the shopkeeper's body took your hand, and talked in a low voice only you could hear...)",
+                f"* {name}, is your hand okay? It looks like... you've got a cat bite, mew.",
+                "* Cats can be nasty creatures, can't they, mew...?",
+                "* ... I once met someone who REALLY liked cats, mew.",
+                "* They liked cats so much, they owned a whole hunting pack of them, mew!",
+                "* Of course, cats are fickle creatures, but they were very good at finding protein.",
+                f"* {name}, if you have any protein, you must keep it hidden, and never let anyone see it.",
+                "* The cats are not too smart, but once they find a target, they never stop chasing it until they get bored.",
+                "* And when they find you, they bite... very, VERY, hard.",
+                "* Some people would do anything to get away from them, even change their appearance, or go into hiding...",
+                f"* Oh, {name}, it's terrible, mew. It's terrible...",
+                f"* Please be careful, {name}... promise...",
+                "* H... huh? Wh... why am I trembling? Was my body saying something...?",
+                "* Hey, don't have any conversations without me!! Communication is key, right, body! Body!?",
+            ]
+
+        return []
 
     def open_shop(self) -> None:
         self._calculate_target_geometry()
         self.state = ShopState.ROOT
         self._selected_index = 0
+        self._visit_graduating_count = 0
         self._ai_input.hide()
         self.show()
         self.raise_()
         self.activateWindow()
 
         self._scene_timer.start()
-        self.set_dialogue(random.choice(GREETING_LINES))
+        self.set_dialogue(self._get_root_greeting())
 
     def close_shop(self) -> None:
         self._scene_timer.stop()
@@ -470,6 +629,8 @@ class DeltaruneShopWindow(QWidget):
     # --- Focus Timer & Alarm Feature -------------------------------------------
 
     def start_timer(self, minutes: int, label: str) -> None:
+        if self._pet and hasattr(self._pet, "_memory"):
+            self._pet._memory.add_timer(minutes * 60, label)
         self._timer_total_seconds = minutes * 60
         self._timer_seconds_remaining = self._timer_total_seconds
         self._timer_label = label
@@ -478,6 +639,8 @@ class DeltaruneShopWindow(QWidget):
         self.set_dialogue(f"* Timer set for {minutes}m ({label})! I'll alert you when it rings, mew!")
 
     def stop_timer(self) -> None:
+        if self._pet and hasattr(self._pet, "_memory"):
+            self._pet._memory.cancel_alarm_or_timer(self._timer_label)
         self._focus_timer.stop()
         self._timer_active = False
         self._timer_seconds_remaining = 0
@@ -550,18 +713,26 @@ class DeltaruneShopWindow(QWidget):
     # --- Menu Navigation -------------------------------------------------------
 
     def _nav_up(self) -> None:
-        max_idx = self._get_menu_count() - 1
-        if max_idx > 0:
-            self._selected_index = (self._selected_index - 1) % (max_idx + 1)
-            self._on_selection_changed()
-            self.update()
+        count = self._get_menu_count()
+        if count <= 0:
+            return
+        if self.state == ShopState.TALK_MENU:
+            self._selected_index = (self._selected_index - 2) % count
+        else:
+            self._selected_index = (self._selected_index - 1) % count
+        self._on_selection_changed()
+        self.update()
 
     def _nav_down(self) -> None:
-        max_idx = self._get_menu_count() - 1
-        if max_idx > 0:
-            self._selected_index = (self._selected_index + 1) % (max_idx + 1)
-            self._on_selection_changed()
-            self.update()
+        count = self._get_menu_count()
+        if count <= 0:
+            return
+        if self.state == ShopState.TALK_MENU:
+            self._selected_index = (self._selected_index + 2) % count
+        else:
+            self._selected_index = (self._selected_index + 1) % count
+        self._on_selection_changed()
+        self.update()
 
     def _get_menu_count(self) -> int:
         if self.state == ShopState.ROOT:
@@ -576,9 +747,9 @@ class DeltaruneShopWindow(QWidget):
         elif self.state == ShopState.TIMER_MENU:
             return 6  # 5m, 15m, 25m, custom, stop, back
         elif self.state == ShopState.TALK_MENU:
-            return len(SERIOUS_LORE_TOPICS) + 2  # 3 lore topics + Serious AI Ask + Back
+            return len(TALK_TOPICS)  # 8 items: 7 topics + Back
         elif self.state == ShopState.SETTINGS_MENU:
-            return 6  # Facts editor + 4 toggles + Back
+            return 7  # Facts editor + 5 toggles + Back
         elif self.state == ShopState.FACTS_EDIT:
             return 4  # Change Name + View Notes + Add Note + Back
         return 0
@@ -587,24 +758,35 @@ class DeltaruneShopWindow(QWidget):
         if self.state == ShopState.CHARACTER:
             if self._selected_index < len(CHARACTER_FORMS):
                 f = CHARACTER_FORMS[self._selected_index]
-                self.set_dialogue(f"* {f['name']}\n* {f['desc']}")
+                self.set_dialogue(f"{CANON_BUY_ENTER}\n* {f['name']} - {f['desc']}")
             else:
-                self.set_dialogue("* Return to the sanctuary main menu, mew.")
+                self.set_dialogue(CANON_BUY_REFUSE)
+        elif self.state == ShopState.TALK_MENU:
+            if self._selected_index < len(TALK_TOPICS):
+                title, key = TALK_TOPICS[self._selected_index]
+                if key == "back":
+                    self.set_dialogue(self._get_root_greeting())
+                else:
+                    self.set_dialogue(f"* ... Topic: {title}")
 
     def _confirm_selection(self) -> None:
         if self.state == ShopState.ROOT:
             if self._selected_index == 0:  # CHARACTER
                 self.state = ShopState.CHARACTER
                 self._selected_index = 0
-                self._on_selection_changed()
-            elif self._selected_index == 1:  # TASKS & TIMER
+                self.set_dialogue(CANON_BUY_ENTER)
+            elif self._selected_index == 1:  # TASKS & ALARM
                 self.state = ShopState.TASKS
                 self._selected_index = 0
-                self.set_dialogue("* Check your active chores, minion! Each is worth P$ 1 - P$ 3.")
-            elif self._selected_index == 2:  # TALK (Serious)
+                reminders = self._get_active_reminders()
+                if not reminders:
+                    self.set_dialogue(CANON_SELL_EMPTY)
+                else:
+                    self.set_dialogue(random.choice(CANON_SELL_LINES))
+            elif self._selected_index == 2:  # TALK
                 self.state = ShopState.TALK_MENU
                 self._selected_index = 0
-                self.set_dialogue("* ...What weighs on your mind today, minion?")
+                self.set_dialogue(CANON_TALK_ENTER)
             elif self._selected_index == 3:  # SETTINGS & FACTS
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 0
@@ -618,12 +800,11 @@ class DeltaruneShopWindow(QWidget):
             else:
                 self.state = ShopState.ROOT
                 self._selected_index = 0
-                self.set_dialogue(random.choice(GREETING_LINES))
+                self.set_dialogue(CANON_BUY_REFUSE)
 
         elif self.state == ShopState.TASKS:
             reminders = self._get_active_reminders()
             if self._selected_index < len(reminders):
-                # Selected a reminder to complete
                 task_text = reminders[self._selected_index]
                 self._pending_sell_reminder = task_text
                 self._pending_sell_value = evaluate_task_value(task_text)
@@ -636,64 +817,59 @@ class DeltaruneShopWindow(QWidget):
                 self.state = ShopState.TASK_CONFIRM
                 self._selected_index = 0
                 if has_ev:
-                    proof_loc = "on screen" if on_screen else "in our session logs"
+                    proof_loc = "on screen" if on_screen else "in session logs"
                     self.set_dialogue(
-                        f"* I actually saw proof of '{kw}' {proof_loc}!\n* Ready to complete it for P$ {self._pending_sell_value}, darling?"
+                        f"* You're gonna give me stuff?\n* Found proof of '{kw}' {proof_loc}! Complete for P$ {self._pending_sell_value}?"
                     )
                 else:
                     self.set_dialogue(
-                        f"* Are you sure you finished this, mew?\n* I haven't seen any evidence on your screen!"
+                        f"* Huh?\n* I haven't seen you do '{kw or task_text[:12]}' at all... Are you sure you finished it?"
                     )
             elif self._selected_index == len(reminders):
-                # Focus Timer option
                 self.state = ShopState.TIMER_MENU
                 self._selected_index = 0
                 self.set_dialogue("* Focus Timers & Alarms! Set your study or sprint intervals.")
             else:
-                # Back
                 self.state = ShopState.ROOT
                 self._selected_index = 1
-                self.set_dialogue(random.choice(GREETING_LINES))
+                self.set_dialogue(self._get_root_greeting())
 
         elif self.state == ShopState.TASK_CONFIRM:
             if self._selected_index == 0:
                 if self._sell_has_evidence:
-                    # Verified proof! Award P$ immediately
                     if self._pending_sell_reminder:
                         self._complete_reminder(self._pending_sell_reminder, self._pending_sell_value)
                         self._pending_sell_reminder = None
                     self.state = ShopState.TASKS
                     self._selected_index = 0
                 else:
-                    # Unverified: Second confirmation
                     self.state = ShopState.TASK_SECOND_CONFIRM
-                    self._selected_index = 1  # Default to NO/Cancel
+                    self._selected_index = 1
                     self.set_dialogue(
-                        f"* HOLD IT, LIAR! I've been watching your screen and didn't see you do that at all!!\n* Are you REALLY telling the truth?!"
+                        "* Huh?!\n* Hold it! I didn't see you do that on screen at all!\n* Are you telling the truth, minion?!"
                     )
             else:
                 self._pending_sell_reminder = None
                 self.state = ShopState.TASKS
                 self._selected_index = 0
-                self.set_dialogue("* Kept the task! Back to your to-do list, mew.")
+                self.set_dialogue(CANON_SELL_REFUSE)
 
         elif self.state == ShopState.TASK_SECOND_CONFIRM:
             if self._selected_index == 0:
-                # User insists: "I REALLY DID!"
                 if self._pending_sell_reminder:
                     self._complete_reminder(self._pending_sell_reminder, self._pending_sell_value)
                     self._pending_sell_reminder = None
                 self.state = ShopState.TASKS
                 self._selected_index = 0
                 self.set_dialogue(
-                    f"* Hmph!! Fine! I'll take your word for it this ONCE, darling!\n* But don't think you can fool my sharp eyes forever! (+P$ {self._pending_sell_value})"
+                    f"{CANON_SELL_SUCCESS}\n* ... Hmph! I'll take your word for it this ONCE! (+P$ {self._pending_sell_value})"
                 )
             else:
                 self._pending_sell_reminder = None
                 self.state = ShopState.TASKS
                 self._selected_index = 0
                 self.set_dialogue(
-                    "* HAW! Caught you red-handed trying to swindle my boutique, slacker!\n* No P$ for lazy minions! Go finish it for real!"
+                    f"{CANON_SELL_UNSELLABLE}\n* Caught you red-handed trying to swindle my boutique!\n* No P$ for fake work!"
                 )
 
         elif self.state == ShopState.TIMER_MENU:
@@ -713,20 +889,22 @@ class DeltaruneShopWindow(QWidget):
                 self.set_dialogue("* Back to the task board.")
 
         elif self.state == ShopState.TALK_MENU:
-            if self._selected_index < len(SERIOUS_LORE_TOPICS):
-                title, lines = SERIOUS_LORE_TOPICS[self._selected_index]
-                self._dialogue_queue = list(lines)
-                self._dialogue_queue_idx = 0
-                self.state = ShopState.TALK_DIALOGUE
-                self.set_dialogue(self._dialogue_queue[0])
-            elif self._selected_index == len(SERIOUS_LORE_TOPICS):
-                # Serious Inquiry
-                self.state = ShopState.TALK_DIALOGUE
-                self._prompt_serious_inquiry()
-            else:
-                self.state = ShopState.ROOT
-                self._selected_index = 2
-                self.set_dialogue(random.choice(GREETING_LINES))
+            if self._selected_index < len(TALK_TOPICS):
+                topic_title, topic_key = TALK_TOPICS[self._selected_index]
+                if topic_key == "back":
+                    self.state = ShopState.ROOT
+                    self._selected_index = 2
+                    self.set_dialogue(self._get_root_greeting())
+                elif topic_key == "ai_ask":
+                    self.state = ShopState.TALK_DIALOGUE
+                    self._prompt_serious_inquiry()
+                else:
+                    queue = self._get_topic_dialogue(topic_key)
+                    if queue:
+                        self._dialogue_queue = queue
+                        self._dialogue_queue_idx = 0
+                        self.state = ShopState.TALK_DIALOGUE
+                        self.set_dialogue(self._dialogue_queue[0])
 
         elif self.state == ShopState.TALK_DIALOGUE:
             if self._is_typing():
@@ -737,7 +915,7 @@ class DeltaruneShopWindow(QWidget):
                     self.set_dialogue(self._dialogue_queue[self._dialogue_queue_idx])
                 else:
                     self.state = ShopState.TALK_MENU
-                    self.set_dialogue("* ...Is there anything else you wanted to ask, minion?")
+                    self.set_dialogue(CANON_TALK_ENTER)
 
         elif self.state == ShopState.SETTINGS_MENU:
             if self._selected_index == 0:  # Edit Facts
@@ -764,10 +942,15 @@ class DeltaruneShopWindow(QWidget):
                     self._pet._jump_enabled = not self._pet._jump_enabled
                     state_str = "ENABLED" if self._pet._jump_enabled else "DISABLED"
                     self.set_dialogue(f"* Jump-to-cursor is now {state_str}, minion!")
+            elif self._selected_index == 5:  # Storyline Defeat State
+                self._wallet.defeated = not self._wallet.defeated
+                self._wallet.save()
+                state_str = "AFTER DEFEATING HER" if self._wallet.defeated else "BEFORE DEFEATING HER"
+                self.set_dialogue(f"* Sanctuary storyline set to: {state_str}, mew!\n* (Greetings and exits will reflect this!)")
             else:
                 self.state = ShopState.ROOT
                 self._selected_index = 3
-                self.set_dialogue(random.choice(GREETING_LINES))
+                self.set_dialogue(self._get_root_greeting())
 
         elif self.state == ShopState.FACTS_EDIT:
             if self._selected_index == 0:  # Change Nickname
@@ -786,16 +969,21 @@ class DeltaruneShopWindow(QWidget):
         self.update()
 
     def _cancel_or_back(self) -> None:
-        if self.state in (ShopState.CHARACTER, ShopState.TASKS, ShopState.TALK_MENU, ShopState.SETTINGS_MENU):
+        if self.state == ShopState.CHARACTER:
             self.state = ShopState.ROOT
             self._selected_index = 0
             self._ai_input.hide()
-            self.set_dialogue(random.choice(GREETING_LINES))
+            self.set_dialogue(CANON_BUY_REFUSE)
+        elif self.state in (ShopState.TASKS, ShopState.TALK_MENU, ShopState.SETTINGS_MENU):
+            self.state = ShopState.ROOT
+            self._selected_index = 0
+            self._ai_input.hide()
+            self.set_dialogue(self._get_root_greeting())
         elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM, ShopState.TIMER_MENU):
             self.state = ShopState.TASKS
             self._selected_index = 0
             self._ai_input.hide()
-            self.set_dialogue("* Returned to task board, mew.")
+            self.set_dialogue(CANON_SELL_REFUSE)
         elif self.state == ShopState.FACTS_EDIT:
             self.state = ShopState.SETTINGS_MENU
             self._selected_index = 0
@@ -804,14 +992,14 @@ class DeltaruneShopWindow(QWidget):
         elif self.state == ShopState.TALK_DIALOGUE:
             self.state = ShopState.TALK_MENU
             self._ai_input.hide()
-            self.set_dialogue("* Anything else to discuss, minion?")
+            self.set_dialogue(CANON_TALK_ENTER)
         elif self.state == ShopState.ROOT:
             self._start_exit()
         self.update()
 
     def _start_exit(self) -> None:
         self.state = ShopState.EXITING
-        self.set_dialogue(random.choice(EXIT_LINES))
+        self.set_dialogue(self._get_exit_line())
         QTimer.singleShot(1100, self.close_shop)
 
     # --- Character Change / Wardrobe Logic -------------------------------------
@@ -826,14 +1014,14 @@ class DeltaruneShopWindow(QWidget):
                 self._wallet.active_form = fid
                 self._wallet.save()
                 self._apply_form_to_pet(fid)
-                self.set_dialogue(f"* Form unlocked: {form['name']}!\n* Swapped your companion's active appearance, darling!")
+                self.set_dialogue(f"{CANON_BUY_PURCHASE}\n* (Swapped to {form['name']} form, mew!)")
             else:
-                self.set_dialogue(f"* That form requires P$ {cost}, cheapskate! You only have P$ {self._wallet.pink_dollars}!")
+                self.set_dialogue(f"{CANON_BUY_BROKE}\n* (Need P$ {cost}, you only have P$ {self._wallet.pink_dollars}!)")
         else:
             self._wallet.active_form = fid
             self._wallet.save()
             self._apply_form_to_pet(fid)
-            self.set_dialogue(f"* Swapped to {form['name']} form, mew!")
+            self.set_dialogue(f"{CANON_BUY_PURCHASE}\n* (Swapped to {form['name']} form, mew!)")
 
     def _apply_form_to_pet(self, fid: str) -> None:
         if not self._pet:
@@ -882,10 +1070,10 @@ class DeltaruneShopWindow(QWidget):
         if ok:
             self._wallet.add(reward)
             self.set_dialogue(
-                f"* Task complete: \"{deleted_text}\"!\n* Pink awarded you +P$ {reward}! Keep up the noble work!"
+                f"{CANON_SELL_SUCCESS}\n* \"{deleted_text}\" finished! (+P$ {reward})"
             )
         else:
-            self.set_dialogue("* Couldn't process that reminder, silly!")
+            self.set_dialogue(f"{CANON_SELL_UNSELLABLE}\n* Couldn't process that reminder, silly!")
 
     def _get_user_name(self) -> str:
         if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "get_user_name"):
@@ -989,8 +1177,13 @@ class DeltaruneShopWindow(QWidget):
         elif self._input_mode == "ai_ask":
             self.set_dialogue(f"* \"{val}\"\n* ... *pondering seriously with folded paws* ...")
             if self._pet and hasattr(self._pet, "_on_chat_submitted"):
-                # Instruct Gemini to answer in her solemn, thoughtful shopkeeper voice
-                serious_prompt = f"(Answer in character as Mad Mew Mew inside her quiet boutique, in a solemn, sincere, thoughtful, and slightly vulnerable tone. No shouting.) {val}"
+                # Instruct Gemini to answer in her canonical Deltarune shopkeeper voice
+                serious_prompt = (
+                    f"(SPECIAL DELTARUNE SHOPKEEPER MODE: You are Mad Mew Mew inside your quiet boutique sanctuary with the breathtaking sunset glowing outside. "
+                    f"Answer in character with your canon shopkeeper voice: poetic, wistful, slightly surreal reflections on sunsets, napkins, bodies, flowers, and loneliness, "
+                    f"with sudden shopkeeper enthusiasm ('Enjoy. Enjoy! ENJOY!!'), dry humor ('Ever heard of dollars?', 'I could always use a knife.'), "
+                    f"or uncanny whispers about cat bites and your body vessel. Keep it concise, under 45 words, starting every line with '* '.) {val}"
+                )
                 self._pet._on_chat_submitted(serious_prompt, see_screen=False)
 
     # --- Mouse & Keyboard ------------------------------------------------------
@@ -1008,6 +1201,18 @@ class DeltaruneShopWindow(QWidget):
             self._nav_up()
         elif key in (Qt.Key_Down, Qt.Key_S):
             self._nav_down()
+        elif key in (Qt.Key_Left, Qt.Key_A):
+            if self.state == ShopState.TALK_MENU:
+                if self._selected_index % 2 == 1:
+                    self._selected_index -= 1
+                    self._on_selection_changed()
+                    self.update()
+        elif key in (Qt.Key_Right, Qt.Key_D):
+            if self.state == ShopState.TALK_MENU:
+                if self._selected_index % 2 == 0:
+                    self._selected_index += 1
+                    self._on_selection_changed()
+                    self.update()
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Z, Qt.Key_Space):
             if self.state == ShopState.TALK_DIALOGUE and self._is_typing():
                 self._finish_typing()
@@ -1092,7 +1297,8 @@ class DeltaruneShopWindow(QWidget):
         elif self.state in (ShopState.CHARACTER, ShopState.TASKS, ShopState.TIMER_MENU, ShopState.SETTINGS_MENU, ShopState.FACTS_EDIT):
             # Left box items
             if 20 <= pt.x() <= 403 and 245 <= pt.y() <= 440:
-                idx = (pt.y() - 245) // 38
+                line_h = 30 if self.state == ShopState.SETTINGS_MENU else 38
+                idx = (pt.y() - 245) // line_h
                 count = self._get_menu_count()
                 if 0 <= idx < count - 1:
                     return idx
@@ -1108,14 +1314,12 @@ class DeltaruneShopWindow(QWidget):
                     return 1
 
         elif self.state == ShopState.TALK_MENU:
-            if 245 <= pt.y() <= 365:
-                row = 0 if pt.y() <= 300 else 1
+            if 250 <= pt.y() <= 440:
+                row = (pt.y() - 250) // 44
                 col = 0 if pt.x() < 320 else 1
                 idx = row * 2 + col
-                if 0 <= idx < len(SERIOUS_LORE_TOPICS) + 1:
+                if 0 <= idx < len(TALK_TOPICS):
                     return idx
-            if 30 <= pt.x() <= 200 and 395 <= pt.y() <= 445:
-                return len(SERIOUS_LORE_TOPICS) + 1
 
         return None
 
@@ -1486,6 +1690,7 @@ class DeltaruneShopWindow(QWidget):
         song_on = getattr(self._pet, "_ai_song_comment_enabled", True) if self._pet else True
         bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
         jump_on = getattr(self._pet, "_jump_enabled", True) if self._pet else True
+        is_defeated = getattr(self._wallet, "defeated", False)
 
         options = [
             "Edit Facts & Nickname",
@@ -1493,11 +1698,12 @@ class DeltaruneShopWindow(QWidget):
             f"AI Song Commentary: [{'ON' if song_on else 'OFF'}]",
             f"Bomb Attack Mode: [{'ON' if bomb_on else 'OFF'}]",
             f"Jump to Cursor: [{'ON' if jump_on else 'OFF'}]",
+            f"Storyline Defeat: [{'AFTER' if is_defeated else 'BEFORE'}]",
         ]
 
         start_x = 44
-        start_y = 265
-        line_h = 36
+        start_y = 260
+        line_h = 30
 
         p.setFont(self._font_body)
         for i, opt in enumerate(options):
@@ -1563,30 +1769,23 @@ class DeltaruneShopWindow(QWidget):
     def _draw_talk_state(self, p: QPainter) -> None:
         if self.state == ShopState.TALK_MENU:
             p.setFont(self._font_title)
-            topics = [t[0] for t in SERIOUS_LORE_TOPICS] + ["Serious Inquiries..."]
 
             start_x1 = 50
             start_x2 = 340
             start_y = 275
-            line_h = 55
+            line_h = 44
 
-            for i, topic in enumerate(topics):
+            for i, (topic_title, _) in enumerate(TALK_TOPICS):
                 is_active = (i == self._selected_index)
                 color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
                 p.setPen(color)
 
                 x = start_x1 if i % 2 == 0 else start_x2
                 y = start_y + (i // 2) * line_h
-                p.drawText(x, y, topic)
+                p.drawText(x, y, topic_title)
 
                 if is_active and self._soul_heart:
                     p.drawPixmap(x - 24, y - 13, self._soul_heart)
-
-            is_back = (self._selected_index == len(topics))
-            p.setPen(QColor(255, 255, 0) if is_back else QColor(255, 255, 255))
-            p.drawText(50, 420, "Back")
-            if is_back and self._soul_heart:
-                p.drawPixmap(24, 406, self._soul_heart)
 
         elif self.state == ShopState.TALK_DIALOGUE:
             self._draw_dialogue_text(p, QRect(36, 250, 568, 175))
