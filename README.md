@@ -23,12 +23,14 @@
 - **Secret Test Commands**: Type `/error`, `/test-error`, or `test error` into the chat bar to test the error explosion VFX and burnt animation on demand.
 
 ### 💾 Persistent Memory & Context
+- **Permanent Windows Storage**: All user facts, chat sessions, reminders, and API keys are stored safely in `%APPDATA%\YellowsPixelBuddies\memory` (`C:\Users\<User>\AppData\Roaming\YellowsPixelBuddies\memory`), completely update-proof and persistent across laptop reboots and app updates.
 - **Session Logging**: All conversation turns are automatically recorded with status, timestamps, user text, spoken dialogue, and emotion tags in `memory/sessions/session_<timestamp>.json`.
 - **Cross-Session Fact Retention**: Pink remembers long-term facts about the user across sessions stored in `memory/facts.json`.
 - **30-Day Active Reminders & To-Dos**: Save, edit, or delete temporary reminders stored in `memory/reminders.json`. Pink tracks them in your context and auto-prunes anything older than 30 days. Manage them via chat commands (`/remind`, `/del_reminder`, `/edit_reminder`, `/clear_reminders`, `/reminders`) or visually through the system tray.
 - **AI Token Analytics & Quota Tracking**: Ask Pink anytime (`"how much token left"`, `"ai token"`, or `/tokens`) or click **AI Token Usage 📊** in the tray menu. Pink gives an instant in-character report on active context window tokens remaining (out of 1,048,576), last query token breakdown, and today's session usage without consuming extra API calls.
 - **In-App Memory Controls**: Open the memory folder, clear current session memory, manage reminders, or check token usage directly through the system tray (**Memory Storage 🧠**).
 - **Flexible API Key Storage**: Seamlessly loads your Gemini API key from the environment, `.env` file, `memory/config.json`, or the in-app popup dialog.
+- **True Portable Mode**: If running from a USB drive, place a blank `portable.txt` next to the executable to store all memories directly on the drive.
 
 ### ❓ Interactive DELTARUNE Choice Questions
 - **Branching Prompts**: Pink periodically pauses during idle periods to ask interactive questions with clickable choice buttons inside the speech bubble (e.g. asking about taskbar cleanliness, taking breaks, motivation, or gaming habits).
@@ -104,15 +106,28 @@ Right-click the tray icon in your Windows notification area (`^`) to:
 
 ## 🚀 Getting Started
 
-### Prerequisites
+### Option A: Install via Windows Setup (Recommended)
+1. Download **`Yellows-Pixel-Buddies-Setup.exe`** from [Releases](https://github.com/bintangprasetyo95/yellows-pixel-buddies/releases).
+2. Double-click the installer. It installs per-user into `%LOCALAPPDATA%\Programs\Yellows Pixel Buddies` with **zero UAC / Administrator prompts needed**.
+3. Choose whether to create a Desktop shortcut and start with Windows, click **Finish**, and Pink will walk right onto your taskbar!
+4. All memories, facts, and settings are preserved in `%APPDATA%\YellowsPixelBuddies\memory` across all future updates!
 
+### Option B: Portable Executable (.exe)
+1. Download **`Yellows-Pixel-Buddies.exe`** from [Releases](https://github.com/bintangprasetyo95/yellows-pixel-buddies/releases).
+2. Place it in any folder (Desktop, Documents, or USB drive) and run it directly—no installation needed!
+3. *(Optional)* To keep memories strictly on a USB thumb drive, place an empty `portable.txt` file next to `Yellows-Pixel-Buddies.exe`.
+
+---
+
+### Option C: Run from Source (Developers)
+
+#### Prerequisites
 - **Operating System**: Windows 10 or 11
 - **Python**: 3.10 or higher
 - **Core Dependencies**: `PyQt5`, `requests`
 - *(Optional)* **Windows Media Control**: `winrt-runtime` and `winrt-Windows.Media.Control` (for automatic GSMTC music playback detection)
 
-### Installation
-
+#### Developer Setup
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/bintangprasetyo95/yellows-pixel-buddies.git
@@ -148,33 +163,45 @@ Right-click the tray icon in your Windows notification area (`^`) to:
 
 ---
 
-## 📦 Building a Standalone Executable (.exe)
+## 📦 Building & Creating the Installer
 
-You can compile Yellow's Pixel Buddies into an independent Windows `.exe` using [PyInstaller](https://pyinstaller.org/) so it runs without installing Python.
+You can compile both the standalone executable and the setup installer:
 
-1. **Install PyInstaller**:
+### Method 1: All-in-One Build Script (Fastest)
+Run the included build script:
+```cmd
+build_release.bat
+```
+This builds `dist/Yellows-Pixel-Buddies.exe` via PyInstaller and automatically compiles `dist/Yellows-Pixel-Buddies-Setup.exe` with Inno Setup.
+
+### Method 2: Manual Step-by-Step
+
+1. **Install PyInstaller & Inno Setup**:
    ```bash
    pip install pyinstaller
+   winget install JRSoftware.InnoSetup -e
    ```
 
-2. **Build using the included `.spec` file**:
+2. **Build the Standalone `.exe`**:
    ```bash
-   python -m PyInstaller Yellows-Pixel-Buddies.spec
+   python -m PyInstaller --clean Yellows-Pixel-Buddies.spec
    ```
-   The generated executable will be placed in `dist/`:
-   ```text
-   dist/Yellows-Pixel-Buddies.exe
-   ```
+   Output: `dist/Yellows-Pixel-Buddies.exe`
 
-3. **Manual PyInstaller Build Command**:
-   If building without the `.spec` file, bundle required asset directories:
-   ```bash
-   python -m PyInstaller --noconsole --onefile --name "Yellows-Pixel-Buddies" --icon "app_icon.ico" --add-data "sprites;sprites" --add-data "fonts;fonts" --add-data "app_icon.ico;." yellows_pixel_buddies.py
+3. **Compile the Setup Installer**:
+   Compile `installer.iss` using Inno Setup:
+   ```powershell
+   & "$env:LOCALAPPDATA\Programs\Inno Setup 6\iscc.exe" installer.iss
    ```
+   Output: `dist/Yellows-Pixel-Buddies-Setup.exe`
 
-> [!TIP]
-> - Memory files (`memory/`) will automatically be created next to your `.exe` or Python script upon first run.
-> - If PowerShell returns `The term 'pyinstaller' is not recognized...`, use `python -m PyInstaller` to ensure Python's script directory is invoked.
+---
+
+## 🔄 Automatic Updates
+- Pink includes a built-in update checker connected to GitHub Releases.
+- **Background Checks**: Runs automatically 15 seconds after launch.
+- **Manual Check**: Right-click Pink or click **Check for Updates 🔄** in the system tray menu.
+- **Safe Swapping**: When an update is accepted, Pink downloads the new binary, smoothly restarts, and connects right back to your saved `%APPDATA%` memories without losing any facts or chat history.
 
 ---
 
