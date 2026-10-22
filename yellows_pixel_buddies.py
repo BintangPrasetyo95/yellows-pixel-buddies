@@ -2598,7 +2598,6 @@ class DialogueOverlay(QWidget):
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
-        painter.setRenderHint(QPainter.TextAntialiasing, False)
         painter.drawPixmap(0, 0, self._cached_bg)
 
         painter.setFont(self._font)
@@ -3015,7 +3014,6 @@ class ChatInputOverlay(QWidget):
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
-        painter.setRenderHint(QPainter.TextAntialiasing, False)
         painter.drawPixmap(0, 0, self._cached_bg)
         painter.end()
 
@@ -6911,14 +6909,17 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_hidden_in_tray", False):
             return
-        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
-            return
         if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                               Phase.SUMMON_INTRO, Phase.EXIT_OUTRO)
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
+
+        if isinstance(category_or_text, str):
+            trimmed = category_or_text.strip()
+            if not trimmed.startswith("*"):
+                category_or_text = f"* {trimmed}"
 
         if isinstance(category_or_text, DialogueStep):
             if step_anim is None:
@@ -7315,8 +7316,6 @@ class YellowsPixelBuddies(QWidget):
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return False
         if getattr(self, "_hidden_in_tray", False):
-            return
-        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
             return False
 
         api_key = self._memory.get_api_key()
@@ -8110,8 +8109,6 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_hidden_in_tray", False):
             return
-        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
-            return
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -8548,7 +8545,11 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.dismiss(clear_queue=True)
 
-        # Pause pet movement so taskbar updates don't compete with shop UI
+        # Pause pet movement and cancel any combat/explosions so taskbar stays peaceful
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay.reset_state()
+        if hasattr(self, "_overlay_state") and self._overlay_state:
+            self._stop_overlay()
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if self._can_play("wistful"):
@@ -9320,8 +9321,6 @@ class YellowsPixelBuddies(QWidget):
         self._track_cursor(cursor, now, real_dt)
         if getattr(self, "_hidden_in_tray", False):
             return
-        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
-            return
         if getattr(self, "_is_ghost_talking", False):
             self.update()
         if self._dragging:                          # held by the mouse: stand still
@@ -9553,8 +9552,6 @@ class YellowsPixelBuddies(QWidget):
         to the screen via the system tray icon.
         """
         if getattr(self, "_hidden_in_tray", False):
-            return
-        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
             return
 
         if hasattr(self, "_single_click_timer"):
