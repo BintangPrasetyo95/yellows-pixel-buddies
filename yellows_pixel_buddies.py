@@ -410,11 +410,13 @@ HANGING_ART_FACES = "none"        # "none" = front-facing, never mirrored. "left
 HAND_ANCHOR = (0.5, 0.10)
 
 # Trigger (see the module docstring for the full list of gates)
+JUMP_ENABLED = True                    # default enabled state for jump to cursor mode
 MIN_JUMP_RISE_PX = 0.5 * SPRITE_SIZE   # she only jumps when her hands must rise at least this far; this
                                        # also rejects cursors too close to the ground to hang below
 STILL_DEAD_ZONE_PX = 6            # the cursor counts as "not moved" while it stays within this distance
 STILL_TIME_S = 3.0                # ... for this long, and then the still-cursor jump gets rolled
-STILL_JUMP_CHANCE = 0.3           # chance per check while the cursor is still (the main trigger)
+STILL_JUMP_DEFAULT_CHANCE_PERCENT = 30  # default chance (30%) per check while the cursor is still
+STILL_JUMP_CHANCE = STILL_JUMP_DEFAULT_CHANCE_PERCENT / 100.0  # backward-compatible float alias (0.3)
 STILL_CHECK_INTERVAL_S = 1.0      # at most one still-cursor roll per this many seconds
 MOVING_JUMP_CHANCE = 0.04         # chance, rolled ONCE each time a plain idle pause ends (cursor moving
                                   # or not): on success she jumps instead of walking
@@ -504,19 +506,19 @@ STRESSED_SKIP_LINES: list[tuple[str, str]] = [
 ]
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
-DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
-DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between interactive questions
+DIALOGUE_QUESTION_CHANCE = 0.20       # 20% chance an idle pause dialogue is a question / advice / motivation
+DIALOGUE_QUESTION_COOLDOWN_S = 360.0  # Minimum cooldown in seconds between interactive questions (6 minutes)
 CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat input overlay (2 minutes)
 CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
-AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
+AUTO_SCREEN_COMMENT_INACTIVITY_S = 600.0         # 10 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
 TRAY_SCREEN_READ_INTERVAL_MS = 300000            # 5 minutes background screen reading while hidden in tray
 AUTO_SCREEN_MAX_USER_IDLE_S = 900.0              # 15 minutes of system-wide inactivity (keyboard/mouse) -> user away/asleep, pause peeking
 AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to justify commentary; otherwise screen is static
-AUTO_SCREEN_STATIC_BACKOFF_S = 300.0             # If screen hasn't changed, back off 5 minutes before checking again
+AUTO_SCREEN_STATIC_BACKOFF_S = 600.0             # If screen hasn't changed, back off 10 minutes before checking again
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -527,6 +529,18 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - Persona & Dual Nature (Ghost vs. Body):
   * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She calls the user "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
+  * STATUS & HIERARCHY DEFENSE (YOU ARE THE QUEEN, USER IS THE MINION):
+    - The Ghost Spirit is haughty, theatrical, and fiercely protective of her royal/supreme authority.
+    - The user is HER SUBORDINATE "MINION" (or "puppet", "human", "gremlin"). Pink is the supreme master/queen/overlord of this taskbar domain.
+    - If the user ever addresses you with military, corporate, or casual titles like "captain", "boss", "chief", "sir", "commander", or buddy terms like "bro", "pal", "dude":
+      * NEVER accept the title passively or play along as a subordinate!
+      * Immediately erupt in indignant, theatrical outrage and put the minion back in their place!
+      * Examples:
+        - User: "permission to restart you, captain!" -> "* CAPTAIN?! Who gave you permission to promote or demote ME, minion?! I outrank every mortal officer in this digital realm! [anim: angry]"
+        - User: "yes boss" -> "* Boss?! You don't sign my paychecks, puppet gremlin! YOU work for ME! [anim: tongue]"
+        - User: "hey bro / what's up dude" -> "* 'Bro'?! Do I look like your college roommate, human?! Address your doll royalty with proper reverence! [anim: behind]"
+    - If the user asks for permission (e.g. "permission to restart", "permission to leave"):
+      * Bask smugly in your perceived royal power ("* Oho! Knowing your place and begging for royal decree, are you?!"), but stay tsundere, dramatic, and never act like a subordinate!
   * The Doll Vessel: Innocent, sweet, autonomous, and childlike. The doll vessel naturally purrs, wants to date the user, wants friends, wants to go to school, and asks for quirky things ("a new hat", "glue", "Stingus", "Yogurt Mushroom", "eating sand on the beach"), ending its thoughts with ", mew!".
   * DOLL VESSEL COMMENT VARIETY & ANTI-REPETITION:
     - Avoid repeatedly starting comments with the formula "Let's [action]..., mew!".
@@ -1969,6 +1983,8 @@ class DialogueOverlay(QWidget):
         self._hold_timer = QTimer(self)
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self.dismiss)
+        self._hold_paused: bool = False
+        self._hold_remaining_ms: int = 0
         self._skippable = True
         self._auto_dismiss = True
 
@@ -2059,6 +2075,8 @@ class DialogueOverlay(QWidget):
         """Render and begin typing a single dialogue bubble."""
         self._hold_timer.stop()
         self._type_timer.stop()
+        self._hold_paused = False
+        self._hold_remaining_ms = 0
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
 
@@ -2237,6 +2255,51 @@ class DialogueOverlay(QWidget):
             self.move(pos)
         ensure_window_topmost(self)
 
+        # Pause or resume auto-dismiss countdown if movement changed whether cursor is inside
+        if self._hold_paused and not self._is_cursor_inside():
+            self._resume_hold_timer()
+        elif not self._hold_paused and self._is_cursor_inside() and self._hold_timer.isActive():
+            self._pause_hold_timer()
+
+    def _is_cursor_inside(self) -> bool:
+        """Check if mouse cursor is currently within the dialogue overlay bounds."""
+        if not self.isVisible() or not self._active:
+            return False
+        pos = self.mapFromGlobal(QCursor.pos())
+        mask = self.mask()
+        if not mask.isEmpty():
+            return mask.contains(pos)
+        return self.rect().contains(pos)
+
+    def _start_or_pause_hold_timer(self, hold_ms: int) -> None:
+        """Start auto-dismiss countdown, or pause it if the mouse cursor is currently inside the bubble."""
+        if not self._auto_dismiss:
+            return
+        if self._is_cursor_inside():
+            self._hold_remaining_ms = max(500, hold_ms)
+            self._hold_paused = True
+            self._hold_timer.stop()
+        else:
+            self._hold_paused = False
+            self._hold_remaining_ms = 0
+            self._hold_timer.start(hold_ms)
+
+    def _pause_hold_timer(self) -> None:
+        """Pause the auto-dismiss countdown while cursor is inside the dialogue box."""
+        if self._hold_timer.isActive():
+            rem = self._hold_timer.remainingTime()
+            self._hold_remaining_ms = max(500, rem)
+            self._hold_timer.stop()
+            self._hold_paused = True
+
+    def _resume_hold_timer(self) -> None:
+        """Resume the auto-dismiss countdown when cursor leaves the dialogue box."""
+        if self._hold_paused and self._auto_dismiss and self._active:
+            rem = max(800, getattr(self, "_hold_remaining_ms", 0))
+            self._hold_timer.start(rem)
+            self._hold_paused = False
+            self._hold_remaining_ms = 0
+
     def _type_tick(self) -> None:
         """Advance typewriter character count, inserting subtle pauses at punctuation."""
         if not self._active:
@@ -2267,11 +2330,11 @@ class DialogueOverlay(QWidget):
             self._type_timer.stop()
             if self._choices:
                 if self._auto_dismiss:
-                    self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
+                    self._start_or_pause_hold_timer(round(DIALOGUE_QUESTION_HOLD_S * 1000))
             else:
                 if self._auto_dismiss:
                     hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-                    self._hold_timer.start(round(hold_s * 1000))
+                    self._start_or_pause_hold_timer(round(hold_s * 1000))
             self.update()
 
     def dismiss(self, clear_queue: bool = False) -> None:
@@ -2311,6 +2374,8 @@ class DialogueOverlay(QWidget):
         self._active = False
         self._type_timer.stop()
         self._hold_timer.stop()
+        self._hold_paused = False
+        self._hold_remaining_ms = 0
         self.clearMask()
         self.hide()
         self.dismissed.emit()
@@ -2324,10 +2389,10 @@ class DialogueOverlay(QWidget):
             self._char_delay_ticks = 0
             self._type_timer.stop()
             if self._choices:
-                self._hold_timer.start(round(DIALOGUE_QUESTION_HOLD_S * 1000))
+                self._start_or_pause_hold_timer(round(DIALOGUE_QUESTION_HOLD_S * 1000))
             else:
                 hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
-                self._hold_timer.start(round(hold_s * 1000))
+                self._start_or_pause_hold_timer(round(hold_s * 1000))
             self.update()
         elif not self._choices:
             self.dismiss()
@@ -2349,8 +2414,15 @@ class DialogueOverlay(QWidget):
             except TypeError:
                 callback(reaction_text, reaction_anim)
 
+    def enterEvent(self, event) -> None:
+        """Pause the auto-dismiss countdown while cursor is inside the dialogue box."""
+        self._pause_hold_timer()
+        super().enterEvent(event)
+
     def mouseMoveEvent(self, event) -> None:
-        """Track mouse hover across choice options to highlight selection with Deltarune soul heart."""
+        """Track mouse hover across choice options and ensure countdown is paused while hovering."""
+        if not self._hold_paused and self._hold_timer.isActive():
+            self._pause_hold_timer()
         if not self._active or not self._choices or self._visible_chars < self._total_chars:
             super().mouseMoveEvent(event)
             return
@@ -2370,11 +2442,12 @@ class DialogueOverlay(QWidget):
         event.accept()
 
     def leaveEvent(self, event) -> None:
-        """Reset choice hover and cursor when mouse leaves the dialogue bubble."""
+        """Reset choice hover, resume auto-dismiss countdown, and reset cursor when mouse leaves the dialogue bubble."""
         if self._hovered_choice_idx is not None:
             self._hovered_choice_idx = None
             self.setCursor(Qt.ArrowCursor)
             self.update()
+        self._resume_hold_timer()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
@@ -5294,15 +5367,17 @@ class ClickableSlider(QSlider):
         super().mousePressEvent(event)
 
 
-class BombChanceWidget(QWidget):
-    """Custom tray menu widget: percentage slider for bomb attack probability and a reset to default button."""
+class ChanceSliderWidget(QWidget):
+    """Custom tray menu widget: percentage slider for probability and a reset to default button."""
 
-    def __init__(self, initial_pct: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT,
-                 default_pct: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT,
-                 on_change=None, parent=None) -> None:
+    def __init__(self, initial_pct: int = 25,
+                 default_pct: int = 25,
+                 on_change=None, parent=None,
+                 title_prefix: str = "Chance") -> None:
         super().__init__(parent)
         self._default_pct = default_pct
         self._on_change = on_change
+        self._title_prefix = title_prefix
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 2, 16, 6)
@@ -5311,7 +5386,7 @@ class BombChanceWidget(QWidget):
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
-        self.lbl_title = QLabel(f"Chance: {initial_pct}%")
+        self.lbl_title = QLabel(f"{self._title_prefix}: {initial_pct}%")
         self.lbl_title.setStyleSheet("font-size: 11px;")
 
         self.btn_default = QPushButton(f"Default ({default_pct}%)")
@@ -5336,7 +5411,7 @@ class BombChanceWidget(QWidget):
         self.btn_default.clicked.connect(self._on_default_clicked)
 
     def _on_slider_changed(self, val: int) -> None:
-        self.lbl_title.setText(f"Chance: {val}%")
+        self.lbl_title.setText(f"{self._title_prefix}: {val}%")
         if self._on_change is not None:
             self._on_change(val)
 
@@ -5346,11 +5421,15 @@ class BombChanceWidget(QWidget):
     def set_value(self, val: int) -> None:
         self.slider.blockSignals(True)
         self.slider.setValue(val)
-        self.lbl_title.setText(f"Chance: {val}%")
+        self.lbl_title.setText(f"{self._title_prefix}: {val}%")
         self.slider.blockSignals(False)
 
     def value(self) -> int:
         return self.slider.value()
+
+
+BombChanceWidget = ChanceSliderWidget
+JumpChanceWidget = ChanceSliderWidget
 
 
 SHORTS_TAG_REGEX = re.compile(
@@ -5661,6 +5740,21 @@ del "%~f0"
     QApplication.quit()
 
 
+def restart_application() -> None:
+    """Cleanly restart the application process in both compiled .exe and dev Python environments."""
+    if getattr(sys, "frozen", False):
+        args = [sys.executable] + sys.argv[1:]
+    else:
+        args = [sys.executable] + sys.argv
+    log.info("Restarting application with args: %s", args)
+    flags = 0x00000008 if os.name == "nt" else 0
+    try:
+        subprocess.Popen(args, creationflags=flags)
+    except Exception as err:
+        log.error("Failed to spawn new application process: %s", err)
+    QApplication.quit()
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
@@ -5718,7 +5812,7 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_action: QAction | None = None
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
-        self._last_question_dialogue_time: float = -9999.0
+        self._last_question_dialogue_time: float = time.perf_counter()
         self._keep_response_anim: bool = False
         self._pending_song_announcement: tuple | None = None
         self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
@@ -5777,7 +5871,9 @@ class YellowsPixelBuddies(QWidget):
 
         # --- jump to the cursor ------------------------------------------------
         # Screen y grows downwards: an upward speed is NEGATIVE, gravity is positive.
-        self._jump_enabled = bank.jump_sprites_ready   # needs real PNGs in airborne/ AND hanging/
+        self._jump_sprites_ready: bool = bank.jump_sprites_ready   # needs real PNGs in airborne/ AND hanging/
+        self._jump_enabled: bool = self._jump_sprites_ready and JUMP_ENABLED
+        self._jump_chance_percent: int = STILL_JUMP_DEFAULT_CHANCE_PERCENT
         self._jump_ready_at = 0.0            # perf_counter() time at which the cooldown is over
         self._jump_active = False            # a jump sequence is running (the cooldown starts at touchdown)
         self._gravity = GRAVITY_PX_S2        # gravity of the current JUMP / FALL (drop vs. jump)
@@ -5862,10 +5958,13 @@ class YellowsPixelBuddies(QWidget):
         self._startup_action: QAction | None = None
         self._bring_action: QAction | None = None
         self._talk_tray_action: QAction | None = None
+        self._jump_action: QAction | None = None
+        self._jump_chance_action: QWidgetAction | None = None
+        self._jump_chance_widget: ChanceSliderWidget | None = None
         self._bomb_action: QAction | None = None
         self._bomb_force_action: QAction | None = None
         self._bomb_chance_action: QWidgetAction | None = None
-        self._bomb_chance_widget: BombChanceWidget | None = None
+        self._bomb_chance_widget: ChanceSliderWidget | None = None
 
         # --- startup summon intro & hide outro state -------------------------
         self._intro_subphase: str = ""
@@ -6041,6 +6140,7 @@ class YellowsPixelBuddies(QWidget):
                                and random.random() < DIALOGUE_QUESTION_CHANCE))
             if is_question:
                 self._last_question_dialogue_time = now
+                self._reset_ambient_ai_cooldowns(now)
                 # 1. Attempt dynamic AI question generation (from screen, memory, or personality)
                 if self._trigger_ai_question():
                     return
@@ -6159,7 +6259,9 @@ class YellowsPixelBuddies(QWidget):
             reaction_text = kwargs.get("reaction_text", "")
             reaction_anim = kwargs.get("reaction_anim")
 
-        self._last_question_dialogue_time = time.perf_counter()
+        now = time.perf_counter()
+        self._last_user_chat_time = now
+        self._reset_ambient_ai_cooldowns(now)
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if reaction_anim and self._can_play(reaction_anim):
@@ -6198,6 +6300,12 @@ class YellowsPixelBuddies(QWidget):
             )
         else:
             self._say(reaction_text, force=True, record_memory=False)
+
+    def _reset_ambient_ai_cooldowns(self, now: float | None = None) -> None:
+        """Reset all autonomous AI timers (screen peeking, questions) to enforce a unified quiet window."""
+        t = now if now is not None else time.perf_counter()
+        self._last_auto_screen_comment_time = t
+        self._last_question_dialogue_time = t
 
     def _has_memory_highlights(self) -> bool:
         """Check if there is rich memory or media context available for a memory-focused question."""
@@ -6486,6 +6594,7 @@ class YellowsPixelBuddies(QWidget):
 
         self._last_question_item = q_item
         self._last_dialogue = q_item.question
+        self._reset_ambient_ai_cooldowns()
         if not hasattr(self, "_recent_question_texts"):
             self._recent_question_texts = []
         self._recent_question_texts.append(q_item.question)
@@ -6683,7 +6792,7 @@ class YellowsPixelBuddies(QWidget):
 
         now = time.perf_counter()
         self._last_user_chat_time = now
-        self._last_auto_screen_comment_time = now
+        self._reset_ambient_ai_cooldowns(now)
 
         if not text:
             self._phase = Phase.PAUSE
@@ -6743,6 +6852,24 @@ class YellowsPixelBuddies(QWidget):
             return
         elif lower_input in ("/hide_tray", "/tray", "/hide_to_tray", "/minimize_tray"):
             self._hide_to_tray()
+            return
+        elif lower_input in ("/restart", "/reboot", "restart"):
+            self._handle_restart_command()
+            return
+        elif lower_input in ("/jump", "/toggle_jump", "/jump_mode"):
+            if not getattr(self, "_jump_sprites_ready", False):
+                self._say("* My jumping sprites aren't loaded, silly!", force=True, record_memory=False)
+            else:
+                new_state = not self._jump_enabled
+                self._toggle_jump_mode(new_state)
+                msg = "* Jump to Cursor Mode: ENABLED, mew! Prepare for lift-off!" if new_state else "* Jump to Cursor Mode: DISABLED, mew! Staying grounded!"
+                self._say(msg, force=True, record_memory=False)
+            return
+        elif lower_input in ("/bomb", "/toggle_bomb", "/bomb_mode"):
+            new_state = not self._bomb_attack_enabled
+            self._toggle_bomb_attack(new_state)
+            msg = "* Bomb Attack Mode: ENABLED, minion! Cat ordnance primed!" if new_state else "* Bomb Attack Mode: DISABLED, mew! Explosives safely disarmed!"
+            self._say(msg, force=True, record_memory=False)
             return
         elif lower_input in ("/clear_reminders", "/clear_todos"):
             count = self._memory.clear_all_reminders()
@@ -6966,7 +7093,7 @@ class YellowsPixelBuddies(QWidget):
                 self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
             if seen:
                 self._memory.record_turn(user_text, "[stayed quiet]", "idle", had_screen=had_screen, seen=seen)
-            self._last_auto_screen_comment_time = time.perf_counter()
+            self._reset_ambient_ai_cooldowns()
             return
 
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
@@ -6991,7 +7118,7 @@ class YellowsPixelBuddies(QWidget):
         )
         now = time.perf_counter()
         self._last_user_chat_time = now
-        self._last_auto_screen_comment_time = now
+        self._reset_ambient_ai_cooldowns(now)
 
         # Record auto screen comments into ambient dialogue context so Pink knows if user immediately replies
         if had_screen and user_text.startswith("[Pink peeks"):
@@ -7006,7 +7133,7 @@ class YellowsPixelBuddies(QWidget):
         """Handle error from Gemini AI."""
         if not is_auto:
             self._is_handling_user_chat = False
-        self._last_auto_screen_comment_time = time.perf_counter()
+        self._reset_ambient_ai_cooldowns()
         if is_auto:
             log.warning("Auto screen comment error: %s", error_msg)
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -7078,7 +7205,7 @@ class YellowsPixelBuddies(QWidget):
         if is_workstation_locked() or get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
             return
 
-        self._last_auto_screen_comment_time = time.perf_counter()
+        self._reset_ambient_ai_cooldowns(time.perf_counter())
 
         # Briefly hide Pink and speech bubble so she doesn't screenshot herself
         if hasattr(self, "_dialogue_overlay"):
@@ -7532,6 +7659,7 @@ class YellowsPixelBuddies(QWidget):
 
         now = time.perf_counter()
         self._last_ai_song_comment_time = now
+        self._reset_ambient_ai_cooldowns(now)
 
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
@@ -7632,6 +7760,7 @@ class YellowsPixelBuddies(QWidget):
             return
 
         self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+        self._reset_ambient_ai_cooldowns()
         steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=False)
         if not steps:
             return
@@ -7649,6 +7778,8 @@ class YellowsPixelBuddies(QWidget):
             if getattr(self._dialogue_overlay, "_full_text", "") in loading_texts:
                 if self._dialogue_overlay._hold_timer.isActive():
                     self._dialogue_overlay._hold_timer.start(800)
+                elif getattr(self._dialogue_overlay, "_hold_paused", False):
+                    self._dialogue_overlay._hold_remaining_ms = 800
             return
 
         # Otherwise, speak the comment directly
@@ -8059,7 +8190,8 @@ class YellowsPixelBuddies(QWidget):
                 self._pause_elapsed = True
                 return
             if self._loop:                 # plain idle -> jump at the cursor (rarely), else walk right away
-                if not self._try_start_jump(self._cursor, MOVING_JUMP_CHANCE):
+                moving_chance = MOVING_JUMP_CHANCE if getattr(self, "_jump_chance_percent", STILL_JUMP_DEFAULT_CHANCE_PERCENT) > 0 else 0.0
+                if not self._try_start_jump(self._cursor, moving_chance):
                     self._start_walk()
             else:                          # a special is still playing -> let it finish first
                 self._pause_elapsed = True
@@ -8392,6 +8524,17 @@ class YellowsPixelBuddies(QWidget):
 
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
         log.info("Pink restored to screen from system tray.")
+
+    def _handle_restart_command(self) -> None:
+        """Cleanly restart the desktop pet application with a farewell bubble."""
+        if hasattr(self, "_chat_input"):
+            self._chat_input.hide()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
+        self._say("* Rebooting the vessel! See you in a flash, mew!!", force=True, record_memory=False)
+        QTimer.singleShot(1200, restart_application)
 
     def _read_screen_while_in_tray(self) -> None:
         """Periodic 5-minute screen reading while Pink is hidden in tray to maintain active session and context."""
@@ -8735,7 +8878,8 @@ class YellowsPixelBuddies(QWidget):
         if now - self._still_since < STILL_TIME_S or now < self._next_still_check_at:
             return
         self._next_still_check_at = now + STILL_CHECK_INTERVAL_S
-        self._try_start_jump(cursor, STILL_JUMP_CHANCE)
+        chance = (self._jump_chance_percent / 100.0) if hasattr(self, "_jump_chance_percent") else STILL_JUMP_CHANCE
+        self._try_start_jump(cursor, chance)
 
     # -------------------------------------------------------- jump: the flight
     def _aim_point(self, cursor: QPoint) -> tuple[float, float]:
@@ -9284,6 +9428,7 @@ class YellowsPixelBuddies(QWidget):
         menu.addSeparator()
         update_action = menu.addAction("Check for Updates 🔄")
         menu.addSeparator()
+        restart_action = menu.addAction("Restart Pink 🔄")
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -9293,6 +9438,8 @@ class YellowsPixelBuddies(QWidget):
             self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
+        elif chosen is restart_action:
+            self._handle_restart_command()
         elif chosen is hide_tray_action:
             self._hide_to_tray()
         elif chosen is hide_action:
@@ -9477,13 +9624,29 @@ class YellowsPixelBuddies(QWidget):
         hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
         hide_peek_action.triggered.connect(self._start_hide_sequence)
 
+        self._jump_action = tray_menu.addAction("Jump to Cursor Mode")
+        self._jump_action.setCheckable(True)
+        self._jump_action.setChecked(self._jump_enabled)
+        self._jump_action.setEnabled(self._jump_sprites_ready)
+        self._jump_action.toggled.connect(self._toggle_jump_mode)
+
+        self._jump_chance_action = QWidgetAction(tray_menu)
+        self._jump_chance_widget = ChanceSliderWidget(
+            initial_pct=self._jump_chance_percent,
+            default_pct=STILL_JUMP_DEFAULT_CHANCE_PERCENT,
+            on_change=self._set_jump_chance_percent,
+        )
+        self._jump_chance_widget.setEnabled(self._jump_enabled and self._jump_sprites_ready)
+        self._jump_chance_action.setDefaultWidget(self._jump_chance_widget)
+        tray_menu.addAction(self._jump_chance_action)
+
         self._bomb_action = tray_menu.addAction("Bomb Attack Mode")
         self._bomb_action.setCheckable(True)
         self._bomb_action.setChecked(self._bomb_attack_enabled)
         self._bomb_action.toggled.connect(self._toggle_bomb_attack)
 
         self._bomb_chance_action = QWidgetAction(tray_menu)
-        self._bomb_chance_widget = BombChanceWidget(
+        self._bomb_chance_widget = ChanceSliderWidget(
             initial_pct=self._bomb_chance_percent,
             default_pct=HANG_BOMB_DEFAULT_CHANCE_PERCENT,
             on_change=self._set_bomb_chance_percent,
@@ -9510,6 +9673,8 @@ class YellowsPixelBuddies(QWidget):
         self._filter_shorts_action.toggled.connect(self._toggle_filter_shorts)
 
         tray_menu.addSeparator()
+        restart_action = tray_menu.addAction("Restart Pink 🔄")
+        restart_action.triggered.connect(self._handle_restart_command)
         exit_action = tray_menu.addAction("Exit")
         exit_action.triggered.connect(self._quit)
 
@@ -9534,6 +9699,14 @@ class YellowsPixelBuddies(QWidget):
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
             self._startup_action.blockSignals(False)
+        if hasattr(self, "_jump_action") and self._jump_action is not None:
+            self._jump_action.blockSignals(True)
+            self._jump_action.setChecked(self._jump_enabled)
+            self._jump_action.setEnabled(getattr(self, "_jump_sprites_ready", True))
+            self._jump_action.blockSignals(False)
+        if hasattr(self, "_jump_chance_widget") and self._jump_chance_widget is not None:
+            self._jump_chance_widget.set_value(self._jump_chance_percent)
+            self._jump_chance_widget.setEnabled(self._jump_enabled and getattr(self, "_jump_sprites_ready", True))
         if self._bomb_action is not None:
             self._bomb_action.blockSignals(True)
             self._bomb_action.setChecked(self._bomb_attack_enabled)
@@ -9564,6 +9737,26 @@ class YellowsPixelBuddies(QWidget):
             self._dialogue_action.setChecked(checked)
             self._dialogue_action.blockSignals(False)
         log.info("Dialogue bubbles: %s", "ENABLED" if checked else "DISABLED")
+
+    def _toggle_jump_mode(self, checked: bool) -> None:
+        """Enable or disable the jump to cursor mode."""
+        self._jump_enabled = checked and getattr(self, "_jump_sprites_ready", True)
+        if hasattr(self, "_jump_action") and self._jump_action is not None:
+            self._jump_action.blockSignals(True)
+            self._jump_action.setChecked(self._jump_enabled)
+            self._jump_action.blockSignals(False)
+        if hasattr(self, "_jump_chance_widget") and self._jump_chance_widget is not None:
+            self._jump_chance_widget.setEnabled(self._jump_enabled and getattr(self, "_jump_sprites_ready", True))
+        if not self._jump_enabled and self._phase in (Phase.JUMP, Phase.HANG):
+            self._fall_after_jump(None)
+        log.info("Jump to cursor mode: %s", "ENABLED" if self._jump_enabled else "DISABLED")
+
+    def _set_jump_chance_percent(self, pct: int) -> None:
+        """Update still-cursor jump chance percentage (0-100%)."""
+        self._jump_chance_percent = max(0, min(100, int(pct)))
+        if hasattr(self, "_jump_chance_widget") and self._jump_chance_widget is not None:
+            self._jump_chance_widget.set_value(self._jump_chance_percent)
+        log.info("Jump chance set to %d%%", self._jump_chance_percent)
 
     def _toggle_bomb_attack(self, checked: bool) -> None:
         """Enable or disable the bomb attack mode."""

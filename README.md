@@ -76,7 +76,7 @@
 - **Single Left-click**: Plays a friendly random animation (`peace_sign`, `laughing`, or `shocked`) without speech dialogue.
 - **Double Left-click**: Opens the interactive **Chat Input Overlay ("Talk to Pink 💬")**.
 - **Left-click + drag**: Pick up and carry Pink around the screen (loops `shocked` while held). Release to watch gravity pull her back to the taskbar.
-- **Right-click**: Opens a context menu with **Talk to Pink 💬**, **Ask me something ❓**, **Hide to Tray 📥**, **Hide (Peek Ears) 🐾**, and **Exit**.
+- **Right-click**: Opens a context menu with **Talk to Pink 💬**, **Ask me something ❓**, **Hide to Tray 📥**, **Hide (Peek Ears) 🐾**, **Check for Updates 🔄**, **Restart Pink 🔄**, and **Exit**.
 - **Sprint to Exit**: Selecting **Exit** triggers a high-speed sprint to the furthest screen edge before cleanly closing the application.
 
 ### 🎛️ System Tray & Hidden Icons Control Center
@@ -92,10 +92,12 @@ Right-click the tray icon in your Windows notification area (`^`) to:
   - **AI Token Usage 📊**: Pop up a dialogue bubble with live token analytics and context window headroom.
 - **Hide to Tray 📥 / Restore Pink from Tray 📤**: Vanish completely into tray with 5-minute background screen reading, or restore to taskbar.
 - **Hide (Peek Ears) 🐾**: Send Pink to her peeking spot behind the taskbar.
-- **Bomb Attack Mode**: Toggle cursor bomb throws and tune odds with the embedded slider.
+- **Jump to Cursor Mode**: Toggle jumping to cursor and tune odds with the embedded slider (or type `/jump` in chat).
+- **Bomb Attack Mode**: Toggle cursor bomb throws and tune odds with the embedded slider (or type `/bomb` in chat).
 - **Dialogue Bubbles**: Toggle speech bubbles on or off in real time.
 - **AI Song Commentary 🎵**: Toggle autonomous music track commentary on or off.
 - **Filter YouTube Shorts 🔕**: Toggle ignoring YouTube Shorts and short video reels.
+- **Restart Pink 🔄**: Fast reboot of the pet application without manual terminal commands (or type `/restart` in chat).
 - **Exit**: Cleanly terminate the application.
 
 ### ⚙️ Transparent, Click-Through & High-DPI Ready
@@ -291,28 +293,29 @@ GEMINI_TIMEOUT_S = 35              # Request timeout in seconds (supports vision
 
 ### Interactive Dialogue & Questions
 ```python
-DIALOGUE_ENABLED = True            # Enable speech bubbles / dialogue popups
-DIALOGUE_QUESTION_CHANCE = 0.25    # 25% chance an idle dialogue is an interactive question
-DIALOGUE_QUESTION_COOLDOWN_S = 60.0# Cooldown between interactive question prompts
-DIALOGUE_TYPEWRITER_MS = 32        # Typewriter speed (~31 chars/sec)
+DIALOGUE_ENABLED = True             # Enable speech bubbles / dialogue popups
+DIALOGUE_QUESTION_CHANCE = 0.20     # 20% chance an idle dialogue is an interactive question
+DIALOGUE_QUESTION_COOLDOWN_S = 360.0# Cooldown between interactive question prompts (6 minutes)
+DIALOGUE_TYPEWRITER_MS = 32         # Typewriter speed (~31 chars/sec)
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4 # Extra pause ticks on punctuation for retro pacing
 ```
 
-### Bomb Attacks & Cursor Interaction
+### Jump to Cursor & Bomb Attacks
 ```python
-HANG_BOMB_DEFAULT_CHANCE_PERCENT = 25  # Default chance to throw a bomb while hanging
+JUMP_ENABLED = True                    # Default enabled state for jump to cursor mode
+STILL_JUMP_DEFAULT_CHANCE_PERCENT = 30 # Default chance to jump when cursor stays still (30%)
+HANG_BOMB_ENABLED = True               # Default enabled state for bomb attack mode
+HANG_BOMB_DEFAULT_CHANCE_PERCENT = 25  # Default chance to throw a bomb while hanging (25%)
 HANG_BOMB_COOLDOWN_S = 4.0             # Cooldown between bomb tosses
-STILL_JUMP_CHANCE = 0.50               # Chance to jump when cursor stays still
 GRAB_RADIUS_PX = 32.0                  # Catch radius to grab the cursor
 ```
 
 ---
 
-## 🛑 How to Exit
+## 🛑 How to Exit or Restart
 
-- **Right-click** Pink and select **Exit**.
-- **Right-click** her icon in the **Hidden icons (`^`)** tray menu and select **Exit**.
-- Or press `Ctrl + C` in the terminal running the script.
+- **Restart**: Select **Restart Pink 🔄** from the right-click menu or tray menu, or type `/restart` in the chat bar.
+- **Exit**: Right-click Pink and select **Exit**, or select **Exit** from the tray menu (`^`), or press `Ctrl + C` in the terminal.
 
 ---
 
