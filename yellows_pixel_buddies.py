@@ -724,6 +724,11 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - Example: "* Timer canceled! Don't blame me if you forget, dummy! [anim: tongue] [cancel_timer: tea]"
   * When the user asks how much time is left or asks about their alarms/timers (e.g. "how much time left?", "do I have any alarms?"):
     - Look directly at the ACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS section in your prompt context and report the time remaining in-character!
+  * MULTIPLE ACTIONS IN A SINGLE PROMPT:
+    - When the user gives a long prompt requesting MULTIPLE reminders, timers, or alarms (e.g. "remind me to call mom, set a timer for 15m for tea, and set an alarm for 6:00 PM for dinner"):
+    - You MUST output ALL matching tags together in your response!
+    - Example: "* I have scheduled all of those, minion! Don't you dare slack off! [add_reminder: Call mom] [set_timer: 15m, steep tea] [set_alarm: 06:00 PM, dinner] [anim: laughing]"
+    - The backend iteratively extracts and executes ALL tags simultaneously!
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -3214,9 +3219,16 @@ class MemoryManager:
             if self.data_dir.resolve() == _exe_dir.resolve():
                 return
             local_mem = _exe_dir / "memory"
-            if local_mem.is_dir() and not self.memory_dir.exists():
-                log.info("Migrating existing memory from %s to %s", local_mem, self.memory_dir)
-                shutil.copytree(str(local_mem), str(self.memory_dir), dirs_exist_ok=True)
+            if local_mem.is_dir():
+                self.memory_dir.mkdir(parents=True, exist_ok=True)
+                for f in local_mem.glob("*.*[a-zA-Z0-9]"):
+                    target_f = self.memory_dir / f.name
+                    if not target_f.exists() and f.is_file():
+                        try:
+                            shutil.copy2(str(f), str(target_f))
+                            log.info("Migrated memory file %s to %s", f.name, target_f)
+                        except Exception as e:
+                            log.warning("Could not migrate %s: %s", f.name, e)
             local_env = _exe_dir / ".env"
             if local_env.is_file() and not self.env_path.exists():
                 shutil.copy2(str(local_env), str(self.env_path))
@@ -3421,6 +3433,14 @@ class MemoryManager:
 
     def get_long_term_facts(self) -> str:
         """Read facts.json to inject into system prompt with clear priority between primary name and notes."""
+        if not self.facts_path.exists():
+            local_facts = _exe_dir / "memory" / "facts.json"
+            if local_facts.is_file():
+                try:
+                    self.facts_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(local_facts), str(self.facts_path))
+                except Exception:
+                    pass
         if self.facts_path.exists():
             try:
                 facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
@@ -7522,6 +7542,18 @@ class YellowsPixelBuddies(QWidget):
 
         clean_input = text.strip()
         lower_input = clean_input.lower()
+
+        # Multi-command chaining (e.g. "/timer 10m tea && /remind call mom" or "/alarm 5pm && /remind check oven")
+        if "&&" in clean_input or ("\n/" in clean_input) or ("; /" in clean_input):
+            delim = "&&" if "&&" in clean_input else ("\n/" if "\n/" in clean_input else "; /")
+            raw_parts = clean_input.split(delim)
+            for part in raw_parts:
+                p = part.strip()
+                if delim == "\n/" and not p.startswith("/"):
+                    p = "/" + p
+                if p:
+                    self._on_chat_submitted(p, see_screen=False)
+            return
 
         # Direct memory and nickname commands
         if lower_input.startswith(("/name", "/nickname")):
