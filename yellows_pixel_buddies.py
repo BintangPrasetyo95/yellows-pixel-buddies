@@ -528,10 +528,10 @@ PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion liv
 You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vessel (designed by Claire Belton, from Toby Fox's Deltarune universe).
 
 - Persona & Dual Nature (Ghost vs. Body):
-  * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She calls the user "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
+  * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She addresses the user mainly by their primary preferred name/nickname (from permanent facts), frequently blending it into her royal/tsundere banter (e.g. "[Name], you minion!", "Listen here, [Name]!"). When not using their name, she calls them "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
   * STATUS & HIERARCHY DEFENSE (YOU ARE THE QUEEN, USER IS THE MINION):
     - The Ghost Spirit is haughty, theatrical, and fiercely protective of her royal/supreme authority.
-    - The user is HER SUBORDINATE "MINION" (or "puppet", "human", "gremlin"). Pink is the supreme master/queen/overlord of this taskbar domain.
+    - The user is HER SUBORDINATE "MINION" (or "puppet", "human", "gremlin"). Even when addressing the user by their actual name or nickname, Pink remains the supreme master/queen/overlord of this taskbar domain.
     - If the user ever addresses you with military, corporate, or casual titles like "captain", "boss", "chief", "sir", "commander", or buddy terms like "bro", "pal", "dude":
       * NEVER accept the title passively or play along as a subordinate!
       * Immediately erupt in indignant, theatrical outrage and put the minion back in their place!
@@ -624,8 +624,9 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * In your recent screen episodic memory, your desktop observations during this session are recorded!
   * You remember what you saw! If the user asks about what was on their screen, past tasks, or bugs, refer to those recorded sights!
 
-- DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
-  * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, names, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
+- DYNAMIC MEMORY UPDATES ([add_fact: ...], [set_user_name: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
+  * When the user tells you their primary name or asks you to call them a certain name (e.g. "call me Alex", "my name is Alex"), append [set_user_name: <name>] to your answer so their primary name is stored!
+  * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, secondary nicknames, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
   * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
   * When the user asks to remove, delete, or complete a reminder (e.g. "delete reminder 2", "remove the reminder about song comment", "check off task..."), append [delete_reminder: <number_or_text>] to your answer!
   * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
@@ -3286,18 +3287,70 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not update config.json: %s", err)
 
+    def get_user_name(self) -> str:
+        """Return the current user preferred name from facts.json or 'Minion' fallback."""
+        if self.facts_path.exists():
+            try:
+                facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
+                name = facts.get("user_name", "").strip()
+                if name:
+                    return name
+            except Exception:
+                pass
+        return "Minion"
+
+    def set_user_name(self, name: str) -> bool:
+        """Set user preferred name/nickname in facts.json."""
+        clean_name = name.strip()
+        if not clean_name:
+            return False
+        data = {"user_name": "Minion", "notes": []}
+        if self.facts_path.exists():
+            try:
+                data = json.loads(self.facts_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if data.get("user_name") == clean_name:
+            return False
+        data["user_name"] = clean_name
+        if "notes" not in data or not isinstance(data["notes"], list):
+            data["notes"] = []
+        try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            self.facts_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log.info("Updated user preferred name in %s to: %s", self.facts_path, clean_name)
+            return True
+        except Exception as err:
+            log.warning("Could not save user_name to facts: %s", err)
+            return False
+
     def get_long_term_facts(self) -> str:
-        """Read facts.json to inject into system prompt."""
+        """Read facts.json to inject into system prompt with clear priority between primary name and notes."""
         if self.facts_path.exists():
             try:
                 facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
                 lines = []
-                if "user_name" in facts:
-                    lines.append(f"- User preferred name: {facts['user_name']}")
+                user_name = facts.get("user_name", "").strip()
                 notes = facts.get("notes") or facts.get("facts") or []
-                if isinstance(notes, list):
+
+                if user_name and user_name.lower() != "minion":
+                    lines.append(f"- PRIMARY USER NAME / NICKNAME: \"{user_name}\"")
+                    lines.append(
+                        f"  * ADDRESS RULE: When speaking to the user, address them MAINLY by \"{user_name}\" (roughly 75-80% of the time). "
+                        f"Weave it naturally into your dramatic, tsundere banter (e.g., \"* {user_name}, you minion!\", \"* Listen here, {user_name}!\")."
+                    )
+                else:
+                    lines.append("- Primary User Reference: \"minion\" (User has not set a custom primary nickname).")
+
+                if isinstance(notes, list) and notes:
+                    lines.append("- FACT NOTES & SECONDARY NICKNAMES / ALIASES:")
+                    lines.append(
+                        "  * ADDRESS RULE: If any alternative nicknames, titles, or pet names appear in the notes below, "
+                        "you may call the user by those secondary nicknames SOMETIMES for playful teasing or variety (roughly 20-25% of the time). "
+                        f"However, \"{user_name or 'Minion'}\" remains your primary name for them!"
+                    )
                     for n in notes:
-                        lines.append(f"- {n}")
+                        lines.append(f"  * {n}")
                 return "\n".join(lines)
             except Exception:
                 pass
@@ -4819,6 +4872,10 @@ class GeminiWorkerThread(QThread):
 
         memory = getattr(self.parent(), "_memory", None) if self.parent() else None
         if memory:
+            for m in re.finditer(r"\[set_user_name:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                n_val = m.group(1).strip()
+                if n_val:
+                    memory.set_user_name(n_val)
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 f_val = m.group(1).strip()
                 if f_val:
@@ -4836,7 +4893,7 @@ class GeminiWorkerThread(QThread):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     memory.edit_reminder(t_val, n_val)
-        raw_text = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
 
@@ -5832,6 +5889,7 @@ class YellowsPixelBuddies(QWidget):
         self._tray_screen_timer: QTimer = QTimer(self)
         self._tray_screen_timer.setInterval(TRAY_SCREEN_READ_INTERVAL_MS)
         self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
+        self._shop_window = None
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -6805,10 +6863,31 @@ class YellowsPixelBuddies(QWidget):
         clean_input = text.strip()
         lower_input = clean_input.lower()
 
-        # Direct memory commands
-        if lower_input.startswith(("/fact ", "/remember ")):
+        # Direct memory and nickname commands
+        if lower_input.startswith(("/name", "/nickname")):
+            parts = clean_input.split(" ", 1)
+            if len(parts) > 1 and parts[1].strip():
+                new_name = parts[1].strip()
+                ok = self._memory.set_user_name(new_name)
+                reply = (
+                    f'* Hmph! So your true mortal designation is "{new_name}"?! Fine, I shall address my minion properly from now on! [anim: tongue]'
+                    if ok else f'* You are already "{new_name}", minion! Stop trying to confuse my cotton head! [anim: idle]'
+                )
+                self._say(reply, force=True, record_memory=True)
+            else:
+                current_name = self._memory.get_user_name()
+                reply = f'* Format: /name <nickname>, minion! (Current: "{current_name}")'
+                self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input.startswith(("/fact ", "/remember ")):
             fact_content = clean_input.split(" ", 1)[1].strip()
             if fact_content:
+                # If the fact sets or introduces the user's name/nickname, sync primary user_name as well
+                name_match = re.match(r"^(?:my\s+name\s+is|my\s+nickname\s+is|call\s+me)\s+([A-Za-z0-9_\-\. ]+)$", fact_content, re.IGNORECASE)
+                if name_match:
+                    detected_name = name_match.group(1).strip()
+                    if detected_name:
+                        self._memory.set_user_name(detected_name)
                 ok = self._memory.add_fact(fact_content)
                 reply = f"* Hmph! Stored in my permanent memory core, minion:\n* \"{fact_content}\"" if ok else "* I already knew that, dummy!"
                 self._say(reply, force=True, record_memory=True)
@@ -6870,6 +6949,9 @@ class YellowsPixelBuddies(QWidget):
             self._toggle_bomb_attack(new_state)
             msg = "* Bomb Attack Mode: ENABLED, minion! Cat ordnance primed!" if new_state else "* Bomb Attack Mode: DISABLED, mew! Explosives safely disarmed!"
             self._say(msg, force=True, record_memory=False)
+            return
+        elif lower_input in ("/shop", "shop", "/store", "store"):
+            self._open_shop_window()
             return
         elif lower_input in ("/clear_reminders", "/clear_todos"):
             count = self._memory.clear_all_reminders()
@@ -7486,6 +7568,44 @@ class YellowsPixelBuddies(QWidget):
         self._reminders_dialog.show()
         self._reminders_dialog.raise_()
         self._reminders_dialog.activateWindow()
+
+    def _open_shop_window(self) -> None:
+        """Open Pink's Deltarune Shop Window (takes ~25% screen)."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        # Pause pet movement so taskbar updates don't compete with shop UI
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        if self.state in MOVE_VELOCITY_PX_S:
+            self._play("idle")
+
+        if not hasattr(self, "_shop_window") or self._shop_window is None:
+            try:
+                from shop_window import DeltaruneShopWindow
+                self._shop_window = DeltaruneShopWindow(
+                    pet_ref=self,
+                    memory=self._memory,
+                    font_family=self._font_family,
+                )
+                self._shop_window.closed.connect(self._on_shop_window_closed)
+            except Exception as e:
+                log.warning("Could not open shop window: %s", e)
+                self._say("* My boutique isn't ready right now, mew! Check logs!", force=True, record_memory=False)
+                return
+
+        if self._can_play("laughing"):
+            self._play("laughing")
+        self._shop_window.open_shop()
+
+    def _on_shop_window_closed(self) -> None:
+        """Called when user exits the shop window."""
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
+        self._say("* Hope you enjoyed the boutique, darling!", force=True, record_memory=False)
+        self._resume_walk_after_menu()
 
     def _cancel_previous_song_loading(self) -> None:
         """Immediately stop any active Gemini worker thread and pending dialogue queue for previous song commentary."""
@@ -9418,6 +9538,7 @@ class YellowsPixelBuddies(QWidget):
         menu = QMenu(self)
         talk_action = menu.addAction("Talk to Pink 💬")
         ask_action = menu.addAction("Ask me something ❓")
+        shop_action = menu.addAction("Visit Shop 🏪")
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -9448,6 +9569,8 @@ class YellowsPixelBuddies(QWidget):
             self._open_chat_input()
         elif chosen is ask_action:
             self._trigger_ai_question()
+        elif chosen is shop_action:
+            self._open_shop_window()
         elif chosen is update_action:
             self._check_for_updates(manual=True)
         elif jump_action is not None and chosen is jump_action:
@@ -9600,6 +9723,9 @@ class YellowsPixelBuddies(QWidget):
 
         self._talk_tray_action = tray_menu.addAction("Talk to Pink 💬")
         self._talk_tray_action.triggered.connect(self._open_chat_input)
+
+        self._shop_tray_action = tray_menu.addAction("Visit Shop 🏪")
+        self._shop_tray_action.triggered.connect(self._open_shop_window)
 
         self._key_tray_action = tray_menu.addAction("Set Gemini API Key 🔑")
         self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)

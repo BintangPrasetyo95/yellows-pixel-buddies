@@ -25,7 +25,7 @@
 ### 💾 Persistent Memory & Context
 - **Permanent Windows Storage**: All user facts, chat sessions, reminders, and API keys are stored safely in `%APPDATA%\YellowsPixelBuddies\memory` (`C:\Users\<User>\AppData\Roaming\YellowsPixelBuddies\memory`), completely update-proof and persistent across laptop reboots and app updates.
 - **Session Logging**: All conversation turns are automatically recorded with status, timestamps, user text, spoken dialogue, and emotion tags in `memory/sessions/session_<timestamp>.json`.
-- **Cross-Session Fact Retention**: Pink remembers long-term facts about the user across sessions stored in `memory/facts.json`.
+- **Cross-Session Fact Retention & Nicknames**: Pink remembers long-term facts about the user across sessions stored in `memory/facts.json`. Set your preferred nickname anytime via `/name <nickname>` (e.g. `/name Alex`) or save permanent facts with `/fact <text>`. Pink primarily addresses you by your primary nickname, while occasionally referencing secondary nicknames and personal notes from your fact sheet!
 - **30-Day Active Reminders & To-Dos**: Save, edit, or delete temporary reminders stored in `memory/reminders.json`. Pink tracks them in your context and auto-prunes anything older than 30 days. Manage them via chat commands (`/remind`, `/del_reminder`, `/edit_reminder`, `/clear_reminders`, `/reminders`) or visually through the system tray.
 - **AI Token Analytics & Quota Tracking**: Ask Pink anytime (`"how much token left"`, `"ai token"`, or `/tokens`) or click **AI Token Usage 📊** in the tray menu. Pink gives an instant in-character report on active context window tokens remaining (out of 1,048,576), last query token breakdown, and today's session usage without consuming extra API calls.
 - **In-App Memory Controls**: Open the memory folder, clear current session memory, manage reminders, or check token usage directly through the system tray (**Memory Storage 🧠**).
@@ -72,11 +72,30 @@
 - **Hide on Demand**: Right-click Pink or use the tray menu to choose **Hide (Peek Ears) 🐾**—she sprints offscreen to the right and surfaces at the hiding spot.
 - **Cinematic Summoning**: Click her peeking ears (or select **Call Pink 🐾** from the tray) to summon her: she floats up as a spectral ghost (`ghost/`), looks around, dashes offscreen, and dramatically pops onto the taskbar in her physical doll body (`shocked`)!
 
+### 🏪 Pink's Dark World Boutique (Deltarune Shop UI)
+- **Authentic Deltarune Shop Experience**: Takes ~25% of your screen surface area with pixel-perfect integer scaling, authentic double-bordered HUDs, and the iconic Red Soul Heart `[❤]` cursor.
+- **5-Frame Animated Cafe Backdrop**: Powered by [`sprites/shop/shop_scene`](file:///sprites/shop/shop_scene), featuring Pink's cat-eared silhouette looking out a warm cafe window with drifting clouds, hanging pendant lights, and ambient animations.
+- **Toby Fox Audio & Typewriter Dialogue**: Immersive cursor clicks (`snd_plat_act_move`), confirmation dings (`snd_plat_act_select`), coin clinks (`snd_pink_coin`), shop entrance bells (`snd_bottlepop`), and typewriter text blips.
+- **The 4 Classic Menu Commands**:
+  - **`[❤ BUY]`**: Spend **Dark Dollars ($D\$)** on active buffs and collectibles:
+    - *Cyber Espresso* (40 D$): Pink dashes across your taskbar with caffeine-fueled speed.
+    - *Catnip Bomb* (50 D$): Boosts bomb toss probability to 80% on cursor jumps for 10 minutes.
+    - *Ghost Lantern* (80 D$): Unleashes Pink's glowing cyan spectral ghost takeover on demand.
+    - *Memory Mint* (25 D$): Cleans conversation noise, refreshes context tokens, and restores Pink's mood.
+  - **`[❤ SELL]` (Reminder & Task Pawn Shop)**: Cash in your active 30-day reminders from [`memory/reminders.json`](file:///memory/reminders.json)! Completing a task rewards you with **+25 D$** and celebratory sound effects.
+  - **`[❤ TALK]`**: 4 distinct discussion topics—*About Pink* (lore and sass), *Inspect Screen* (triggers Gemini screen vision critique), *Music Vibe* (reviews active Windows GSMTC track), and *Ask Gemini...* (inline AI query prompt).
+  - **`[❤ EXIT]`**: Delivers a parting tsundere quote before smoothly closing the shop and returning Pink to your taskbar.
+- **Dark Dollars ($D\$) Wallet System**:
+  - Persisted in [`memory/wallet.json`](file:///memory/wallet.json).
+  - Earn +1 D$ passively every minute while working with Pink open.
+  - Earn +25 D$ per completed reminder / to-do task.
+- **Quick Access**: Launch via Pink's right-click context menu (**Visit Shop 🏪**), system tray menu, or chat commands (`/shop` or `/store`).
+
 ### 🖱️ Interactive Mouse Controls
 - **Single Left-click**: Plays a friendly random animation (`peace_sign`, `laughing`, or `shocked`) without speech dialogue.
 - **Double Left-click**: Opens the interactive **Chat Input Overlay ("Talk to Pink 💬")**.
 - **Left-click + drag**: Pick up and carry Pink around the screen (loops `shocked` while held). Release to watch gravity pull her back to the taskbar.
-- **Right-click**: Opens a context menu with **Talk to Pink 💬**, **Ask me something ❓**, **Hide to Tray 📥**, **Hide (Peek Ears) 🐾**, **Check for Updates 🔄**, **Restart Pink 🔄**, and **Exit**.
+- **Right-click**: Opens a context menu with **Talk to Pink 💬**, **Ask me something ❓**, **Visit Shop 🏪**, **Hide to Tray 📥**, **Hide (Peek Ears) 🐾**, **Check for Updates 🔄**, **Restart Pink 🔄**, and **Exit**.
 - **Sprint to Exit**: Selecting **Exit** triggers a high-speed sprint to the furthest screen edge before cleanly closing the application.
 
 ### 🎛️ System Tray & Hidden Icons Control Center
@@ -84,6 +103,7 @@ Right-click the tray icon in your Windows notification area (`^`) to:
 - **Start with Windows**: Toggle automatic startup via Windows Registry.
 - **Call Pink 🐾 / Bring to Taskbar**: Re-summon or reset position.
 - **Talk to Pink 💬**: Launch the Gemini chat prompt.
+- **Visit Shop 🏪**: Open Pink's 25% screen Deltarune boutique with the 5-frame animated cafe backdrop, buffs, reminder pawn shop, and Dark Dollars ($D$).
 - **Set Gemini API Key 🔑**: Open a secure dialog to update your Gemini API key.
 - **Memory Storage 🧠**:
   - **Manage Reminders 📝**: View, add, edit, or delete active 30-day reminders in an interactive desktop window.
