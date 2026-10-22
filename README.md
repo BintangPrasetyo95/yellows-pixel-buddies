@@ -299,6 +299,12 @@ fonts/
     └── determination.ttf   # FontStruction "Determination" (CC BY 3.0)
 ```
 
+> [!TIP]
+> **Adding Custom Assets & Recompiling:**
+> - **Sprites**: Place numbered `.png` files (`1.png`, `2.png`, ...) inside existing state folders in `sprites/`. They are bundled and loaded automatically without code changes.
+> - **New Animation States**: If adding a brand-new state folder, register its name in `ALL_STATES` in [`yellows_pixel_buddies.py`](yellows_pixel_buddies.py).
+> - **New Top-Level Asset Folders (e.g., `sounds/`, `audio/`)**: If creating new asset folders outside `sprites/` or `fonts/`, add them to `datas` in [`Yellows-Pixel-Buddies.spec`](Yellows-Pixel-Buddies.spec) so PyInstaller packages them into the `.exe`.
+
 ---
 
 ## ⚙️ Configuration & Customization

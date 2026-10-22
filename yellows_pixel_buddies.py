@@ -2070,9 +2070,10 @@ class DialogueOverlay(QWidget):
         self._on_chosen_callback = None
         self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
 
-        self._font = QFont(self._font_family)
-        self._font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
-        self._font.setStyleStrategy(QFont.NoAntialias)
+        self._font = QFont(self._font_family, 12)
+        self._font.setBold(False)
+        self._font.setWeight(QFont.Normal)
+        self._font.setStyleStrategy(QFont.PreferDefault)
 
         self._type_timer = QTimer(self)
         self._type_timer.setInterval(DIALOGUE_TYPEWRITER_MS)
@@ -2779,9 +2780,10 @@ class ChatInputOverlay(QWidget):
             self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
 
     def _init_ui(self) -> None:
-        font = QFont(self._font_family)
-        font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
-        font.setStyleStrategy(QFont.NoAntialias)
+        font = QFont(self._font_family, 12)
+        font.setBold(False)
+        font.setWeight(QFont.Normal)
+        font.setStyleStrategy(QFont.PreferDefault)
 
         layout = QHBoxLayout(self)
         pad_h = round(16 * self._scale)
@@ -3845,6 +3847,33 @@ class MemoryManager:
             if clean_lower in item.get("label", "").lower():
                 return idx
         return None
+
+    def load_settings(self) -> dict:
+        """Load persistent pet settings toggles from config.json."""
+        if self.config_path.exists():
+            try:
+                data = json.loads(self.config_path.read_text(encoding="utf-8"))
+                return data.get("settings", {})
+            except Exception as e:
+                log.warning("Could not load settings from %s: %s", self.config_path, e)
+        return {}
+
+    def save_settings(self, settings: dict) -> bool:
+        """Save persistent pet settings toggles into config.json."""
+        data = {}
+        if self.config_path.exists():
+            try:
+                data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        data["settings"] = settings
+        try:
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            self.config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            return True
+        except Exception as e:
+            log.warning("Could not save settings to %s: %s", self.config_path, e)
+            return False
 
     def clear_all_alarms(self) -> int:
         """Cancel and remove all active and pending alarms and timers."""
@@ -6628,6 +6657,17 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_target_plan: list[str] = ["random", "random", "near", "beneath"]
         self._bomb_attack_enabled: bool = HANG_BOMB_ENABLED
         self._bomb_chance_percent: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT
+
+        # Apply persistent settings if saved
+        saved_settings = self._memory.load_settings() if hasattr(self, "_memory") and self._memory else {}
+        if "dialogue_enabled" in saved_settings:
+            self._dialogue_enabled = bool(saved_settings["dialogue_enabled"])
+        if "ai_song_comment_enabled" in saved_settings:
+            self._ai_song_comment_enabled = bool(saved_settings["ai_song_comment_enabled"])
+        if "bomb_attack_enabled" in saved_settings:
+            self._bomb_attack_enabled = bool(saved_settings["bomb_attack_enabled"])
+        if "jump_enabled" in saved_settings:
+            self._jump_enabled = bool(saved_settings["jump_enabled"]) and getattr(self, "_jump_sprites_ready", True)
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -10763,6 +10803,17 @@ class YellowsPixelBuddies(QWidget):
             self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
             self._filter_shorts_action.blockSignals(False)
 
+    def _save_live_settings(self) -> None:
+        """Persist live toggles to config.json."""
+        if hasattr(self, "_memory") and self._memory:
+            settings = {
+                "dialogue_enabled": getattr(self, "_dialogue_enabled", True),
+                "ai_song_comment_enabled": getattr(self, "_ai_song_comment_enabled", True),
+                "bomb_attack_enabled": getattr(self, "_bomb_attack_enabled", False),
+                "jump_enabled": getattr(self, "_jump_enabled", True),
+            }
+            self._memory.save_settings(settings)
+
     def _toggle_dialogue(self, checked: bool) -> None:
         """Enable or disable speech bubble popups."""
         self._dialogue_enabled = checked
@@ -10772,6 +10823,7 @@ class YellowsPixelBuddies(QWidget):
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(checked)
             self._dialogue_action.blockSignals(False)
+        self._save_live_settings()
         log.info("Dialogue bubbles: %s", "ENABLED" if checked else "DISABLED")
 
     def _toggle_jump_mode(self, checked: bool) -> None:
@@ -10803,6 +10855,7 @@ class YellowsPixelBuddies(QWidget):
             self._bomb_action.blockSignals(False)
         if self._bomb_chance_widget is not None:
             self._bomb_chance_widget.setEnabled(checked)
+        self._save_live_settings()
         log.info("Bomb attack mode: %s", "ENABLED" if checked else "DISABLED")
 
     def _set_bomb_chance_percent(self, pct: int) -> None:

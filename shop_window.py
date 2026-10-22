@@ -1,23 +1,26 @@
 """Pink's Dark World Sanctuary (formerly Shop Window) for Yellow's Pixel Buddies.
 
-Major Overhaul:
-1. Character / Wardrobe: Locked because only Pink exists in this world ("There is only one of me, minion!").
-2. Tasks & Alarms (2 Sub-Tabs):
-   - Sub-tab 1: Tasks (Reminders board, proof-of-work screen/session verification, cash in for P$ 1 - P$ 3, scrollable).
-   - Sub-tab 2: Alarms (5m, 15m, 25m Pomodoro, custom timers, active alarms list with remaining time, cancel controls, scrollable).
-3. Config & Settings (2 Sub-Tabs):
-   - Sub-tab 1: Edit Facts (Nickname editor, "+ Add New Fact Note", scrollable list of all permanent notes, full text card display).
-   - Sub-tab 2: Toggles (Dialogue Bubbles, AI Song Commentary, Bomb Attack, Jump to Cursor).
-4. Dialogue & Storyline:
-   - Defeat toggle removed! Greetings & exits randomly organized from Toby Fox canon shop dialogue.
-   - Serious shopkeeper dialogue ("Ask Her Something", canon topics, cat bite secret).
-5. Input Bar:
-   - Floating retro input container with QLineEdit, yellow retro "SEND" button, and red retro "X" cancel button.
+Comprehensive Feature Set:
+1. Tasks & Alarms (4 Tab Menu):
+   - GOALS: Long-term personal milestones, [+ Add New Goal], completion awards bonus P$ 5, delete goal.
+   - TASKS: Chores & reminders, [+ Add New Task], proof-of-work screen/session verification, cash in for P$ 1 - P$ 3.
+   - ALARMS: Scheduled clock alarms (e.g. 08:00 AM), [+ Set Clock Alarm], cancel controls.
+   - TIMERS: Countdown focus timers (5m, 15m, 25m Pomodoro, custom countdown), active timer tracking with live remaining time, stop controls.
+2. Item Action & Inspection Dialogue:
+   - Clicking an item or top-right card opens an interactive dialogue box with full item text and actionable options.
+   - Actionable choices for tasks (Complete, Delete, Back), goals (Complete, Delete, Back), alarms (Cancel, Back), timers (Stop, Back), and facts (Delete, Back).
+   - Card helper hint: "▶ Click item or card for options".
+3. Config & Settings (Menu System):
+   - Vertical Undertale menu: "1. Edit Facts & Nickname", "2. Companion Toggles", "3. Back".
+   - Edit Facts: Nickname editor, [+ Add New Fact Note], scrollable list of all permanent notes, action dialogue to delete notes.
+   - Toggles: Live toggles for Dialogue Bubbles, AI Song Commentary, Bomb Attack, and Jump to Cursor (persisted immediately to config.json).
+4. Wardrobe / Characters:
+   - Classic Doll is equipped. Other forms marked "COMING SOON" with in-character dialogue ("Pink is still tailoring that form!").
+5. Exit Pacing:
+   - Selecting Exit delivers Pink's canon goodbye line without auto-closing; user must click again or press Enter/Z to really exit.
 6. Universal Scrolling & Seamless Mouse Interaction:
-   - Mouse wheel scrolling on all scrollable menus.
-   - Visual scroll indicators (▲ and ▼).
-   - Instant single-click activation on all menus (including Talk topics, sub-tabs, and buttons).
-   - Zero-lag: Pre-composited backgrounds, zero allocations per paintEvent, full mouse hover tracking.
+   - Mouse wheel scrolling on all scrollable menus with visual scroll indicators (▲ and ▼).
+   - Single-click activation on all menus, tabs, and action choices.
 """
 
 from __future__ import annotations
@@ -72,8 +75,11 @@ SHOP_SCENE_DIR = SHOP_DIR / "shop_scene"
 SHOP_HUD_DIR = SHOP_DIR / "shop_hud"
 FONTS_DIR = _BASE_DIR / "fonts" / "determination"
 DETERMINATION_FONT_PATH = FONTS_DIR / "determination.ttf"
+if not DETERMINATION_FONT_PATH.exists():
+    DETERMINATION_FONT_PATH = _BASE_DIR / "fonts" / "determination.ttf"
 WALLET_PATH = _BASE_DIR / "memory" / "wallet.json"
 FACTS_PATH = _BASE_DIR / "memory" / "facts.json"
+GOALS_PATH = _BASE_DIR / "memory" / "goals.json"
 
 # Native canvas dimensions
 CANVAS_W = 640
@@ -89,14 +95,17 @@ TYPEWRITER_INTERVAL_MS = 28
 
 class ShopState(Enum):
     ROOT = auto()
-    CHARACTER = auto()        # Replaces BUY (Locked: only Pink exists)
-    TASKS = auto()            # Tasks & Alarms (2 sub-tabs: Tasks, Alarms)
-    TASK_CONFIRM = auto()     # Stage 1 confirmation
-    TASK_SECOND_CONFIRM = auto() # Stage 2 suspicion confirmation
-    TALK_MENU = auto()        # Serious topics (8 items: 7 canon + Back)
-    TALK_DIALOGUE = auto()    # Serious typewriter dialogue
-    SETTINGS_MENU = auto()    # Config & Settings (2 tabs: Edit Facts, Toggles)
-    EXITING = auto()
+    CHARACTER = auto()            # Wardrobe (Coming soon)
+    TASKS = auto()                # Tasks & Alarms (4 tabs: GOALS, TASKS, ALARMS, TIMERS)
+    SETTINGS_MENU = auto()        # Config & Settings (Menu: 1. Edit Facts, 2. Toggles, 3. Back)
+    FACTS_EDIT = auto()           # Facts & Notes editor
+    TOGGLES_MENU = auto()         # Companion Toggles (Live)
+    ITEM_ACTION = auto()          # Interactive inspection dialogue & choices
+    TASK_CONFIRM = auto()         # Stage 1 verification
+    TASK_SECOND_CONFIRM = auto()  # Stage 2 suspicion confirmation
+    TALK_MENU = auto()            # Serious topics (8 items: 7 canon + Back)
+    TALK_DIALOGUE = auto()        # Serious typewriter dialogue
+    EXITING = auto()              # Goodbye dialogue, requires second click to exit
 
 
 class PinkWallet:
@@ -155,43 +164,43 @@ class PinkWallet:
         return False
 
 
-# --- Character Forms (Only Pink exists; other forms locked) ---------------------
+# --- Character Forms (Classic Doll active; others COMING SOON) -----------------
 CHARACTER_FORMS = [
     {
         "id": "doll",
         "name": "Classic Doll (Pink)",
         "cost": 0,
         "anim": "idle",
-        "desc": "The quintessential cotton Mew Mew doll body. The ONE and ONLY character in this world!",
-        "locked": False,
+        "desc": "The quintessential cotton Mew Mew doll body. The ONE and ONLY active character in this world!",
+        "status": "EQUIPPED",
     },
     {
         "id": "ghost",
         "name": "Spectral Ghost",
         "cost": 0,
         "anim": "angry",
-        "desc": "Locked! There is only one character here, darling! You can't replace me!",
-        "locked": True,
+        "desc": "Coming soon! Pink is tailoring her incorporeal spirit form with glowing cyan aura and spectral embers.",
+        "status": "COMING SOON",
     },
     {
         "id": "burnt",
         "name": "Burnt Survivor",
         "cost": 0,
         "anim": "burnt",
-        "desc": "Locked! Only Pink exists in this sanctuary. No character swaps allowed!",
-        "locked": True,
+        "desc": "Coming soon! Battle-hardened, soot-covered survivor doll form. Still undergoing fireproofing tests!",
+        "status": "COMING SOON",
     },
     {
         "id": "overjoyed",
         "name": "Cyber Joy",
         "cost": 0,
         "anim": "overjoyed",
-        "desc": "Locked! One and only. You cannot switch characters, minion!",
-        "locked": True,
+        "desc": "Coming soon! Pure cyber bliss and celebratory peace-sign animations in tailoring development.",
+        "status": "COMING SOON",
     },
 ]
 
-# --- Canon Deltarune Shop Dialogues (Organized Pools) --------------------------
+# --- Canon Deltarune Shop Dialogues --------------------------------------------
 CANON_GREETINGS = [
     "* The sunset...\n* It's breathtaking, isn't it?",
     "* The sunset... will it ever be this beautiful again?",
@@ -223,7 +232,7 @@ CANON_BUY_ENTER = "* Right... this is a store."
 CANON_BUY_PURCHASE = "* Enjoy. Enjoy! ENJOY!!"
 CANON_BUY_BROKE = "* Ever heard of dollars?"
 CANON_BUY_REFUSE = "* Save your dollars."
-CANON_BUY_LOCKED = "* Locked! There is only one character here, darling!\n* Only Pink exists in this world, mew!"
+CANON_BUY_COMING_SOON = "* Coming soon, minion! Pink is still tailoring that form!"
 CANON_TALK_ENTER = "* I guess... we could talk."
 
 TALK_TOPICS = [
@@ -296,16 +305,22 @@ class DeltaruneShopWindow(QWidget):
         self.state: ShopState = ShopState.ROOT
         self._selected_index: int = 0
 
-        # Sub-tab indexing:
-        # TASKS state: 0 = Tasks (Chore Board), 1 = Alarms (Focus Timers & Alarms)
-        self._tasks_subtab: int = 0
-        # SETTINGS_MENU state: 0 = Edit Facts, 1 = Toggles
-        self._config_tab: int = 0
+        # 4 Tabs in TASKS state: 0 = Goals, 1 = Tasks, 2 = Alarms, 3 = Timers
+        self._tasks_tab: int = 1
 
         # Scroll offsets
+        self._goals_scroll_offset: int = 0
         self._tasks_scroll_offset: int = 0
         self._alarms_scroll_offset: int = 0
+        self._timers_scroll_offset: int = 0
         self._notes_scroll_offset: int = 0
+
+        # Item Action / Inspector state
+        self._inspect_item_kind: str = ""   # "goal", "task", "alarm", "timer", "fact"
+        self._inspect_item_text: str = ""
+        self._inspect_item_data: Any = None
+        self._inspect_options: list[str] = []
+        self._inspect_choice_idx: int = 0
 
         # Random organized greeting & exit history
         self._last_greeting_idx: int = -1
@@ -375,7 +390,7 @@ class DeltaruneShopWindow(QWidget):
         )
         self._input_cancel_btn.clicked.connect(self._on_input_cancelled)
 
-        self._input_mode: str = ""  # "fact_name", "fact_note", "custom_timer", "ai_ask"
+        self._input_mode: str = ""  # "fact_name", "fact_note", "new_goal", "new_task", "new_alarm", "custom_timer", "ai_ask"
 
         # Mouse tracking & focus
         self.setFocusPolicy(Qt.StrongFocus)
@@ -459,7 +474,7 @@ class DeltaruneShopWindow(QWidget):
                 p.end()
                 self._bg_cache[key].append(composite)
 
-    # --- Lifecycle & Canon Dialogues -------------------------------------------
+    # --- Lifecycle & Dialogue --------------------------------------------------
 
     def _get_root_greeting(self) -> str:
         choices = [g for i, g in enumerate(CANON_GREETINGS) if i != self._last_greeting_idx]
@@ -617,10 +632,11 @@ class DeltaruneShopWindow(QWidget):
         self._calculate_target_geometry()
         self.state = ShopState.ROOT
         self._selected_index = 0
-        self._tasks_subtab = 0
-        self._config_tab = 0
+        self._tasks_tab = 1
+        self._goals_scroll_offset = 0
         self._tasks_scroll_offset = 0
         self._alarms_scroll_offset = 0
+        self._timers_scroll_offset = 0
         self._notes_scroll_offset = 0
         self._visit_graduating_count = 0
         self._input_container.hide()
@@ -754,376 +770,60 @@ class DeltaruneShopWindow(QWidget):
 
         return False, False, ""
 
-    # --- Universal Scrolling & Menu Navigation ---------------------------------
+    # --- Goals, Facts, Tasks & Alarms Model ------------------------------------
 
-    def _scroll_up(self) -> None:
-        if self.state == ShopState.TASKS:
-            if self._tasks_subtab == 0:
-                self._tasks_scroll_offset = max(0, self._tasks_scroll_offset - 1)
-            else:
-                self._alarms_scroll_offset = max(0, self._alarms_scroll_offset - 1)
-        elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 0:
-            self._notes_scroll_offset = max(0, self._notes_scroll_offset - 1)
-        self.update()
+    def _get_goals_file_path(self) -> Path:
+        if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "memory_dir"):
+            return self._memory.memory_dir / "goals.json"
+        return GOALS_PATH
 
-    def _scroll_down(self) -> None:
-        if self.state == ShopState.TASKS:
-            if self._tasks_subtab == 0:
-                max_off = max(0, len(self._get_active_reminders()) - 4)
-                self._tasks_scroll_offset = min(max_off, self._tasks_scroll_offset + 1)
-            else:
-                max_off = max(0, len(self._get_alarms_menu_items()) - 4)
-                self._alarms_scroll_offset = min(max_off, self._alarms_scroll_offset + 1)
-        elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 0:
-            max_off = max(0, len(self._get_facts_menu_items()) - 4)
-            self._notes_scroll_offset = min(max_off, self._notes_scroll_offset + 1)
-        self.update()
+    def _get_goals(self) -> list[str]:
+        p = self._get_goals_file_path()
+        if p.exists():
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    return [g.get("text", "") if isinstance(g, dict) else str(g) for g in data if g]
+            except Exception as e:
+                log.warning("Could not read goals from %s: %s", p, e)
+        return []
 
-    def wheelEvent(self, event: QWheelEvent) -> None:
-        delta = event.angleDelta().y()
-        if delta > 0:
-            self._scroll_up()
-        elif delta < 0:
-            self._scroll_down()
-        event.accept()
+    def _add_goal(self, text: str) -> bool:
+        text = text.strip()
+        if not text:
+            return False
+        goals = self._get_goals()
+        if text not in goals:
+            goals.append(text)
+            p = self._get_goals_file_path()
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(json.dumps([{"text": g, "completed": False} for g in goals], indent=2), encoding="utf-8")
+                return True
+            except Exception as e:
+                log.warning("Could not save goals: %s", e)
+        return False
 
-    def _nav_up(self) -> None:
-        count = self._get_menu_count()
-        if count <= 0:
-            return
-        if self.state == ShopState.TALK_MENU:
-            self._selected_index = (self._selected_index - 2) % count
+    def _delete_goal(self, text: str) -> bool:
+        goals = self._get_goals()
+        if text in goals:
+            goals.remove(text)
+            p = self._get_goals_file_path()
+            try:
+                p.write_text(json.dumps([{"text": g, "completed": False} for g in goals], indent=2), encoding="utf-8")
+                return True
+            except Exception as e:
+                log.warning("Could not delete goal: %s", e)
+        return False
+
+    def _complete_goal(self, text: str) -> None:
+        if self._delete_goal(text):
+            self._wallet.add(5)
+            self.set_dialogue(
+                f"* TARGET MILESTONE CONQUERED!!\n* You finished: \"{text}\"!\n* Pink awards you a grand bonus of +P$ 000005!"
+            )
         else:
-            self._selected_index = (self._selected_index - 1) % count
-
-        # Auto-scroll viewport
-        if self.state == ShopState.TASKS:
-            if self._tasks_subtab == 0:
-                if self._selected_index < self._tasks_scroll_offset:
-                    self._tasks_scroll_offset = self._selected_index
-                elif self._selected_index >= self._tasks_scroll_offset + 4:
-                    self._tasks_scroll_offset = max(0, self._selected_index - 3)
-            else:
-                if self._selected_index < self._alarms_scroll_offset:
-                    self._alarms_scroll_offset = self._selected_index
-                elif self._selected_index >= self._alarms_scroll_offset + 4:
-                    self._alarms_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 0:
-            if self._selected_index < self._notes_scroll_offset:
-                self._notes_scroll_offset = self._selected_index
-            elif self._selected_index >= self._notes_scroll_offset + 4:
-                self._notes_scroll_offset = max(0, self._selected_index - 3)
-
-        self._on_selection_changed()
-        self.update()
-
-    def _nav_down(self) -> None:
-        count = self._get_menu_count()
-        if count <= 0:
-            return
-        if self.state == ShopState.TALK_MENU:
-            self._selected_index = (self._selected_index + 2) % count
-        else:
-            self._selected_index = (self._selected_index + 1) % count
-
-        # Auto-scroll viewport
-        if self.state == ShopState.TASKS:
-            if self._tasks_subtab == 0:
-                if self._selected_index < self._tasks_scroll_offset:
-                    self._tasks_scroll_offset = self._selected_index
-                elif self._selected_index >= self._tasks_scroll_offset + 4:
-                    self._tasks_scroll_offset = max(0, self._selected_index - 3)
-            else:
-                if self._selected_index < self._alarms_scroll_offset:
-                    self._alarms_scroll_offset = self._selected_index
-                elif self._selected_index >= self._alarms_scroll_offset + 4:
-                    self._alarms_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 0:
-            if self._selected_index < self._notes_scroll_offset:
-                self._notes_scroll_offset = self._selected_index
-            elif self._selected_index >= self._notes_scroll_offset + 4:
-                self._notes_scroll_offset = max(0, self._selected_index - 3)
-
-        self._on_selection_changed()
-        self.update()
-
-    def _get_menu_count(self) -> int:
-        if self.state == ShopState.ROOT:
-            return 5  # CHARACTER, TASKS, TALK, CONFIG & SETTINGS, EXIT
-        elif self.state == ShopState.CHARACTER:
-            return len(CHARACTER_FORMS) + 1  # Forms + Back
-        elif self.state == ShopState.TASKS:
-            if self._tasks_subtab == 0:
-                return len(self._get_active_reminders()) + 1  # Reminders + Back
-            else:
-                return len(self._get_alarms_menu_items()) + 1  # Alarms items + Back
-        elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
-            return 2  # YES, NO
-        elif self.state == ShopState.TALK_MENU:
-            return len(TALK_TOPICS)  # 8 items
-        elif self.state == ShopState.SETTINGS_MENU:
-            if self._config_tab == 0:
-                return len(self._get_facts_menu_items()) + 1  # Facts items + Back
-            else:
-                return 5  # 4 toggles + Back
-        return 0
-
-    def _on_selection_changed(self) -> None:
-        if self.state == ShopState.CHARACTER:
-            if self._selected_index < len(CHARACTER_FORMS):
-                f = CHARACTER_FORMS[self._selected_index]
-                if f.get("locked"):
-                    self.set_dialogue(f"* {f['name']}: LOCKED!\n* There is only one character: Pink!")
-                else:
-                    self.set_dialogue(f"* {f['name']}: The one and only companion in this realm!")
-            else:
-                self.set_dialogue(CANON_BUY_REFUSE)
-        elif self.state == ShopState.TALK_MENU:
-            if self._selected_index < len(TALK_TOPICS):
-                title, key = TALK_TOPICS[self._selected_index]
-                if key == "back":
-                    self.set_dialogue(self._get_root_greeting())
-                else:
-                    self.set_dialogue(f"* ... Topic: {title}")
-        elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 0:
-            notes = self._get_fact_notes()
-            if self._selected_index >= 2 and (self._selected_index - 2) < len(notes):
-                full_note = notes[self._selected_index - 2]
-                self.set_dialogue(f"* Fact Note #{self._selected_index - 1}:\n* \"{full_note}\"")
-
-    def _confirm_selection(self) -> None:
-        if self.state == ShopState.ROOT:
-            if self._selected_index == 0:  # CHARACTER (LOCKED)
-                self.state = ShopState.CHARACTER
-                self._selected_index = 0
-                self.set_dialogue(CANON_BUY_LOCKED)
-            elif self._selected_index == 1:  # TASKS & ALARMS
-                self.state = ShopState.TASKS
-                self._tasks_subtab = 0
-                self._selected_index = 0
-                self._tasks_scroll_offset = 0
-                reminders = self._get_active_reminders()
-                if not reminders:
-                    self.set_dialogue(CANON_SELL_EMPTY)
-                else:
-                    self.set_dialogue(random.choice(CANON_SELL_LINES))
-            elif self._selected_index == 2:  # TALK
-                self.state = ShopState.TALK_MENU
-                self._selected_index = 0
-                self.set_dialogue(CANON_TALK_ENTER)
-            elif self._selected_index == 3:  # CONFIG & SETTINGS
-                self.state = ShopState.SETTINGS_MENU
-                self._config_tab = 0
-                self._selected_index = 0
-                self._notes_scroll_offset = 0
-                self.set_dialogue("* Permanent memory fact sheet & companion configuration.")
-            elif self._selected_index == 4:  # EXIT
-                self._start_exit()
-
-        elif self.state == ShopState.CHARACTER:
-            if self._selected_index < len(CHARACTER_FORMS):
-                self.set_dialogue("* Locked! There is only one character here, darling!\n* You can't replace me, minion!")
-            else:
-                self.state = ShopState.ROOT
-                self._selected_index = 0
-                self.set_dialogue(CANON_BUY_REFUSE)
-
-        elif self.state == ShopState.TASKS:
-            if self._tasks_subtab == 0:
-                reminders = self._get_active_reminders()
-                if self._selected_index < len(reminders):
-                    task_text = reminders[self._selected_index]
-                    self._pending_sell_reminder = task_text
-                    self._pending_sell_value = evaluate_task_value(task_text)
-
-                    has_ev, on_screen, kw = self._scan_task_evidence(task_text)
-                    self._sell_has_evidence = has_ev
-                    self._sell_saw_on_screen = on_screen
-                    self._sell_evidence_kw = kw
-
-                    self.state = ShopState.TASK_CONFIRM
-                    self._selected_index = 0
-                    if has_ev:
-                        proof_loc = "on screen" if on_screen else "in session logs"
-                        self.set_dialogue(
-                            f"* You're gonna give me stuff?\n* Found proof of '{kw}' {proof_loc}! Complete for P$ {self._pending_sell_value}?"
-                        )
-                    else:
-                        self.set_dialogue(
-                            f"* Huh?\n* I haven't seen you do '{kw or task_text[:12]}' at all... Are you sure you finished it?"
-                        )
-                else:
-                    self.state = ShopState.ROOT
-                    self._selected_index = 1
-                    self.set_dialogue(self._get_root_greeting())
-            else:  # Alarms sub-tab
-                alarms_items = self._get_alarms_menu_items()
-                if self._selected_index < len(alarms_items):
-                    item = alarms_items[self._selected_index]
-                    kind = item.get("kind")
-                    if kind == "preset":
-                        mins = item.get("mins", 5)
-                        lbl = item.get("label", "Timer")
-                        self.start_timer(mins, lbl)
-                    elif kind == "custom":
-                        self._prompt_custom_timer()
-                    elif kind == "active_shop":
-                        self.stop_timer()
-                    elif kind == "cancel_memory":
-                        target = item.get("target")
-                        if self._pet and hasattr(self._pet, "_memory") and self._pet._memory:
-                            ok, lbl = self._pet._memory.cancel_alarm_or_timer(target)
-                            if ok:
-                                self.set_dialogue(f"* Cancelled timer/alarm (\"{lbl}\"), mew!")
-                            else:
-                                self.set_dialogue(f"* Could not cancel {target}, dummy!")
-                    elif kind == "stop_all":
-                        if self._pet and hasattr(self._pet, "_memory") and self._pet._memory:
-                            self._pet._memory.clear_all_alarms()
-                        self.stop_timer()
-                        self.set_dialogue("* All alarms and timers cleared, minion!")
-                else:
-                    self.state = ShopState.ROOT
-                    self._selected_index = 1
-                    self.set_dialogue(self._get_root_greeting())
-
-        elif self.state == ShopState.TASK_CONFIRM:
-            if self._selected_index == 0:
-                if self._sell_has_evidence:
-                    if self._pending_sell_reminder:
-                        self._complete_reminder(self._pending_sell_reminder, self._pending_sell_value)
-                        self._pending_sell_reminder = None
-                    self.state = ShopState.TASKS
-                    self._selected_index = 0
-                else:
-                    self.state = ShopState.TASK_SECOND_CONFIRM
-                    self._selected_index = 1
-                    self.set_dialogue(
-                        "* Huh?!\n* Hold it! I didn't see you do that on screen at all!\n* Are you telling the truth, minion?!"
-                    )
-            else:
-                self._pending_sell_reminder = None
-                self.state = ShopState.TASKS
-                self._selected_index = 0
-                self.set_dialogue(CANON_SELL_REFUSE)
-
-        elif self.state == ShopState.TASK_SECOND_CONFIRM:
-            if self._selected_index == 0:
-                if self._pending_sell_reminder:
-                    self._complete_reminder(self._pending_sell_reminder, self._pending_sell_value)
-                    self._pending_sell_reminder = None
-                self.state = ShopState.TASKS
-                self._selected_index = 0
-                self.set_dialogue(
-                    f"{CANON_SELL_SUCCESS}\n* ... Hmph! I'll take your word for it this ONCE! (+P$ {self._pending_sell_value})"
-                )
-            else:
-                self._pending_sell_reminder = None
-                self.state = ShopState.TASKS
-                self._selected_index = 0
-                self.set_dialogue(
-                    f"{CANON_SELL_UNSELLABLE}\n* Caught you red-handed trying to swindle my boutique!\n* No P$ for fake work!"
-                )
-
-        elif self.state == ShopState.TALK_MENU:
-            if self._selected_index < len(TALK_TOPICS):
-                topic_title, topic_key = TALK_TOPICS[self._selected_index]
-                if topic_key == "back":
-                    self.state = ShopState.ROOT
-                    self._selected_index = 2
-                    self.set_dialogue(self._get_root_greeting())
-                elif topic_key == "ai_ask":
-                    self.state = ShopState.TALK_DIALOGUE
-                    self._prompt_serious_inquiry()
-                else:
-                    queue = self._get_topic_dialogue(topic_key)
-                    if queue:
-                        self._dialogue_queue = queue
-                        self._dialogue_queue_idx = 0
-                        self.state = ShopState.TALK_DIALOGUE
-                        self.set_dialogue(self._dialogue_queue[0])
-
-        elif self.state == ShopState.TALK_DIALOGUE:
-            if self._is_typing():
-                self._finish_typing()
-            else:
-                self._dialogue_queue_idx += 1
-                if self._dialogue_queue_idx < len(self._dialogue_queue):
-                    self.set_dialogue(self._dialogue_queue[self._dialogue_queue_idx])
-                else:
-                    self.state = ShopState.TALK_MENU
-                    self.set_dialogue(CANON_TALK_ENTER)
-
-        elif self.state == ShopState.SETTINGS_MENU:
-            if self._config_tab == 0:  # Edit Facts Tab
-                items = self._get_facts_menu_items()
-                if self._selected_index == 0:  # Edit Nickname
-                    self._prompt_change_nickname()
-                elif self._selected_index == 1:  # Add New Fact Note
-                    self._prompt_add_fact()
-                elif self._selected_index < len(items):  # Selected a specific saved note
-                    note_idx = self._selected_index - 2
-                    notes = self._get_fact_notes()
-                    if 0 <= note_idx < len(notes):
-                        note_val = notes[note_idx]
-                        self.set_dialogue(f"* Permanent Note #{note_idx + 1}:\n* \"{note_val}\"")
-                else:  # Back
-                    self.state = ShopState.ROOT
-                    self._selected_index = 3
-                    self.set_dialogue(self._get_root_greeting())
-            else:  # Toggles Tab
-                if self._selected_index == 0:  # Dialogue Bubbles
-                    if self._pet and hasattr(self._pet, "_dialogue_enabled"):
-                        self._pet._dialogue_enabled = not self._pet._dialogue_enabled
-                        state_str = "ENABLED" if self._pet._dialogue_enabled else "DISABLED"
-                        self.set_dialogue(f"* Dialogue bubbles are now {state_str}, mew!")
-                elif self._selected_index == 1:  # Song Commentary
-                    if self._pet and hasattr(self._pet, "_ai_song_comment_enabled"):
-                        self._pet._ai_song_comment_enabled = not self._pet._ai_song_comment_enabled
-                        state_str = "ENABLED" if self._pet._ai_song_comment_enabled else "DISABLED"
-                        self.set_dialogue(f"* Autonomous song reactions are now {state_str}, darling!")
-                elif self._selected_index == 2:  # Bomb Mode
-                    if self._pet and hasattr(self._pet, "_bomb_attack_enabled"):
-                        self._pet._bomb_attack_enabled = not self._pet._bomb_attack_enabled
-                        state_str = "ARMED" if self._pet._bomb_attack_enabled else "DISARMED"
-                        self.set_dialogue(f"* Cat-head bombs are now {state_str}, mew!")
-                elif self._selected_index == 3:  # Jump Mode
-                    if self._pet and hasattr(self._pet, "_jump_enabled"):
-                        self._pet._jump_enabled = not self._pet._jump_enabled
-                        state_str = "ENABLED" if self._pet._jump_enabled else "DISABLED"
-                        self.set_dialogue(f"* Jump-to-cursor is now {state_str}, minion!")
-                else:  # Back
-                    self.state = ShopState.ROOT
-                    self._selected_index = 3
-                    self.set_dialogue(self._get_root_greeting())
-
-        self.update()
-
-    def _cancel_or_back(self) -> None:
-        if self._input_container.isVisible():
-            self._on_input_cancelled()
-            return
-        if self.state in (ShopState.CHARACTER, ShopState.TASKS, ShopState.SETTINGS_MENU, ShopState.TALK_MENU):
-            self.state = ShopState.ROOT
-            self._selected_index = 0
-            self.set_dialogue(self._get_root_greeting())
-        elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
-            self.state = ShopState.TASKS
-            self._selected_index = 0
-            self.set_dialogue(CANON_SELL_REFUSE)
-        elif self.state == ShopState.TALK_DIALOGUE:
-            self.state = ShopState.TALK_MENU
-            self.set_dialogue(CANON_TALK_ENTER)
-        elif self.state == ShopState.ROOT:
-            self._start_exit()
-        self.update()
-
-    def _start_exit(self) -> None:
-        self.state = ShopState.EXITING
-        self.set_dialogue(self._get_exit_line())
-        QTimer.singleShot(1100, self.close_shop)
-
-    # --- Facts, Notes & Reminders Handling ------------------------------------
+            self.set_dialogue("* Couldn't find that goal, silly!")
 
     def _get_facts_file_path(self) -> Path:
         if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "facts_path"):
@@ -1183,19 +883,19 @@ class DeltaruneShopWindow(QWidget):
         except Exception as e:
             log.warning("Error saving facts to %s: %s", p, e)
 
-    def _get_facts_menu_items(self) -> list[str]:
-        name = self._get_user_name()
+    def _delete_fact_note(self, note_text: str) -> bool:
         notes = self._get_fact_notes()
-        items = [
-            f"Nickname: [{name}] (Edit)",
-            "[+ Add New Fact Note]",
-        ]
-        for i, n in enumerate(notes):
-            preview = n.replace("\n", " ").strip()
-            if len(preview) > 28:
-                preview = preview[:27] + "..."
-            items.append(f"{i+1}. {preview}")
-        return items
+        if note_text in notes:
+            notes.remove(note_text)
+            p = self._get_facts_file_path()
+            try:
+                data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+                data["notes"] = notes
+                p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                return True
+            except Exception as e:
+                log.warning("Could not delete fact note: %s", e)
+        return False
 
     def _get_active_reminders(self) -> list[str]:
         if not self._memory:
@@ -1233,43 +933,626 @@ class DeltaruneShopWindow(QWidget):
                 log.warning("Could not fetch active alarms: %s", e)
         return []
 
-    def _get_alarms_menu_items(self) -> list[dict[str, Any]]:
+    def _get_scheduled_alarms(self) -> list[dict[str, Any]]:
+        """Return only scheduled clock alarms (kind == 'alarm')."""
+        active = self._get_active_alarms_list()
+        return [a for a in active if a.get("kind") == "alarm" and a.get("state") == "active"]
+
+    def _get_active_timers(self) -> list[dict[str, Any]]:
+        """Return active countdown timers (kind == 'timer')."""
+        active = self._get_active_alarms_list()
+        return [a for a in active if a.get("kind") == "timer" and a.get("state") == "active"]
+
+    # --- Item Action / Inspector Mode -----------------------------------------
+
+    def _open_item_action(self, kind: str, text: str, data: Any = None) -> None:
+        self._inspect_item_kind = kind
+        self._inspect_item_text = text
+        self._inspect_item_data = data
+        self._inspect_choice_idx = 0
+        self.state = ShopState.ITEM_ACTION
+
+        if kind == "goal":
+            self._inspect_options = ["Complete (+P$ 5)", "Delete Goal", "Back"]
+            self.set_dialogue(f"* Target Milestone:\n* \"{text}\"\n* Ready to mark it completed or remove it?")
+        elif kind == "task":
+            val = evaluate_task_value(text)
+            self._inspect_options = [f"Complete (+P$ {val})", "Delete Task", "Back"]
+            self.set_dialogue(f"* Task on Board:\n* \"{text}\"\n* Ready to verify and collect P$ {val}?")
+        elif kind == "alarm":
+            self._inspect_options = ["Cancel / Delete Alarm", "Back"]
+            time_str = data.get("clock_time", "Scheduled") if isinstance(data, dict) else ""
+            lbl = data.get("label", text) if isinstance(data, dict) else text
+            self.set_dialogue(f"* Clock Alarm [{time_str}]:\n* \"{lbl}\"\n* Want Pink to cancel this alarm?")
+        elif kind == "timer":
+            self._inspect_options = ["Stop / Cancel Timer", "Back"]
+            self.set_dialogue(f"* Countdown Timer:\n* \"{text}\"\n* Stop this focus interval?")
+        elif kind == "fact":
+            self._inspect_options = ["Delete Fact Note", "Back"]
+            self.set_dialogue(f"* Permanent Fact Note:\n* \"{text}\"\n* Inscribed in Pink's memory core.")
+
+    def _confirm_item_action(self) -> None:
+        opt = self._inspect_options[self._inspect_choice_idx] if self._inspect_choice_idx < len(self._inspect_options) else "Back"
+
+        if self._inspect_item_kind == "goal":
+            if opt.startswith("Complete"):
+                self._complete_goal(self._inspect_item_text)
+                self.state = ShopState.TASKS
+                self._tasks_tab = 0
+                self._selected_index = 0
+            elif opt.startswith("Delete"):
+                self._delete_goal(self._inspect_item_text)
+                self.set_dialogue(f"* Goal discarded:\n* \"{self._inspect_item_text}\"")
+                self.state = ShopState.TASKS
+                self._tasks_tab = 0
+                self._selected_index = 0
+            else:  # Back
+                self.state = ShopState.TASKS
+                self._tasks_tab = 0
+                self.set_dialogue("* Back to goals.")
+
+        elif self._inspect_item_kind == "task":
+            if opt.startswith("Complete"):
+                task_text = self._inspect_item_text
+                self._pending_sell_reminder = task_text
+                self._pending_sell_value = evaluate_task_value(task_text)
+                has_ev, on_screen, kw = self._scan_task_evidence(task_text)
+                self._sell_has_evidence = has_ev
+                self._sell_saw_on_screen = on_screen
+                self._sell_evidence_kw = kw
+
+                self.state = ShopState.TASK_CONFIRM
+                self._selected_index = 0
+                if has_ev:
+                    proof_loc = "on screen" if on_screen else "in session logs"
+                    self.set_dialogue(
+                        f"* You're gonna give me stuff?\n* Found proof of '{kw}' {proof_loc}! Complete for P$ {self._pending_sell_value}?"
+                    )
+                else:
+                    self.set_dialogue(
+                        f"* Huh?\n* I haven't seen you do '{kw or task_text[:12]}' at all... Are you sure you finished it?"
+                    )
+            elif opt.startswith("Delete"):
+                if self._memory:
+                    self._memory.delete_reminder(self._inspect_item_text)
+                self.set_dialogue(f"* Task removed from chore board:\n* \"{self._inspect_item_text}\"")
+                self.state = ShopState.TASKS
+                self._tasks_tab = 1
+                self._selected_index = 0
+            else:  # Back
+                self.state = ShopState.TASKS
+                self._tasks_tab = 1
+                self.set_dialogue("* Back to chores.")
+
+        elif self._inspect_item_kind == "alarm":
+            if opt.startswith("Cancel"):
+                target = self._inspect_item_data.get("id") or self._inspect_item_text if isinstance(self._inspect_item_data, dict) else self._inspect_item_text
+                mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
+                if mem and hasattr(mem, "cancel_alarm_or_timer"):
+                    mem.cancel_alarm_or_timer(target)
+                self.set_dialogue(f"* Alarm cancelled:\n* \"{self._inspect_item_text}\"")
+                self.state = ShopState.TASKS
+                self._tasks_tab = 2
+                self._selected_index = 0
+            else:
+                self.state = ShopState.TASKS
+                self._tasks_tab = 2
+                self.set_dialogue("* Back to alarms.")
+
+        elif self._inspect_item_kind == "timer":
+            if opt.startswith("Stop"):
+                if isinstance(self._inspect_item_data, str) and self._inspect_item_data == "active_shop":
+                    self.stop_timer()
+                else:
+                    target = self._inspect_item_data.get("id") if isinstance(self._inspect_item_data, dict) else self._inspect_item_text
+                    mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
+                    if mem and hasattr(mem, "cancel_alarm_or_timer"):
+                        mem.cancel_alarm_or_timer(target)
+                self.set_dialogue("* Active timer stopped, darling.")
+                self.state = ShopState.TASKS
+                self._tasks_tab = 3
+                self._selected_index = 0
+            else:
+                self.state = ShopState.TASKS
+                self._tasks_tab = 3
+                self.set_dialogue("* Back to timers.")
+
+        elif self._inspect_item_kind == "fact":
+            if opt.startswith("Delete"):
+                self._delete_fact_note(self._inspect_item_text)
+                self.set_dialogue(f"* Fact note expunged from memory:\n* \"{self._inspect_item_text}\"")
+                self.state = ShopState.FACTS_EDIT
+                self._selected_index = 0
+            else:
+                self.state = ShopState.FACTS_EDIT
+                self.set_dialogue("* Back to fact sheet.")
+
+        self.update()
+
+    # --- Universal Scrolling & Navigation --------------------------------------
+
+    def _scroll_up(self) -> None:
+        if self.state == ShopState.TASKS:
+            if self._tasks_tab == 0:
+                self._goals_scroll_offset = max(0, self._goals_scroll_offset - 1)
+            elif self._tasks_tab == 1:
+                self._tasks_scroll_offset = max(0, self._tasks_scroll_offset - 1)
+            elif self._tasks_tab == 2:
+                self._alarms_scroll_offset = max(0, self._alarms_scroll_offset - 1)
+            elif self._tasks_tab == 3:
+                self._timers_scroll_offset = max(0, self._timers_scroll_offset - 1)
+        elif self.state == ShopState.FACTS_EDIT:
+            self._notes_scroll_offset = max(0, self._notes_scroll_offset - 1)
+        self.update()
+
+    def _scroll_down(self) -> None:
+        if self.state == ShopState.TASKS:
+            if self._tasks_tab == 0:
+                max_off = max(0, len(self._get_goals()) + 1 - 4)
+                self._goals_scroll_offset = min(max_off, self._goals_scroll_offset + 1)
+            elif self._tasks_tab == 1:
+                max_off = max(0, len(self._get_active_reminders()) + 1 - 4)
+                self._tasks_scroll_offset = min(max_off, self._tasks_scroll_offset + 1)
+            elif self._tasks_tab == 2:
+                max_off = max(0, len(self._get_scheduled_alarms()) + 1 - 4)
+                self._alarms_scroll_offset = min(max_off, self._alarms_scroll_offset + 1)
+            elif self._tasks_tab == 3:
+                max_off = max(0, len(self._get_timers_menu_items()) - 4)
+                self._timers_scroll_offset = min(max_off, self._timers_scroll_offset + 1)
+        elif self.state == ShopState.FACTS_EDIT:
+            max_off = max(0, len(self._get_facts_menu_items()) - 4)
+            self._notes_scroll_offset = min(max_off, self._notes_scroll_offset + 1)
+        self.update()
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self._scroll_up()
+        elif delta < 0:
+            self._scroll_down()
+        event.accept()
+
+    def _nav_up(self) -> None:
+        count = self._get_menu_count()
+        if count <= 0:
+            return
+        if self.state == ShopState.TALK_MENU:
+            self._selected_index = (self._selected_index - 2) % count
+        elif self.state == ShopState.ITEM_ACTION:
+            self._inspect_choice_idx = (self._inspect_choice_idx - 1) % len(self._inspect_options)
+            self._selected_index = self._inspect_choice_idx
+            self.update()
+            return
+        else:
+            self._selected_index = (self._selected_index - 1) % count
+
+        # Auto-scroll viewport
+        if self.state == ShopState.TASKS:
+            offset_attr = [
+                "_goals_scroll_offset",
+                "_tasks_scroll_offset",
+                "_alarms_scroll_offset",
+                "_timers_scroll_offset",
+            ][self._tasks_tab]
+            cur_off = getattr(self, offset_attr)
+            if self._selected_index < cur_off:
+                setattr(self, offset_attr, self._selected_index)
+            elif self._selected_index >= cur_off + 4:
+                setattr(self, offset_attr, max(0, self._selected_index - 3))
+        elif self.state == ShopState.FACTS_EDIT:
+            if self._selected_index < self._notes_scroll_offset:
+                self._notes_scroll_offset = self._selected_index
+            elif self._selected_index >= self._notes_scroll_offset + 4:
+                self._notes_scroll_offset = max(0, self._selected_index - 3)
+
+        self._on_selection_changed()
+        self.update()
+
+    def _nav_down(self) -> None:
+        count = self._get_menu_count()
+        if count <= 0:
+            return
+        if self.state == ShopState.TALK_MENU:
+            self._selected_index = (self._selected_index + 2) % count
+        elif self.state == ShopState.ITEM_ACTION:
+            self._inspect_choice_idx = (self._inspect_choice_idx + 1) % len(self._inspect_options)
+            self._selected_index = self._inspect_choice_idx
+            self.update()
+            return
+        else:
+            self._selected_index = (self._selected_index + 1) % count
+
+        # Auto-scroll viewport
+        if self.state == ShopState.TASKS:
+            offset_attr = [
+                "_goals_scroll_offset",
+                "_tasks_scroll_offset",
+                "_alarms_scroll_offset",
+                "_timers_scroll_offset",
+            ][self._tasks_tab]
+            cur_off = getattr(self, offset_attr)
+            if self._selected_index < cur_off:
+                setattr(self, offset_attr, self._selected_index)
+            elif self._selected_index >= cur_off + 4:
+                setattr(self, offset_attr, max(0, self._selected_index - 3))
+        elif self.state == ShopState.FACTS_EDIT:
+            if self._selected_index < self._notes_scroll_offset:
+                self._notes_scroll_offset = self._selected_index
+            elif self._selected_index >= self._notes_scroll_offset + 4:
+                self._notes_scroll_offset = max(0, self._selected_index - 3)
+
+        self._on_selection_changed()
+        self.update()
+
+    def _get_menu_count(self) -> int:
+        if self.state == ShopState.ROOT:
+            return 5  # CHARACTER, TASKS & ALARMS, TALK, CONFIG & SETTINGS, EXIT
+        elif self.state == ShopState.CHARACTER:
+            return len(CHARACTER_FORMS) + 1  # Forms + Back
+        elif self.state == ShopState.TASKS:
+            if self._tasks_tab == 0:
+                return len(self._get_goals()) + 2  # [+ Add Goal] + Goals + Back
+            elif self._tasks_tab == 1:
+                return len(self._get_active_reminders()) + 2  # [+ Add Task] + Tasks + Back
+            elif self._tasks_tab == 2:
+                return len(self._get_scheduled_alarms()) + 2  # [+ Set Alarm] + Alarms + Back
+            elif self._tasks_tab == 3:
+                return len(self._get_timers_menu_items()) + 1  # Presets/timers + Back
+        elif self.state == ShopState.SETTINGS_MENU:
+            return 3  # 1. Edit Facts, 2. Toggles, 3. Back
+        elif self.state == ShopState.FACTS_EDIT:
+            return len(self._get_facts_menu_items()) + 1  # Facts + Back
+        elif self.state == ShopState.TOGGLES_MENU:
+            return 5  # 4 toggles + Back
+        elif self.state == ShopState.ITEM_ACTION:
+            return len(self._inspect_options)
+        elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
+            return 2  # YES, NO
+        elif self.state == ShopState.TALK_MENU:
+            return len(TALK_TOPICS)  # 8 items
+        return 0
+
+    def _get_timers_menu_items(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = [
-            {"kind": "preset", "mins": 5, "label": "Start 5m Break"},
-            {"kind": "preset", "mins": 15, "label": "Start 15m Sprint"},
-            {"kind": "preset", "mins": 25, "label": "Start 25m Pomodoro"},
-            {"kind": "custom", "label": "Custom Timer..."},
+            {"kind": "preset", "mins": 5, "label": "Start 5m Short Break"},
+            {"kind": "preset", "mins": 15, "label": "Start 15m Sprint Focus"},
+            {"kind": "preset", "mins": 25, "label": "Start 25m Pomodoro Focus"},
+            {"kind": "custom", "label": "Custom Countdown Timer..."},
         ]
         if self._timer_active and self._timer_seconds_remaining > 0:
             m, s = divmod(self._timer_seconds_remaining, 60)
             items.append({
                 "kind": "active_shop",
-                "label": f"[Active] {self._timer_label} ({m:02d}:{s:02d}) [STOP]",
+                "label": f"[Active] {self._timer_label} ({m:02d}:{s:02d})",
             })
-        active_alarms = self._get_active_alarms_list()
-        for a in active_alarms:
-            if a.get("state") == "active":
-                lbl = a.get("label", "Alarm")
-                if a.get("kind") == "timer":
-                    tgt = a.get("target_timestamp", 0)
-                    rem = max(0, int(tgt - time.time()))
-                    m, s = divmod(rem, 60)
-                    items.append({
-                        "kind": "cancel_memory",
-                        "target": a.get("id") or lbl,
-                        "label": f"[Active] {lbl} ({m:02d}:{s:02d}) [STOP]",
-                    })
-                elif a.get("kind") == "alarm":
-                    items.append({
-                        "kind": "cancel_memory",
-                        "target": a.get("id") or lbl,
-                        "label": f"[Alarm] {a.get('clock_time')} ({lbl}) [STOP]",
-                    })
+        for t in self._get_active_timers():
+            tgt = t.get("target_timestamp", 0)
+            rem = max(0, int(tgt - time.time()))
+            m, s = divmod(rem, 60)
+            items.append({
+                "kind": "active_memory",
+                "target": t.get("id") or t.get("label"),
+                "label": f"[Active] {t.get('label', 'Timer')} ({m:02d}:{s:02d})",
+                "data": t,
+            })
         if len(items) > 4:
-            items.append({"kind": "stop_all", "label": "Stop All Alarms & Timers"})
+            items.append({"kind": "stop_all", "label": "Stop All Active Timers"})
         return items
 
-    # --- Prompt Input Helpers (with Send & X buttons) --------------------------
+    def _get_facts_menu_items(self) -> list[str]:
+        name = self._get_user_name()
+        notes = self._get_fact_notes()
+        items = [
+            f"Nickname: [{name}] (Edit)",
+            "[+ Add New Fact Note]",
+        ]
+        for i, n in enumerate(notes):
+            preview = n.replace("\n", " ").strip()
+            if len(preview) > 28:
+                preview = preview[:27] + "..."
+            items.append(f"{i+1}. {preview}")
+        return items
+
+    def _on_selection_changed(self) -> None:
+        if self.state == ShopState.CHARACTER:
+            if self._selected_index < len(CHARACTER_FORMS):
+                f = CHARACTER_FORMS[self._selected_index]
+                if f.get("status") == "COMING SOON":
+                    self.set_dialogue(f"* {f['name']}: Coming soon, minion! Pink is tailoring it!")
+                else:
+                    self.set_dialogue(f"* {f['name']}: The one and only companion in this realm!")
+            else:
+                self.set_dialogue(CANON_BUY_REFUSE)
+
+        elif self.state == ShopState.TALK_MENU:
+            if self._selected_index < len(TALK_TOPICS):
+                title, key = TALK_TOPICS[self._selected_index]
+                if key == "back":
+                    self.set_dialogue(self._get_root_greeting())
+                else:
+                    self.set_dialogue(f"* ... Topic: {title}")
+
+        elif self.state == ShopState.FACTS_EDIT:
+            notes = self._get_fact_notes()
+            if self._selected_index >= 2 and (self._selected_index - 2) < len(notes):
+                full_note = notes[self._selected_index - 2]
+                self.set_dialogue(f"* Fact Note #{self._selected_index - 1}:\n* \"{full_note}\"")
+
+    def _confirm_selection(self) -> None:
+        if self.state == ShopState.ROOT:
+            if self._selected_index == 0:  # CHARACTER
+                self.state = ShopState.CHARACTER
+                self._selected_index = 0
+                self.set_dialogue("* Pink's Wardrobe! Other styles are coming soon, darling!")
+            elif self._selected_index == 1:  # TASKS & ALARMS
+                self.state = ShopState.TASKS
+                self._tasks_tab = 1
+                self._selected_index = 0
+                self.set_dialogue("* Tasks, Goals, Timers & Alarms command center!")
+            elif self._selected_index == 2:  # TALK
+                self.state = ShopState.TALK_MENU
+                self._selected_index = 0
+                self.set_dialogue(CANON_TALK_ENTER)
+            elif self._selected_index == 3:  # CONFIG & SETTINGS
+                self.state = ShopState.SETTINGS_MENU
+                self._selected_index = 0
+                self.set_dialogue("* Sanctuary settings & permanent memory fact sheet.")
+            elif self._selected_index == 4:  # EXIT
+                self._start_exit()
+
+        elif self.state == ShopState.CHARACTER:
+            if self._selected_index < len(CHARACTER_FORMS):
+                f = CHARACTER_FORMS[self._selected_index]
+                if f.get("status") == "COMING SOON":
+                    self.set_dialogue(CANON_BUY_COMING_SOON)
+                else:
+                    self.set_dialogue("* Already equipped, darling! You look magnificent!")
+            else:
+                self.state = ShopState.ROOT
+                self._selected_index = 0
+                self.set_dialogue(self._get_root_greeting())
+
+        elif self.state == ShopState.TASKS:
+            if self._tasks_tab == 0:  # GOALS
+                goals = self._get_goals()
+                if self._selected_index == 0:
+                    self._prompt_add_goal()
+                elif self._selected_index <= len(goals):
+                    goal_text = goals[self._selected_index - 1]
+                    self._open_item_action("goal", goal_text)
+                else:  # Back
+                    self.state = ShopState.ROOT
+                    self._selected_index = 1
+                    self.set_dialogue(self._get_root_greeting())
+
+            elif self._tasks_tab == 1:  # TASKS
+                reminders = self._get_active_reminders()
+                if self._selected_index == 0:
+                    self._prompt_add_task()
+                elif self._selected_index <= len(reminders):
+                    task_text = reminders[self._selected_index - 1]
+                    self._open_item_action("task", task_text)
+                else:  # Back
+                    self.state = ShopState.ROOT
+                    self._selected_index = 1
+                    self.set_dialogue(self._get_root_greeting())
+
+            elif self._tasks_tab == 2:  # ALARMS
+                alarms = self._get_scheduled_alarms()
+                if self._selected_index == 0:
+                    self._prompt_add_alarm()
+                elif self._selected_index <= len(alarms):
+                    alarm_item = alarms[self._selected_index - 1]
+                    lbl = alarm_item.get("label", "Alarm")
+                    self._open_item_action("alarm", lbl, alarm_item)
+                else:  # Back
+                    self.state = ShopState.ROOT
+                    self._selected_index = 1
+                    self.set_dialogue(self._get_root_greeting())
+
+            elif self._tasks_tab == 3:  # TIMERS
+                items = self._get_timers_menu_items()
+                if self._selected_index < len(items):
+                    it = items[self._selected_index]
+                    kind = it.get("kind")
+                    if kind == "preset":
+                        self.start_timer(it.get("mins", 5), it.get("label"))
+                    elif kind == "custom":
+                        self._prompt_custom_timer()
+                    elif kind in ("active_shop", "active_memory"):
+                        lbl = it.get("label", "Timer")
+                        self._open_item_action("timer", lbl, it.get("data") or kind)
+                    elif kind == "stop_all":
+                        mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
+                        if mem and hasattr(mem, "clear_all_alarms"):
+                            mem.clear_all_alarms()
+                        self.stop_timer()
+                        self.set_dialogue("* All active timers halted, minion!")
+                else:  # Back
+                    self.state = ShopState.ROOT
+                    self._selected_index = 1
+                    self.set_dialogue(self._get_root_greeting())
+
+        elif self.state == ShopState.SETTINGS_MENU:
+            if self._selected_index == 0:  # Edit Facts
+                self.state = ShopState.FACTS_EDIT
+                self._selected_index = 0
+                self._notes_scroll_offset = 0
+                self.set_dialogue("* Permanent memory fact sheet & nickname manager.")
+            elif self._selected_index == 1:  # Companion Toggles
+                self.state = ShopState.TOGGLES_MENU
+                self._selected_index = 0
+                self.set_dialogue("* Toggle companion autonomous behaviors in real time.")
+            else:  # Back
+                self.state = ShopState.ROOT
+                self._selected_index = 3
+                self.set_dialogue(self._get_root_greeting())
+
+        elif self.state == ShopState.FACTS_EDIT:
+            items = self._get_facts_menu_items()
+            if self._selected_index == 0:  # Edit Nickname
+                self._prompt_change_nickname()
+            elif self._selected_index == 1:  # Add New Note
+                self._prompt_add_fact()
+            elif self._selected_index < len(items):  # Note inspect
+                note_idx = self._selected_index - 2
+                notes = self._get_fact_notes()
+                if 0 <= note_idx < len(notes):
+                    self._open_item_action("fact", notes[note_idx])
+            else:  # Back
+                self.state = ShopState.SETTINGS_MENU
+                self._selected_index = 0
+                self.set_dialogue("* Back to sanctuary settings.")
+
+        elif self.state == ShopState.TOGGLES_MENU:
+            if self._selected_index == 0:  # Dialogue Bubbles
+                if self._pet:
+                    new_val = not getattr(self._pet, "_dialogue_enabled", True)
+                    self._pet._toggle_dialogue(new_val)
+                    state_str = "ENABLED" if new_val else "DISABLED"
+                    self.set_dialogue(f"* Dialogue bubbles are now {state_str}, mew!")
+            elif self._selected_index == 1:  # Song Commentary
+                if self._pet:
+                    new_val = not getattr(self._pet, "_ai_song_comment_enabled", True)
+                    self._pet._ai_song_comment_enabled = new_val
+                    if hasattr(self._pet, "_save_live_settings"):
+                        self._pet._save_live_settings()
+                    state_str = "ENABLED" if new_val else "DISABLED"
+                    self.set_dialogue(f"* Autonomous song reactions are now {state_str}, darling!")
+            elif self._selected_index == 2:  # Bomb Mode
+                if self._pet:
+                    new_val = not getattr(self._pet, "_bomb_attack_enabled", False)
+                    self._pet._toggle_bomb_attack(new_val)
+                    state_str = "ARMED" if new_val else "DISARMED"
+                    self.set_dialogue(f"* Cat-head bombs are now {state_str}, mew!")
+            elif self._selected_index == 3:  # Jump Mode
+                if self._pet:
+                    new_val = not getattr(self._pet, "_jump_enabled", True)
+                    self._pet._toggle_jump_mode(new_val)
+                    state_str = "ENABLED" if new_val else "DISABLED"
+                    self.set_dialogue(f"* Jump-to-cursor is now {state_str}, minion!")
+            else:  # Back
+                self.state = ShopState.SETTINGS_MENU
+                self._selected_index = 1
+                self.set_dialogue("* Back to sanctuary settings.")
+
+        elif self.state == ShopState.ITEM_ACTION:
+            self._confirm_item_action()
+
+        elif self.state == ShopState.TASK_CONFIRM:
+            if self._selected_index == 0:
+                if self._sell_has_evidence:
+                    if self._pending_sell_reminder:
+                        self._complete_reminder(self._pending_sell_reminder, self._pending_sell_value)
+                        self._pending_sell_reminder = None
+                    self.state = ShopState.TASKS
+                    self._tasks_tab = 1
+                    self._selected_index = 0
+                else:
+                    self.state = ShopState.TASK_SECOND_CONFIRM
+                    self._selected_index = 1
+                    self.set_dialogue(
+                        "* Huh?!\n* Hold it! I didn't see you do that on screen at all!\n* Are you telling the truth, minion?!"
+                    )
+            else:
+                self._pending_sell_reminder = None
+                self.state = ShopState.TASKS
+                self._tasks_tab = 1
+                self._selected_index = 0
+                self.set_dialogue(CANON_SELL_REFUSE)
+
+        elif self.state == ShopState.TASK_SECOND_CONFIRM:
+            if self._selected_index == 0:
+                if self._pending_sell_reminder:
+                    self._complete_reminder(self._pending_sell_reminder, self._pending_sell_value)
+                    self._pending_sell_reminder = None
+                self.state = ShopState.TASKS
+                self._tasks_tab = 1
+                self._selected_index = 0
+                self.set_dialogue(
+                    f"{CANON_SELL_SUCCESS}\n* ... Hmph! I'll take your word for it this ONCE! (+P$ {self._pending_sell_value})"
+                )
+            else:
+                self._pending_sell_reminder = None
+                self.state = ShopState.TASKS
+                self._tasks_tab = 1
+                self._selected_index = 0
+                self.set_dialogue(
+                    f"{CANON_SELL_UNSELLABLE}\n* Caught you red-handed trying to swindle my boutique!\n* No P$ for fake work!"
+                )
+
+        elif self.state == ShopState.TALK_MENU:
+            if self._selected_index < len(TALK_TOPICS):
+                topic_title, topic_key = TALK_TOPICS[self._selected_index]
+                if topic_key == "back":
+                    self.state = ShopState.ROOT
+                    self._selected_index = 2
+                    self.set_dialogue(self._get_root_greeting())
+                elif topic_key == "ai_ask":
+                    self.state = ShopState.TALK_DIALOGUE
+                    self._prompt_serious_inquiry()
+                else:
+                    queue = self._get_topic_dialogue(topic_key)
+                    if queue:
+                        self._dialogue_queue = queue
+                        self._dialogue_queue_idx = 0
+                        self.state = ShopState.TALK_DIALOGUE
+                        self.set_dialogue(self._dialogue_queue[0])
+
+        elif self.state == ShopState.TALK_DIALOGUE:
+            if self._is_typing():
+                self._finish_typing()
+            else:
+                self._dialogue_queue_idx += 1
+                if self._dialogue_queue_idx < len(self._dialogue_queue):
+                    self.set_dialogue(self._dialogue_queue[self._dialogue_queue_idx])
+                else:
+                    self.state = ShopState.TALK_MENU
+                    self.set_dialogue(CANON_TALK_ENTER)
+
+        self.update()
+
+    def _cancel_or_back(self) -> None:
+        if self._input_container.isVisible():
+            self._on_input_cancelled()
+            return
+        if self.state in (ShopState.CHARACTER, ShopState.TASKS, ShopState.SETTINGS_MENU, ShopState.TALK_MENU):
+            self.state = ShopState.ROOT
+            self._selected_index = 0
+            self.set_dialogue(self._get_root_greeting())
+        elif self.state in (ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU):
+            self.state = ShopState.SETTINGS_MENU
+            self._selected_index = 0
+            self.set_dialogue("* Sanctuary settings.")
+        elif self.state == ShopState.ITEM_ACTION:
+            if self._inspect_item_kind in ("goal", "task", "alarm", "timer"):
+                self.state = ShopState.TASKS
+            else:
+                self.state = ShopState.FACTS_EDIT
+            self.set_dialogue("* Back.")
+        elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
+            self.state = ShopState.TASKS
+            self._tasks_tab = 1
+            self._selected_index = 0
+            self.set_dialogue(CANON_SELL_REFUSE)
+        elif self.state == ShopState.TALK_DIALOGUE:
+            self.state = ShopState.TALK_MENU
+            self.set_dialogue(CANON_TALK_ENTER)
+        elif self.state == ShopState.ROOT:
+            self._start_exit()
+        elif self.state == ShopState.EXITING:
+            if self._is_typing():
+                self._finish_typing()
+            else:
+                self.close_shop()
+        self.update()
+
+    def _start_exit(self) -> None:
+        """Deliver Pink's canon exit dialogue. The user must click again or press Enter/Z to exit."""
+        self.state = ShopState.EXITING
+        self.set_dialogue(self._get_exit_line())
+
+    # --- Prompt Input Helpers --------------------------------------------------
 
     def _prompt_change_nickname(self) -> None:
         self._input_mode = "fact_name"
@@ -1278,6 +1561,18 @@ class DeltaruneShopWindow(QWidget):
     def _prompt_add_fact(self) -> None:
         self._input_mode = "fact_note"
         self._show_input_bar("Enter a new fact note for Pink to permanently remember:")
+
+    def _prompt_add_goal(self) -> None:
+        self._input_mode = "new_goal"
+        self._show_input_bar("Enter a personal goal or milestone objective:")
+
+    def _prompt_add_task(self) -> None:
+        self._input_mode = "new_task"
+        self._show_input_bar("Enter a new task or chore to complete for Pink Dollars:")
+
+    def _prompt_add_alarm(self) -> None:
+        self._input_mode = "new_alarm"
+        self._show_input_bar("Enter alarm time and reason (e.g. 08:30 AM Team Sync):")
 
     def _prompt_custom_timer(self) -> None:
         self._input_mode = "custom_timer"
@@ -1328,6 +1623,24 @@ class DeltaruneShopWindow(QWidget):
         elif self._input_mode == "fact_note":
             self._save_facts(new_note=val)
             self.set_dialogue(f"* Inscribed into my permanent fact logs:\n* \"{val}\"")
+        elif self._input_mode == "new_goal":
+            self._add_goal(val)
+            self.set_dialogue(f"* New target milestone logged:\n* \"{val}\"\n* Complete it to collect +P$ 000005!")
+        elif self._input_mode == "new_task":
+            if self._memory:
+                self._memory.add_reminder(val)
+            self.set_dialogue(f"* Task registered to chore board:\n* \"{val}\"\n* Finish it for Pink Dollars!")
+        elif self._input_mode == "new_alarm":
+            parts = val.split(" ", 1)
+            time_str = parts[0].strip()
+            lbl = parts[1].strip() if len(parts) > 1 else "Alarm"
+            mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
+            if mem and hasattr(mem, "add_alarm"):
+                item = mem.add_alarm(time_str, lbl)
+                if item:
+                    self.set_dialogue(f"* Clock alarm primed for {item.get('clock_time')} (\"{lbl}\")!")
+                else:
+                    self.set_dialogue("* Format error: Use e.g. 08:30 AM Meeting, dummy!")
         elif self._input_mode == "custom_timer":
             try:
                 mins = int(val)
@@ -1358,20 +1671,20 @@ class DeltaruneShopWindow(QWidget):
             super().keyPressEvent(event)
             return
 
-        # Sub-tab switching via Tab key
-        if key == Qt.Key_Tab:
-            if self.state == ShopState.TASKS:
-                self._tasks_subtab = 1 - self._tasks_subtab
-                self._selected_index = 0
-                self._on_selection_changed()
-                self.update()
-                return
-            elif self.state == ShopState.SETTINGS_MENU:
-                self._config_tab = 1 - self._config_tab
-                self._selected_index = 0
-                self._on_selection_changed()
-                self.update()
-                return
+        # Exit mode: any key exits or finishes typing
+        if self.state == ShopState.EXITING:
+            if self._is_typing():
+                self._finish_typing()
+            else:
+                self.close_shop()
+            return
+
+        # Sub-tab switching in TASKS via Tab key
+        if key == Qt.Key_Tab and self.state == ShopState.TASKS:
+            self._tasks_tab = (self._tasks_tab + 1) % 4
+            self._selected_index = 0
+            self.update()
+            return
 
         if key in (Qt.Key_Up, Qt.Key_W):
             self._nav_up()
@@ -1383,12 +1696,8 @@ class DeltaruneShopWindow(QWidget):
                     self._selected_index -= 1
                     self._on_selection_changed()
                     self.update()
-            elif self.state == ShopState.TASKS and self._tasks_subtab == 1:
-                self._tasks_subtab = 0
-                self._selected_index = 0
-                self.update()
-            elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 1:
-                self._config_tab = 0
+            elif self.state == ShopState.TASKS:
+                self._tasks_tab = (self._tasks_tab - 1) % 4
                 self._selected_index = 0
                 self.update()
         elif key in (Qt.Key_Right, Qt.Key_D):
@@ -1397,12 +1706,8 @@ class DeltaruneShopWindow(QWidget):
                     self._selected_index += 1
                     self._on_selection_changed()
                     self.update()
-            elif self.state == ShopState.TASKS and self._tasks_subtab == 0:
-                self._tasks_subtab = 1
-                self._selected_index = 0
-                self.update()
-            elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 0:
-                self._config_tab = 1
+            elif self.state == ShopState.TASKS:
+                self._tasks_tab = (self._tasks_tab + 1) % 4
                 self._selected_index = 0
                 self.update()
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Z, Qt.Key_Space):
@@ -1419,7 +1724,15 @@ class DeltaruneShopWindow(QWidget):
         if event.button() == Qt.LeftButton:
             pos_canvas = self._screen_to_canvas(event.pos())
 
-            # 1. Dialogue skip loading without dismissing
+            # 1. Exit Mode: click again to close
+            if self.state == ShopState.EXITING:
+                if self._is_typing():
+                    self._finish_typing()
+                else:
+                    self.close_shop()
+                return
+
+            # 2. Dialogue skip loading without dismissing
             if self._is_dialogue_rect(pos_canvas):
                 if self._is_typing():
                     self._finish_typing()
@@ -1428,37 +1741,67 @@ class DeltaruneShopWindow(QWidget):
                     self._confirm_selection()
                     return
 
-            # 2. Check sub-tab header clicks in TASKS or SETTINGS
-            if self.state == ShopState.TASKS:
-                if 242 <= pos_canvas.y() <= 270:
-                    if 25 <= pos_canvas.x() <= 185:
-                        self._tasks_subtab = 0
-                        self._selected_index = 0
-                        self._tasks_scroll_offset = 0
-                        self.update()
-                        return
-                    elif 195 <= pos_canvas.x() <= 360:
-                        self._tasks_subtab = 1
-                        self._selected_index = 0
-                        self._alarms_scroll_offset = 0
-                        self.update()
-                        return
-            elif self.state == ShopState.SETTINGS_MENU:
-                if 242 <= pos_canvas.y() <= 270:
-                    if 25 <= pos_canvas.x() <= 185:
-                        self._config_tab = 0
-                        self._selected_index = 0
-                        self._notes_scroll_offset = 0
-                        self.update()
-                        return
-                    elif 195 <= pos_canvas.x() <= 360:
-                        self._config_tab = 1
-                        self._selected_index = 0
-                        self.update()
+            # 3. Check 4-Tab clicks in TASKS (y: 242..268)
+            if self.state == ShopState.TASKS and 242 <= pos_canvas.y() <= 268:
+                if 24 <= pos_canvas.x() <= 112:
+                    self._tasks_tab = 0
+                    self._selected_index = 0
+                    self.update()
+                    return
+                elif 118 <= pos_canvas.x() <= 206:
+                    self._tasks_tab = 1
+                    self._selected_index = 0
+                    self.update()
+                    return
+                elif 212 <= pos_canvas.x() <= 304:
+                    self._tasks_tab = 2
+                    self._selected_index = 0
+                    self.update()
+                    return
+                elif 310 <= pos_canvas.x() <= 402:
+                    self._tasks_tab = 3
+                    self._selected_index = 0
+                    self.update()
+                    return
+
+            # 4. Check Top-Right Inspector Card click (x: 412..628, y: 25..225)
+            if 412 <= pos_canvas.x() <= 628 and 25 <= pos_canvas.y() <= 225:
+                if self.state == ShopState.TASKS:
+                    if self._tasks_tab == 0:
+                        goals = self._get_goals()
+                        if goals:
+                            idx = (self._selected_index - 1) if 1 <= self._selected_index <= len(goals) else 0
+                            self._open_item_action("goal", goals[idx])
+                            return
+                    elif self._tasks_tab == 1:
+                        reminders = self._get_active_reminders()
+                        if reminders:
+                            idx = (self._selected_index - 1) if 1 <= self._selected_index <= len(reminders) else 0
+                            self._open_item_action("task", reminders[idx])
+                            return
+                    elif self._tasks_tab == 2:
+                        alarms = self._get_scheduled_alarms()
+                        if alarms:
+                            idx = (self._selected_index - 1) if 1 <= self._selected_index <= len(alarms) else 0
+                            al = alarms[idx]
+                            self._open_item_action("alarm", al.get("label", "Alarm"), al)
+                            return
+                    elif self._tasks_tab == 3:
+                        items = self._get_timers_menu_items()
+                        active_items = [it for it in items if it.get("kind") in ("active_shop", "active_memory")]
+                        if active_items:
+                            it = active_items[0]
+                            self._open_item_action("timer", it.get("label", "Timer"), it.get("data") or it.get("kind"))
+                            return
+                elif self.state == ShopState.FACTS_EDIT:
+                    notes = self._get_fact_notes()
+                    if notes:
+                        idx = (self._selected_index - 2) if self._selected_index >= 2 and (self._selected_index - 2) < len(notes) else 0
+                        self._open_item_action("fact", notes[idx])
                         return
 
-            # 3. Check scroll arrow clicks
-            if self.state == ShopState.TASKS:
+            # 5. Check scroll arrow clicks
+            if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT):
                 if 370 <= pos_canvas.x() <= 405:
                     if 265 <= pos_canvas.y() <= 295:
                         self._scroll_up()
@@ -1466,25 +1809,19 @@ class DeltaruneShopWindow(QWidget):
                     elif 390 <= pos_canvas.y() <= 425:
                         self._scroll_down()
                         return
-            elif self.state == ShopState.SETTINGS_MENU and self._config_tab == 0:
-                if 370 <= pos_canvas.x() <= 405:
-                    if 265 <= pos_canvas.y() <= 295:
-                        self._scroll_up()
-                        return
-                    elif 390 <= pos_canvas.y() <= 425:
-                        self._scroll_down()
-                        return
 
-            # 4. Menu item selection & instant single-click execution
+            # 6. Menu item selection & instant single-click execution
             clicked_idx = self._get_item_at_canvas_pos(pos_canvas)
             if clicked_idx is not None:
                 self._selected_index = clicked_idx
+                if self.state == ShopState.ITEM_ACTION:
+                    self._inspect_choice_idx = clicked_idx
                 self._on_selection_changed()
                 self._confirm_selection()
                 self.update()
                 return
 
-            # 5. Draggable upper stage
+            # 7. Draggable upper stage
             if pos_canvas.y() < 220 and pos_canvas.x() < 410:
                 self._drag_active = True
                 self._drag_start_pos = event.globalPos() - self.pos()
@@ -1498,19 +1835,24 @@ class DeltaruneShopWindow(QWidget):
         hover_idx = self._get_item_at_canvas_pos(pos_canvas)
         is_dialogue = self._is_dialogue_rect(pos_canvas)
 
-        # Check sub-tab header hover
         is_tab_hover = False
-        if self.state in (ShopState.TASKS, ShopState.SETTINGS_MENU):
-            if 242 <= pos_canvas.y() <= 270 and 25 <= pos_canvas.x() <= 360:
-                is_tab_hover = True
+        if self.state == ShopState.TASKS and 242 <= pos_canvas.y() <= 268 and 24 <= pos_canvas.x() <= 402:
+            is_tab_hover = True
 
-        if hover_idx is not None or is_tab_hover:
+        is_card_hover = False
+        if 412 <= pos_canvas.x() <= 628 and 25 <= pos_canvas.y() <= 225:
+            if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT):
+                is_card_hover = True
+
+        if hover_idx is not None or is_tab_hover or is_card_hover:
             self.setCursor(Qt.PointingHandCursor)
             if hover_idx is not None and hover_idx != self._selected_index:
                 self._selected_index = hover_idx
+                if self.state == ShopState.ITEM_ACTION:
+                    self._inspect_choice_idx = hover_idx
                 self._on_selection_changed()
                 self.update()
-        elif is_dialogue and (self._is_typing() or self.state == ShopState.TALK_DIALOGUE):
+        elif is_dialogue and (self._is_typing() or self.state in (ShopState.TALK_DIALOGUE, ShopState.EXITING)):
             self.setCursor(Qt.PointingHandCursor)
         elif pos_canvas.y() < 220 and pos_canvas.x() < 410:
             self.setCursor(Qt.OpenHandCursor)
@@ -1548,16 +1890,54 @@ class DeltaruneShopWindow(QWidget):
             if 20 <= pt.x() <= 385 and 272 <= pt.y() <= 420:
                 row = (pt.y() - 272) // 36
                 if 0 <= row < 4:
-                    if self._tasks_subtab == 0:
-                        idx = row + self._tasks_scroll_offset
-                        if idx < len(self._get_active_reminders()):
+                    if self._tasks_tab == 0:
+                        idx = row + self._goals_scroll_offset
+                        if idx < len(self._get_goals()) + 1:
                             return idx
-                    else:
+                    elif self._tasks_tab == 1:
+                        idx = row + self._tasks_scroll_offset
+                        if idx < len(self._get_active_reminders()) + 1:
+                            return idx
+                    elif self._tasks_tab == 2:
                         idx = row + self._alarms_scroll_offset
-                        if idx < len(self._get_alarms_menu_items()):
+                        if idx < len(self._get_scheduled_alarms()) + 1:
+                            return idx
+                    elif self._tasks_tab == 3:
+                        idx = row + self._timers_scroll_offset
+                        if idx < len(self._get_timers_menu_items()):
                             return idx
             if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
                 return self._get_menu_count() - 1
+
+        elif self.state == ShopState.SETTINGS_MENU:
+            if 20 <= pt.x() <= 403 and 255 <= pt.y() <= 430:
+                idx = (pt.y() - 255) // 44
+                if 0 <= idx < 3:
+                    return idx
+
+        elif self.state == ShopState.FACTS_EDIT:
+            if 20 <= pt.x() <= 385 and 272 <= pt.y() <= 420:
+                row = (pt.y() - 272) // 36
+                if 0 <= row < 4:
+                    idx = row + self._notes_scroll_offset
+                    if idx < len(self._get_facts_menu_items()):
+                        return idx
+            if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
+                return self._get_menu_count() - 1
+
+        elif self.state == ShopState.TOGGLES_MENU:
+            if 20 <= pt.x() <= 385 and 272 <= pt.y() <= 420:
+                row = (pt.y() - 272) // 36
+                if 0 <= row < 4:
+                    return row
+            if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
+                return 4
+
+        elif self.state == ShopState.ITEM_ACTION:
+            if 412 <= pt.x() <= 628 and 260 <= pt.y() <= 435:
+                idx = (pt.y() - 260) // 44
+                if 0 <= idx < len(self._inspect_options):
+                    return idx
 
         elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
             if 412 <= pt.x() <= 628:
@@ -1565,20 +1945,6 @@ class DeltaruneShopWindow(QWidget):
                     return 0
                 elif 350 <= pt.y() <= 405:
                     return 1
-
-        elif self.state == ShopState.SETTINGS_MENU:
-            if 20 <= pt.x() <= 385 and 272 <= pt.y() <= 420:
-                row = (pt.y() - 272) // 36
-                if 0 <= row < 4:
-                    if self._config_tab == 0:
-                        idx = row + self._notes_scroll_offset
-                        if idx < len(self._get_facts_menu_items()):
-                            return idx
-                    else:
-                        if 0 <= row < 4:
-                            return row
-            if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
-                return self._get_menu_count() - 1
 
         elif self.state == ShopState.TALK_MENU:
             if 255 <= pt.y() <= 435:
@@ -1600,7 +1966,8 @@ class DeltaruneShopWindow(QWidget):
 
             state_key = "root"
             if self.state in (ShopState.CHARACTER, ShopState.TASKS, ShopState.TASK_CONFIRM,
-                              ShopState.TASK_SECOND_CONFIRM, ShopState.SETTINGS_MENU):
+                              ShopState.TASK_SECOND_CONFIRM, ShopState.SETTINGS_MENU,
+                              ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU, ShopState.ITEM_ACTION):
                 state_key = "buy"
             elif self.state in (ShopState.TALK_MENU, ShopState.TALK_DIALOGUE):
                 state_key = "talk"
@@ -1616,16 +1983,25 @@ class DeltaruneShopWindow(QWidget):
                 self._draw_character_state(p)
             elif self.state == ShopState.TASKS:
                 self._draw_tasks_and_alarms_state(p)
+            elif self.state == ShopState.SETTINGS_MENU:
+                self._draw_settings_menu_state(p)
+            elif self.state == ShopState.FACTS_EDIT:
+                self._draw_facts_edit_state(p)
+            elif self.state == ShopState.TOGGLES_MENU:
+                self._draw_toggles_menu_state(p)
+            elif self.state == ShopState.ITEM_ACTION:
+                self._draw_item_action_state(p)
             elif self.state == ShopState.TASK_CONFIRM:
                 self._draw_task_confirm_state(p)
             elif self.state == ShopState.TASK_SECOND_CONFIRM:
                 self._draw_task_second_confirm_state(p)
-            elif self.state == ShopState.SETTINGS_MENU:
-                self._draw_settings_and_facts_state(p)
             elif self.state in (ShopState.TALK_MENU, ShopState.TALK_DIALOGUE):
                 self._draw_talk_state(p)
             elif self.state == ShopState.EXITING:
                 self._draw_dialogue_text(p, QRect(32, 248, 355, 185))
+                p.setFont(self._font_small)
+                p.setPen(QColor(255, 255, 0))
+                p.drawText(430, 420, "[Click or press Z to Exit]")
 
         finally:
             p.end()
@@ -1662,18 +2038,17 @@ class DeltaruneShopWindow(QWidget):
         # Top-Right Details Card
         p.setFont(self._font_title)
         p.setPen(QColor(255, 255, 0))
-        p.drawText(426, 38, "Wardrobe [LOCKED]")
+        p.drawText(426, 38, "Pink's Wardrobe")
 
         p.setFont(self._font_small)
-        p.setPen(QColor(255, 140, 180))
-        p.drawText(426, 60, "Only Pink Exists!")
+        if self._selected_index < len(CHARACTER_FORMS):
+            f = CHARACTER_FORMS[self._selected_index]
+            status = f.get("status", "LOCKED")
+            p.setPen(QColor(170, 255, 230) if status == "EQUIPPED" else QColor(255, 160, 200))
+            p.drawText(426, 60, f"Status: {status}")
 
-        p.setPen(QColor(255, 255, 255))
-        p.drawText(
-            QRect(426, 75, 188, 140),
-            Qt.AlignLeft | Qt.TextWordWrap,
-            "There is only ONE character in this sanctuary: Pink (Mad Mew Mew)!\nOther forms are locked because you can't replace me, minion!",
-        )
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRect(426, 75, 188, 140), Qt.AlignLeft | Qt.TextWordWrap, f["desc"])
 
         # Bottom-Left Forms List
         p.setFont(self._font_body)
@@ -1683,16 +2058,12 @@ class DeltaruneShopWindow(QWidget):
 
         for i, f in enumerate(CHARACTER_FORMS):
             is_sel = (i == self._selected_index)
-            is_locked = f.get("locked", False)
-            color = QColor(255, 255, 0) if is_sel else (QColor(150, 150, 160) if is_locked else QColor(170, 255, 230))
+            status = f.get("status", "LOCKED")
+            color = QColor(255, 255, 0) if is_sel else (QColor(170, 255, 230) if status == "EQUIPPED" else QColor(160, 160, 175))
             p.setPen(color)
 
-            mark = " [EQUIPPED]" if not is_locked else " [LOCKED]"
+            mark = f" [{status}]"
             p.drawText(start_x, start_y + i * line_h, f"{f['name']}{mark}")
-
-            cost_str = "ACTIVE" if not is_locked else "LOCKED"
-            p.setPen(QColor(157, 162, 196) if not is_sel else QColor(255, 255, 0))
-            p.drawText(310, start_y + i * line_h, cost_str)
 
             if is_sel and self._soul_heart:
                 p.drawPixmap(start_x - 24, start_y + i * line_h - 13, self._soul_heart)
@@ -1712,106 +2083,153 @@ class DeltaruneShopWindow(QWidget):
             p.drawPixmap(424, 401, self._soul_heart)
 
     def _draw_tasks_and_alarms_state(self, p: QPainter) -> None:
-        # Sub-tab Headers: [ 1. TASKS ]   [ 2. ALARMS ]
+        # 4 Tab Headers: [ GOALS ]  [ TASKS ]  [ ALARMS ]  [ TIMERS ]
         p.setFont(self._font_title)
-        tab0_active = (self._tasks_subtab == 0)
-        p.setPen(QColor(255, 255, 0) if tab0_active else QColor(160, 160, 190))
-        p.drawText(35, 262, "[ 1. TASKS ]")
+        tab_titles = ["GOALS", "TASKS", "ALARMS", "TIMERS"]
+        tab_xs = [24, 118, 212, 310]
 
-        p.setPen(QColor(255, 255, 0) if not tab0_active else QColor(160, 160, 190))
-        p.drawText(195, 262, "[ 2. ALARMS ]")
+        for i, tname in enumerate(tab_titles):
+            is_active = (self._tasks_tab == i)
+            p.setPen(QColor(255, 255, 0) if is_active else QColor(150, 150, 180))
+            p.drawText(tab_xs[i], 262, f"[{tname}]" if is_active else tname)
 
-        # Top-Right Info Card
-        if self._tasks_subtab == 0:
-            p.setFont(self._font_title)
-            p.setPen(QColor(255, 180, 220))
-            p.drawText(426, 38, "Chore Board")
+        # Top-Right Details Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(170, 255, 230))
 
+        if self._tasks_tab == 0:
+            goals = self._get_goals()
+            p.drawText(426, 38, "Goals Board")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
-            reminders = self._get_active_reminders()
-            p.drawText(426, 60, f"Active Tasks: {len(reminders)}")
-
+            p.drawText(426, 58, f"Active Goals: {len(goals)}")
             p.setPen(QColor(255, 255, 255))
-            p.drawText(
-                QRect(426, 75, 188, 140),
-                Qt.AlignLeft | Qt.TextWordWrap,
-                "Pink awards P$ 1 - P$ 3 per completed task.\nShe checks your screen history & session memories for proof before paying!",
-            )
-        else:
-            p.setFont(self._font_title)
-            p.setPen(QColor(170, 255, 230))
-            p.drawText(426, 38, "Focus Alarm")
+            if 1 <= self._selected_index <= len(goals):
+                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, goals[self._selected_index - 1])
+            else:
+                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Set personal milestones! Completing a milestone awards a bonus of +P$ 000005!")
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
+        elif self._tasks_tab == 1:
+            reminders = self._get_active_reminders()
+            p.drawText(426, 38, "Chore Board")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 58, f"Active Chores: {len(reminders)}")
+            p.setPen(QColor(255, 255, 255))
+            if 1 <= self._selected_index <= len(reminders):
+                t_val = evaluate_task_value(reminders[self._selected_index - 1])
+                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Valuation: +P$ {t_val}\n\"{reminders[self._selected_index - 1]}\"")
+            else:
+                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pink awards P$ 1 - P$ 3 per completed chore.\nShe checks screen sights & session memories for proof!")
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+
+        elif self._tasks_tab == 2:
+            alarms = self._get_scheduled_alarms()
+            p.drawText(426, 38, "Clock Alarms")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 58, f"Scheduled: {len(alarms)}")
+            p.setPen(QColor(255, 255, 255))
+            if 1 <= self._selected_index <= len(alarms):
+                al = alarms[self._selected_index - 1]
+                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Time: {al.get('clock_time')}\nReason: {al.get('label')}")
+            else:
+                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Schedule wall-clock alarms. Pink will pop up choices to Dismiss or Snooze when time hits!")
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+
+        elif self._tasks_tab == 3:
+            p.drawText(426, 38, "Focus Timers")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
             if self._timer_active:
-                mins = self._timer_seconds_remaining // 60
-                secs = self._timer_seconds_remaining % 60
-                p.drawText(426, 60, f"Remaining: {mins:02d}:{secs:02d}")
+                m, s = divmod(self._timer_seconds_remaining, 60)
+                p.drawText(426, 58, f"Active: {m:02d}:{s:02d} ({self._timer_label})")
             else:
-                p.drawText(426, 60, "Status: Ready")
-
+                p.drawText(426, 58, "Status: Ready")
             p.setPen(QColor(255, 255, 255))
-            p.drawText(
-                QRect(426, 75, 188, 140),
-                Qt.AlignLeft | Qt.TextWordWrap,
-                "Pick a focus sprint or break timer.\nPink provides visual alert animations and bonus P$ upon completion!",
-            )
+            p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pick a study sprint or break timer.\nPink provides visual alert animations and bonus P$ upon completion!")
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
         # Bottom-Left List Area (Scrollable with 4 visible rows)
         start_x = 44
         start_y = 295
         line_h = 36
 
-        if self._tasks_subtab == 0:
-            reminders = self._get_active_reminders()
-            if not reminders:
-                p.setFont(self._font_body)
-                p.setPen(QColor(180, 180, 180))
-                p.drawText(start_x, start_y + 20, "* No active tasks on board.")
-                p.drawText(start_x, start_y + 55, "* Use /remind in chat to add!")
-            else:
-                visible_reminders = reminders[self._tasks_scroll_offset : self._tasks_scroll_offset + 4]
-                p.setFont(self._font_body)
-                for row_idx, rem in enumerate(visible_reminders):
-                    actual_idx = row_idx + self._tasks_scroll_offset
-                    is_active = (actual_idx == self._selected_index)
-                    color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
-                    p.setPen(color)
-
-                    val = evaluate_task_value(rem)
-                    short_text = rem[:18] + "..." if len(rem) > 18 else rem
-                    p.drawText(start_x, start_y + row_idx * line_h, f"{actual_idx + 1}. {short_text}")
-
-                    p.setPen(QColor(255, 180, 220) if not is_active else QColor(255, 255, 0))
-                    p.drawText(310, start_y + row_idx * line_h, f"+P$ {val}")
-
-                    if is_active and self._soul_heart:
-                        p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
-
-                # Scroll indicators
-                p.setFont(self._font_small)
-                p.setPen(QColor(255, 255, 0))
-                if self._tasks_scroll_offset > 0:
-                    p.drawText(380, 275, "▲")
-                if self._tasks_scroll_offset + 4 < len(reminders):
-                    p.drawText(380, 425, "▼")
-        else:
-            alarms_items = self._get_alarms_menu_items()
-            visible_alarms = alarms_items[self._alarms_scroll_offset : self._alarms_scroll_offset + 4]
+        if self._tasks_tab == 0:  # GOALS
+            goals = self._get_goals()
+            full_list = ["[+ Add New Goal]"] + [f"{i+1}. {g}" for i, g in enumerate(goals)]
+            visible_items = full_list[self._goals_scroll_offset : self._goals_scroll_offset + 4]
             p.setFont(self._font_body)
-            for row_idx, item in enumerate(visible_alarms):
-                actual_idx = row_idx + self._alarms_scroll_offset
+            for row_idx, text in enumerate(visible_items):
+                actual_idx = row_idx + self._goals_scroll_offset
                 is_active = (actual_idx == self._selected_index)
-                color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+                color = QColor(255, 255, 0) if is_active else (QColor(170, 255, 230) if actual_idx == 0 else QColor(255, 255, 255))
+                p.setPen(color)
+                preview = text[:26] + "..." if len(text) > 26 else text
+                p.drawText(start_x, start_y + row_idx * line_h, preview)
+                if is_active and self._soul_heart:
+                    p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
+
+            # Scroll indicators
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            if self._goals_scroll_offset > 0:
+                p.drawText(380, 275, "▲")
+            if self._goals_scroll_offset + 4 < len(full_list):
+                p.drawText(380, 425, "▼")
+
+        elif self._tasks_tab == 1:  # TASKS
+            reminders = self._get_active_reminders()
+            full_list = ["[+ Add New Task]"] + [f"{i+1}. {r}" for i, r in enumerate(reminders)]
+            visible_items = full_list[self._tasks_scroll_offset : self._tasks_scroll_offset + 4]
+            p.setFont(self._font_body)
+            for row_idx, text in enumerate(visible_items):
+                actual_idx = row_idx + self._tasks_scroll_offset
+                is_active = (actual_idx == self._selected_index)
+                color = QColor(255, 255, 0) if is_active else (QColor(170, 255, 230) if actual_idx == 0 else QColor(255, 255, 255))
                 p.setPen(color)
 
-                lbl = item.get("label", "")
-                if len(lbl) > 24:
-                    lbl = lbl[:23] + "..."
-                p.drawText(start_x, start_y + row_idx * line_h, lbl)
+                if actual_idx > 0 and actual_idx - 1 < len(reminders):
+                    rem_text = reminders[actual_idx - 1]
+                    val = evaluate_task_value(rem_text)
+                    short_text = rem_text[:18] + "..." if len(rem_text) > 18 else rem_text
+                    p.drawText(start_x, start_y + row_idx * line_h, f"{actual_idx}. {short_text}")
+                    p.setPen(QColor(255, 180, 220) if not is_active else QColor(255, 255, 0))
+                    p.drawText(310, start_y + row_idx * line_h, f"+P$ {val}")
+                else:
+                    p.drawText(start_x, start_y + row_idx * line_h, text)
 
+                if is_active and self._soul_heart:
+                    p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
+
+            # Scroll indicators
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            if self._tasks_scroll_offset > 0:
+                p.drawText(380, 275, "▲")
+            if self._tasks_scroll_offset + 4 < len(full_list):
+                p.drawText(380, 425, "▼")
+
+        elif self._tasks_tab == 2:  # ALARMS
+            alarms = self._get_scheduled_alarms()
+            full_list = ["[+ Set Clock Alarm]"] + [f"{i+1}. {a.get('clock_time')} ({a.get('label', '')[:14]})" for i, a in enumerate(alarms)]
+            visible_items = full_list[self._alarms_scroll_offset : self._alarms_scroll_offset + 4]
+            p.setFont(self._font_body)
+            for row_idx, text in enumerate(visible_items):
+                actual_idx = row_idx + self._alarms_scroll_offset
+                is_active = (actual_idx == self._selected_index)
+                color = QColor(255, 255, 0) if is_active else (QColor(170, 255, 230) if actual_idx == 0 else QColor(255, 255, 255))
+                p.setPen(color)
+                p.drawText(start_x, start_y + row_idx * line_h, text)
                 if is_active and self._soul_heart:
                     p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
 
@@ -1820,7 +2238,31 @@ class DeltaruneShopWindow(QWidget):
             p.setPen(QColor(255, 255, 0))
             if self._alarms_scroll_offset > 0:
                 p.drawText(380, 275, "▲")
-            if self._alarms_scroll_offset + 4 < len(alarms_items):
+            if self._alarms_scroll_offset + 4 < len(full_list):
+                p.drawText(380, 425, "▼")
+
+        elif self._tasks_tab == 3:  # TIMERS
+            timers_items = self._get_timers_menu_items()
+            visible_items = timers_items[self._timers_scroll_offset : self._timers_scroll_offset + 4]
+            p.setFont(self._font_body)
+            for row_idx, it in enumerate(visible_items):
+                actual_idx = row_idx + self._timers_scroll_offset
+                is_active = (actual_idx == self._selected_index)
+                color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+                p.setPen(color)
+                lbl = it.get("label", "")
+                if len(lbl) > 26:
+                    lbl = lbl[:25] + "..."
+                p.drawText(start_x, start_y + row_idx * line_h, lbl)
+                if is_active and self._soul_heart:
+                    p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
+
+            # Scroll indicators
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            if self._timers_scroll_offset > 0:
+                p.drawText(380, 275, "▲")
+            if self._timers_scroll_offset + 4 < len(timers_items):
                 p.drawText(380, 425, "▼")
 
         # Bottom-Right Wallet & Back
@@ -1838,119 +2280,185 @@ class DeltaruneShopWindow(QWidget):
         if is_back and self._soul_heart:
             p.drawPixmap(424, 401, self._soul_heart)
 
-    def _draw_settings_and_facts_state(self, p: QPainter) -> None:
-        # Sub-tab Headers: [ 1. EDIT FACTS ]   [ 2. TOGGLES ]
+    def _draw_settings_menu_state(self, p: QPainter) -> None:
+        # Top-Right Overview Card
         p.setFont(self._font_title)
-        tab0_active = (self._config_tab == 0)
-        p.setPen(QColor(255, 255, 0) if tab0_active else QColor(160, 160, 190))
-        p.drawText(35, 262, "[ 1. EDIT FACTS ]")
+        p.setPen(QColor(255, 255, 0))
+        p.drawText(426, 38, "Settings Menu")
 
-        p.setPen(QColor(255, 255, 0) if not tab0_active else QColor(160, 160, 190))
-        p.drawText(205, 262, "[ 2. TOGGLES ]")
+        p.setFont(self._font_small)
+        p.setPen(QColor(140, 206, 255))
+        p.drawText(426, 60, "Sanctuary Controls")
 
-        # Top-Right Details Card
-        if self._config_tab == 0:
-            notes = self._get_fact_notes()
-            if self._selected_index >= 2 and (self._selected_index - 2) < len(notes):
-                note_idx = self._selected_index - 2
-                full_note = notes[note_idx]
-                p.setFont(self._font_title)
-                p.setPen(QColor(170, 255, 230))
-                p.drawText(426, 38, f"Fact Note #{note_idx + 1}")
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(
+            QRect(426, 75, 188, 140),
+            Qt.AlignLeft | Qt.TextWordWrap,
+            "Manage permanent memory notes, edit your primary nickname, or customize companion live behaviors.",
+        )
 
-                p.setFont(self._font_small)
-                p.setPen(QColor(140, 206, 255))
-                p.drawText(426, 60, "Permanent Memory")
+        # Bottom-Left Settings Menu
+        p.setFont(self._font_title)
+        options = ["1. Edit Facts & Nickname", "2. Companion Toggles", "3. Back"]
+        start_x = 44
+        start_y = 280
+        line_h = 44
 
-                p.setPen(QColor(255, 255, 255))
-                p.drawText(QRect(426, 75, 188, 140), Qt.AlignLeft | Qt.TextWordWrap, full_note)
-            else:
-                p.setFont(self._font_title)
-                p.setPen(QColor(170, 255, 230))
-                p.drawText(426, 38, "Fact Sheet")
+        for i, opt in enumerate(options):
+            is_active = (i == self._selected_index)
+            color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+            p.setPen(color)
+            p.drawText(start_x, start_y + i * line_h, opt)
 
-                p.setFont(self._font_small)
-                p.setPen(QColor(140, 206, 255))
-                p.drawText(426, 60, f"User: {self._get_user_name()}")
+            if is_active and self._soul_heart:
+                p.drawPixmap(start_x - 24, start_y + i * line_h - 13, self._soul_heart)
 
-                p.setPen(QColor(255, 255, 255))
-                p.drawText(
-                    QRect(426, 75, 188, 140),
-                    Qt.AlignLeft | Qt.TextWordWrap,
-                    f"Notes Stored: {len(notes)}\nScroll down to view every note! Pink permanently remembers them across all sessions.",
-                )
-        else:
-            p.setFont(self._font_title)
-            p.setPen(QColor(255, 255, 0))
-            p.drawText(426, 38, "Toggles")
+    def _draw_facts_edit_state(self, p: QPainter) -> None:
+        notes = self._get_fact_notes()
 
+        # Top-Right Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(170, 255, 230))
+        if self._selected_index >= 2 and (self._selected_index - 2) < len(notes):
+            note_idx = self._selected_index - 2
+            p.drawText(426, 38, f"Fact Note #{note_idx + 1}")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
-            p.drawText(426, 60, "Pet Configuration")
-
+            p.drawText(426, 58, "Permanent Memory")
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, notes[note_idx])
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+        else:
+            p.drawText(426, 38, "Fact Sheet")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 58, f"User: {self._get_user_name()}")
             p.setPen(QColor(255, 255, 255))
             p.drawText(
-                QRect(426, 75, 188, 140),
+                QRect(426, 72, 188, 125),
                 Qt.AlignLeft | Qt.TextWordWrap,
-                "Toggle desktop companion features and autonomous behaviors on or off directly from here.",
+                f"Notes Stored: {len(notes)}\nScroll down to view every note! Pink permanently remembers them across all sessions.",
             )
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
-        # Bottom-Left Items List
+        # Bottom-Left List
+        facts_items = self._get_facts_menu_items()
+        visible_items = facts_items[self._notes_scroll_offset : self._notes_scroll_offset + 4]
         start_x = 44
         start_y = 295
         line_h = 36
 
-        if self._config_tab == 0:
-            facts_items = self._get_facts_menu_items()
-            visible_items = facts_items[self._notes_scroll_offset : self._notes_scroll_offset + 4]
-            p.setFont(self._font_body)
-            for row_idx, opt in enumerate(visible_items):
-                actual_idx = row_idx + self._notes_scroll_offset
-                is_active = (actual_idx == self._selected_index)
-                color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
-                p.setPen(color)
-                p.drawText(start_x, start_y + row_idx * line_h, opt)
+        p.setFont(self._font_body)
+        for row_idx, opt in enumerate(visible_items):
+            actual_idx = row_idx + self._notes_scroll_offset
+            is_active = (actual_idx == self._selected_index)
+            color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+            p.setPen(color)
+            p.drawText(start_x, start_y + row_idx * line_h, opt)
 
-                if is_active and self._soul_heart:
-                    p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
+            if is_active and self._soul_heart:
+                p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
 
-            # Scroll indicators
-            p.setFont(self._font_small)
-            p.setPen(QColor(255, 255, 0))
-            if self._notes_scroll_offset > 0:
-                p.drawText(380, 275, "▲")
-            if self._notes_scroll_offset + 4 < len(facts_items):
-                p.drawText(380, 425, "▼")
-        else:
-            bubbles_on = getattr(self._pet, "_dialogue_enabled", True) if self._pet else True
-            song_on = getattr(self._pet, "_ai_song_comment_enabled", True) if self._pet else True
-            bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
-            jump_on = getattr(self._pet, "_jump_enabled", True) if self._pet else True
+        # Scroll indicators
+        p.setFont(self._font_small)
+        p.setPen(QColor(255, 255, 0))
+        if self._notes_scroll_offset > 0:
+            p.drawText(380, 275, "▲")
+        if self._notes_scroll_offset + 4 < len(facts_items):
+            p.drawText(380, 425, "▼")
 
-            toggles = [
-                f"Dialogue Bubbles: [{'ON' if bubbles_on else 'OFF'}]",
-                f"AI Song Commentary: [{'ON' if song_on else 'OFF'}]",
-                f"Bomb Attack Mode: [{'ON' if bomb_on else 'OFF'}]",
-                f"Jump to Cursor: [{'ON' if jump_on else 'OFF'}]",
-            ]
-            p.setFont(self._font_body)
-            for row_idx, opt in enumerate(toggles):
-                is_active = (row_idx == self._selected_index)
-                color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
-                p.setPen(color)
-                p.drawText(start_x, start_y + row_idx * line_h, opt)
-
-                if is_active and self._soul_heart:
-                    p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
-
-        # Bottom-Right Back
+        # Back
         p.setFont(self._font_title)
-        back_idx = self._get_menu_count() - 1
+        back_idx = len(facts_items)
         is_back = (self._selected_index == back_idx)
         p.setPen(QColor(255, 255, 0) if is_back else QColor(255, 255, 255))
         p.drawText(450, 415, "Back")
         if is_back and self._soul_heart:
             p.drawPixmap(424, 401, self._soul_heart)
+
+    def _draw_toggles_menu_state(self, p: QPainter) -> None:
+        p.setFont(self._font_title)
+        p.setPen(QColor(255, 255, 0))
+        p.drawText(426, 38, "Live Toggles")
+
+        p.setFont(self._font_small)
+        p.setPen(QColor(140, 206, 255))
+        p.drawText(426, 60, "Instant Configuration")
+
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(
+            QRect(426, 75, 188, 140),
+            Qt.AlignLeft | Qt.TextWordWrap,
+            "Toggles update desktop pet behavior immediately and persist permanently across runs.",
+        )
+
+        bubbles_on = getattr(self._pet, "_dialogue_enabled", True) if self._pet else True
+        song_on = getattr(self._pet, "_ai_song_comment_enabled", True) if self._pet else True
+        bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
+        jump_on = getattr(self._pet, "_jump_enabled", True) if self._pet else True
+
+        toggles = [
+            f"Dialogue Bubbles: [{'ON' if bubbles_on else 'OFF'}]",
+            f"AI Song Commentary: [{'ON' if song_on else 'OFF'}]",
+            f"Bomb Attack Mode: [{'ON' if bomb_on else 'OFF'}]",
+            f"Jump to Cursor: [{'ON' if jump_on else 'OFF'}]",
+        ]
+
+        start_x = 44
+        start_y = 275
+        line_h = 36
+
+        p.setFont(self._font_body)
+        for row_idx, opt in enumerate(toggles):
+            is_active = (row_idx == self._selected_index)
+            color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+            p.setPen(color)
+            p.drawText(start_x, start_y + row_idx * line_h, opt)
+
+            if is_active and self._soul_heart:
+                p.drawPixmap(start_x - 24, start_y + row_idx * line_h - 13, self._soul_heart)
+
+        p.setFont(self._font_title)
+        is_back = (self._selected_index == 4)
+        p.setPen(QColor(255, 255, 0) if is_back else QColor(255, 255, 255))
+        p.drawText(450, 415, "Back")
+        if is_back and self._soul_heart:
+            p.drawPixmap(424, 401, self._soul_heart)
+
+    def _draw_item_action_state(self, p: QPainter) -> None:
+        # Left Box: Dialogue Text
+        self._draw_dialogue_text(p, QRect(32, 248, 355, 185))
+
+        # Top-Right Details
+        p.setFont(self._font_title)
+        p.setPen(QColor(170, 255, 230))
+        p.drawText(426, 38, f"Inspect: {self._inspect_item_kind.upper()}")
+
+        p.setFont(self._font_small)
+        p.setPen(QColor(140, 206, 255))
+        p.drawText(426, 60, "Action Selection")
+
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(QRect(426, 75, 188, 140), Qt.AlignLeft | Qt.TextWordWrap, self._inspect_item_text)
+
+        # Bottom-Right Choices
+        p.setFont(self._font_title)
+        start_x = 444
+        start_y = 280
+        line_h = 44
+
+        for i, opt in enumerate(self._inspect_options):
+            is_active = (i == self._inspect_choice_idx)
+            color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+            p.setPen(color)
+            p.drawText(start_x, start_y + i * line_h, opt)
+
+            if is_active and self._soul_heart:
+                p.drawPixmap(start_x - 24, start_y + i * line_h - 13, self._soul_heart)
 
     def _draw_task_confirm_state(self, p: QPainter) -> None:
         p.setFont(self._font_title)
