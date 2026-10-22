@@ -1760,7 +1760,8 @@ def make_placeholder_frames(state: str) -> list[QImage]:
 
         # State name, so you can see which animation is running.
         font = QFont()
-        font.setBold(True)
+        font.setBold(False)
+        font.setWeight(QFont.Normal)
         font.setPixelSize(int(size * 0.085))
         p.setFont(font)
         p.setPen(label_color)
@@ -2560,6 +2561,14 @@ class DialogueOverlay(QWidget):
             event.accept()
             return
         if event.button() == Qt.LeftButton:
+            if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+                self._shop_window.show()
+                self._shop_window.raise_()
+                self._shop_window.activateWindow()
+                if self._can_play("wistful"):
+                    self._play("wistful")
+                event.accept()
+                return
             if self._visible_chars < self._total_chars:
                 self.advance_or_dismiss()
                 event.accept()
@@ -2589,6 +2598,7 @@ class DialogueOverlay(QWidget):
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.setRenderHint(QPainter.TextAntialiasing, False)
         painter.drawPixmap(0, 0, self._cached_bg)
 
         painter.setFont(self._font)
@@ -2889,7 +2899,7 @@ class ChatInputOverlay(QWidget):
             "  color: #FFFF00;"
             "  border: 1px solid #FFFF00;"
             "  padding: 0px 8px;"
-            "  font-weight: bold;"
+            "  font-weight: normal;"
             "}"
             "QPushButton:hover {"
             "  background-color: #FFFF00;"
@@ -2914,7 +2924,7 @@ class ChatInputOverlay(QWidget):
             "  color: #888888;"
             "  border: 1px solid #555555;"
             "  padding: 0px;"
-            "  font-weight: bold;"
+            "  font-weight: normal;"
             "}"
             "QPushButton:hover {"
             "  color: #FF5555;"
@@ -3005,6 +3015,7 @@ class ChatInputOverlay(QWidget):
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, False)
+        painter.setRenderHint(QPainter.TextAntialiasing, False)
         painter.drawPixmap(0, 0, self._cached_bg)
         painter.end()
 
@@ -3501,7 +3512,7 @@ class MemoryManager:
 
     def get_active_reminders(self, max_age_days: int = 30) -> list[dict]:
         """Read reminders from reminders.json, auto-prune anything older than 30 days, and return active ones."""
-        if not self.reminders_path.exists():
+        if not self.reminders_path.exists() or self.reminders_path.stat().st_size == 0:
             return []
         try:
             raw = json.loads(self.reminders_path.read_text(encoding="utf-8"))
@@ -3673,7 +3684,7 @@ class MemoryManager:
 
     def get_active_alarms(self, max_age_hours: int = 24) -> list[dict]:
         """Read timers and alarms from alarms.json. Auto-prune completed/dismissed items older than max_age_hours."""
-        if not self.alarms_path.exists():
+        if not self.alarms_path.exists() or self.alarms_path.stat().st_size == 0:
             return []
         try:
             raw = json.loads(self.alarms_path.read_text(encoding="utf-8"))
@@ -3738,6 +3749,15 @@ class MemoryManager:
         self.save_alarms(active)
         log.info("Added countdown timer '%s' for %ds (target: %f)", label, duration_seconds, item["target_timestamp"])
         return item
+
+    def mark_alarm_ringing(self, item_id: str) -> None:
+        """Mark an active alarm or timer as currently ringing in persistence so it does not re-trigger."""
+        active = self.get_active_alarms()
+        for a in active:
+            if a.get("id") == item_id:
+                a["state"] = "ringing"
+                break
+        self.save_alarms(active)
 
     def add_alarm(self, clock_str: str, label: str = "Alarm", repeat: str = "once") -> dict | None:
         """Create and persist a new clock alarm."""
@@ -4469,7 +4489,7 @@ class RemindersDialog(QDialog):
             "QListWidget::item:selected {"
             "  background-color: #3b82f6;"
             "  color: #ffffff;"
-            "  font-weight: bold;"
+            "  font-weight: normal;"
             "}"
             "QPushButton {"
             "  background-color: #27272a;"
@@ -4477,7 +4497,7 @@ class RemindersDialog(QDialog):
             "  border: 1px solid #3f3f46;"
             "  border-radius: 4px;"
             "  padding: 6px 14px;"
-            "  font-weight: bold;"
+            "  font-weight: normal;"
             "}"
             "QPushButton:hover {"
             "  background-color: #3f3f46;"
@@ -4496,7 +4516,8 @@ class RemindersDialog(QDialog):
         title_label = QLabel("🐾 Active Reminders & To-Dos", self)
         title_font = QFont(self._font_family)
         title_font.setPixelSize(16)
-        title_font.setBold(True)
+        title_font.setBold(False)
+        font.setWeight(QFont.Normal)
         title_label.setFont(title_font)
         title_label.setStyleSheet("color: #fbbf24;")
         layout.addWidget(title_label)
@@ -4718,7 +4739,7 @@ class AlarmsDialog(QDialog):
             "QListWidget::item:selected {"
             "  background-color: #ec4899;"
             "  color: #ffffff;"
-            "  font-weight: bold;"
+            "  font-weight: normal;"
             "}"
             "QPushButton {"
             "  background-color: #27272a;"
@@ -4726,7 +4747,7 @@ class AlarmsDialog(QDialog):
             "  border: 1px solid #3f3f46;"
             "  border-radius: 4px;"
             "  padding: 6px 12px;"
-            "  font-weight: bold;"
+            "  font-weight: normal;"
             "}"
             "QPushButton:hover {"
             "  background-color: #3f3f46;"
@@ -4745,7 +4766,8 @@ class AlarmsDialog(QDialog):
         title_label = QLabel("⏰ Pink's Alarms & Focus Timers", self)
         title_font = QFont(self._font_family)
         title_font.setPixelSize(16)
-        title_font.setBold(True)
+        title_font.setBold(False)
+        font.setWeight(QFont.Normal)
         title_label.setFont(title_font)
         title_label.setStyleSheet("color: #ec4899;")
         layout.addWidget(title_label)
@@ -6889,6 +6911,8 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_hidden_in_tray", False):
             return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
+            return
         if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                               Phase.SUMMON_INTRO, Phase.EXIT_OUTRO)
@@ -7291,6 +7315,8 @@ class YellowsPixelBuddies(QWidget):
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return False
         if getattr(self, "_hidden_in_tray", False):
+            return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
             return False
 
         api_key = self._memory.get_api_key()
@@ -7471,6 +7497,16 @@ class YellowsPixelBuddies(QWidget):
         """Handle cleanup when dialogue speech bubble closes."""
         if getattr(self, "_is_ringing_alarm", False):
             self._is_ringing_alarm = False
+            active = self._memory.get_active_alarms()
+            changed = False
+            for a in active:
+                if a.get("state") == "ringing":
+                    if a.get("type") == "timer" or a.get("repeat") == "once":
+                        a["state"] = "completed"
+                        a["finished_at"] = time.time()
+                        changed = True
+            if changed:
+                self._memory.save_alarms(active)
         if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
             return
         if self._phase is Phase.SUMMON_DIALOGUE:
@@ -8074,6 +8110,8 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_hidden_in_tray", False):
             return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
+            return
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -8451,7 +8489,7 @@ class YellowsPixelBuddies(QWidget):
 
         # Mark item as ringing in persistence
         item["state"] = "ringing"
-        self._memory.save_alarms(self._memory.get_active_alarms())
+        self._memory.mark_alarm_ringing(item_id)
 
         # Restore from tray if hidden
         if getattr(self, "_hidden_in_tray", False):
@@ -9249,6 +9287,14 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_brain_timeout(self) -> None:
         """Behaviour timer: the current walk / pause time is up."""
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self._can_play("wistful"):
+                self._play("wistful")
+            elif self._can_play("behind"):
+                self._play("behind")
+            return
         if self._phase is Phase.WALK:
             self._start_pause()
         elif self._phase is Phase.PAUSE:
@@ -9274,10 +9320,23 @@ class YellowsPixelBuddies(QWidget):
         self._track_cursor(cursor, now, real_dt)
         if getattr(self, "_hidden_in_tray", False):
             return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
+            return
         if getattr(self, "_is_ghost_talking", False):
             self.update()
         if self._dragging:                          # held by the mouse: stand still
             return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            if self._phase is not Phase.FALL:
+                self._phase = Phase.PAUSE
+                self._pause_elapsed = False
+                if self._can_play("wistful") and self.state != "wistful":
+                    self._play("wistful")
+                elif self._can_play("behind") and self.state not in ("wistful", "behind"):
+                    self._play("behind")
+                self.update()
+                return
+
         if self._menu_open and self._phase is not Phase.FALL:
             # Menu open: she stands still (and shows idle). A fall is the exception: the menu
             # aborts a jump / hang into a fall, and she must not hang frozen in mid-air.
@@ -9494,6 +9553,8 @@ class YellowsPixelBuddies(QWidget):
         to the screen via the system tray icon.
         """
         if getattr(self, "_hidden_in_tray", False):
+            return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible() and not force:
             return
 
         if hasattr(self, "_single_click_timer"):

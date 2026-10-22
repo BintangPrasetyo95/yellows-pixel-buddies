@@ -89,14 +89,15 @@ SCENE_NATIVE_H = 120
 SCENE_RENDER_H = 240
 
 # Timing configuration
-SCENE_FRAME_INTERVAL_MS = 250
+SCENE_FRAME_INTERVAL_MS = 380
 TYPEWRITER_INTERVAL_MS = 28
 
 
 class ShopState(Enum):
     ROOT = auto()
     CHARACTER = auto()            # Wardrobe (Coming soon)
-    TASKS = auto()                # Tasks & Alarms (4 tabs: GOALS, TASKS, ALARMS, TIMERS)
+    TASKS_SUBMENU = auto()        # Tasks & Alarms Submenu (Goals, Tasks, Alarms, Timers, Back)
+    TASKS = auto()                # Tasks & Alarms list items (Goals, Tasks, Alarms, Timers)
     SETTINGS_MENU = auto()        # Config & Settings (Menu: 1. Edit Facts, 2. Toggles, 3. Back)
     FACTS_EDIT = auto()           # Facts & Notes editor
     TOGGLES_MENU = auto()         # Companion Toggles (Live)
@@ -167,35 +168,27 @@ class PinkWallet:
 # --- Character Forms (Classic Doll active; others COMING SOON) -----------------
 CHARACTER_FORMS = [
     {
-        "id": "doll",
-        "name": "Classic Doll (Pink)",
-        "cost": 0,
-        "anim": "idle",
-        "desc": "The quintessential cotton Mew Mew doll body. The ONE and ONLY active character in this world!",
-        "status": "EQUIPPED",
-    },
-    {
-        "id": "ghost",
-        "name": "Spectral Ghost",
-        "cost": 0,
-        "anim": "angry",
-        "desc": "Coming soon! Pink is tailoring her incorporeal spirit form with glowing cyan aura and spectral embers.",
+        "id": "coming_soon_1",
+        "name": "COMING SOON",
+        "desc": "Additional character forms are currently in development. Pink is the only companion in this world right now!",
         "status": "COMING SOON",
     },
     {
-        "id": "burnt",
-        "name": "Burnt Survivor",
-        "cost": 0,
-        "anim": "burnt",
-        "desc": "Coming soon! Battle-hardened, soot-covered survivor doll form. Still undergoing fireproofing tests!",
+        "id": "coming_soon_2",
+        "name": "COMING SOON",
+        "desc": "Pink is still tailoring new outfits and forms. Check back in a future update, mew!",
         "status": "COMING SOON",
     },
     {
-        "id": "overjoyed",
-        "name": "Cyber Joy",
-        "cost": 0,
-        "anim": "overjoyed",
-        "desc": "Coming soon! Pure cyber bliss and celebratory peace-sign animations in tailoring development.",
+        "id": "coming_soon_3",
+        "name": "COMING SOON",
+        "desc": "Wardrobe slot locked. Pink is busy experimenting with fabrics and ribbons behind the boutique counter.",
+        "status": "COMING SOON",
+    },
+    {
+        "id": "coming_soon_4",
+        "name": "COMING SOON",
+        "desc": "Wardrobe slot locked. More companion forms coming soon!",
         "status": "COMING SOON",
     },
 ]
@@ -291,9 +284,15 @@ class DeltaruneShopWindow(QWidget):
         self._calculate_target_geometry()
 
         # Typography
-        self._font_title = QFont(self._font_family, 13, QFont.Bold)
+        self._font_title = QFont(self._font_family, 13)
+        self._font_title.setBold(False)
+        self._font_title.setWeight(QFont.Normal)
         self._font_body = QFont(self._font_family, 12)
+        self._font_body.setBold(False)
+        self._font_body.setWeight(QFont.Normal)
         self._font_small = QFont(self._font_family, 11)
+        self._font_small.setBold(False)
+        self._font_small.setWeight(QFont.Normal)
 
         # Pre-composited backgrounds & soul heart
         self._soul_heart: QPixmap | None = self._create_soul_heart()
@@ -379,14 +378,14 @@ class DeltaruneShopWindow(QWidget):
         self._input_send_btn = QPushButton("SEND", self._input_container)
         self._input_send_btn.setCursor(Qt.PointingHandCursor)
         self._input_send_btn.setStyleSheet(
-            f"QPushButton {{ background-color: #1a1a2e; color: #ffff00; font-family: '{self._font_family}', monospace; font-size: 11px; font-weight: bold; border: 1px solid #ffff00; padding: 2px 8px; }} QPushButton:hover {{ background-color: #ffff00; color: #000000; }}"
+            f"QPushButton {{ background-color: #1a1a2e; color: #ffff00; font-family: '{self._font_family}', monospace; font-size: 11px; font-weight: normal; border: 1px solid #ffff00; padding: 2px 8px; }} QPushButton:hover {{ background-color: #ffff00; color: #000000; }}"
         )
         self._input_send_btn.clicked.connect(self._on_input_submitted)
 
         self._input_cancel_btn = QPushButton("X", self._input_container)
         self._input_cancel_btn.setCursor(Qt.PointingHandCursor)
         self._input_cancel_btn.setStyleSheet(
-            f"QPushButton {{ background-color: #1a1a2e; color: #ff6060; font-family: '{self._font_family}', monospace; font-size: 11px; font-weight: bold; border: 1px solid #ff6060; padding: 2px 6px; }} QPushButton:hover {{ background-color: #ff6060; color: #ffffff; }}"
+            f"QPushButton {{ background-color: #1a1a2e; color: #ff6060; font-family: '{self._font_family}', monospace; font-size: 11px; font-weight: normal; border: 1px solid #ff6060; padding: 2px 6px; }} QPushButton:hover {{ background-color: #ff6060; color: #ffffff; }}"
         )
         self._input_cancel_btn.clicked.connect(self._on_input_cancelled)
 
@@ -701,8 +700,11 @@ class DeltaruneShopWindow(QWidget):
         self._timer_seconds_remaining = self._timer_total_seconds
         self._timer_label = label
         self._timer_active = True
-        self._focus_timer.start()
-        self.set_dialogue(f"* Timer set for {minutes}m ({label})! I'll alert you when it rings, mew!")
+        self.set_dialogue(
+            f"* Calibrating focus hourglass and sand crystals...\n"
+            f"* Focus countdown primed for {minutes}m ({label})!\n"
+            f"* Focus mode engaged, darling! I will sound the alert when time's up, mew!"
+        )
 
     def stop_timer(self) -> None:
         mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
@@ -780,6 +782,26 @@ class DeltaruneShopWindow(QWidget):
             return self._memory.memory_dir / "goals.json"
         return GOALS_PATH
 
+    def evaluate_goal_value(self, text: str) -> int:
+        """Pink decides what a personal goal/milestone is worth (awarding between P$ 03 and P$ 08)."""
+        clean = (text or "").lower()
+        score = 4
+        major_kws = [
+            "finish", "complete", "publish", "ship", "launch", "exam", "thesis",
+            "marathon", "project", "degree", "clean", "build", "develop", "refactor",
+            "gym", "workout", "fitness", "run", "exercise", "learn", "study",
+            "write", "chapter", "release", "portfolio", "presentation", "assignment"
+        ]
+        score += sum(1 for kw in major_kws if kw in clean)
+        if len(clean.split()) >= 6:
+            score += 1
+        if len(clean) >= 35:
+            score += 1
+        trivial_kws = ["water", "drink", "check", "eat", "snack", "stretch", "breathe", "nap"]
+        if any(kw in clean for kw in trivial_kws):
+            score -= 1
+        return max(3, min(8, score))
+
     def _get_goals(self) -> list[str]:
         p = self._get_goals_file_path()
         if p.exists():
@@ -820,10 +842,11 @@ class DeltaruneShopWindow(QWidget):
         return False
 
     def _complete_goal(self, text: str) -> None:
+        val = self.evaluate_goal_value(text)
         if self._delete_goal(text):
-            self._wallet.add(5)
+            self._wallet.add(val)
             self.set_dialogue(
-                f"* TARGET MILESTONE CONQUERED!!\n* You finished: \"{text}\"!\n* Pink awards you a grand bonus of +P$ 000005!"
+                f"* TARGET MILESTONE CONQUERED!!\n* You finished: \"{text}\"\n* Pink evaluated your achievement at +P$ {val:06d}!"
             )
         else:
             self.set_dialogue("* Couldn't find that goal, silly!")
@@ -956,8 +979,11 @@ class DeltaruneShopWindow(QWidget):
         self.state = ShopState.ITEM_ACTION
 
         if kind == "goal":
-            self._inspect_options = ["Complete (+P$ 5)", "Delete Goal", "Back"]
-            self.set_dialogue(f"* Target Milestone:\n* \"{text}\"\n* Ready to mark it completed or remove it?")
+            val = self.evaluate_goal_value(text)
+            self._inspect_options = [f"Complete (+P$ {val:02d})", "Delete Goal", "Back"]
+            self.set_dialogue(
+                f"* TARGET MILESTONE INSPECTION:\n* \"{text}\"\n* Pink's Valuation: +P$ {val:06d}!\n* What would you like to do?"
+            )
         elif kind == "task":
             val = evaluate_task_value(text)
             self._inspect_options = [f"Complete (+P$ {val})", "Delete Task", "Back"]
@@ -1192,17 +1218,19 @@ class DeltaruneShopWindow(QWidget):
             return 5  # CHARACTER, TASKS & ALARMS, TALK, CONFIG & SETTINGS, EXIT
         elif self.state == ShopState.CHARACTER:
             return len(CHARACTER_FORMS) + 1  # Forms + Back
+        elif self.state == ShopState.TASKS_SUBMENU:
+            return 5  # Goals, Tasks, Alarms, Timers, Back
         elif self.state == ShopState.TASKS:
             if self._tasks_tab == 0:
                 return len(self._get_goals()) + 2  # [+ Add Goal] + Goals + Back
             elif self._tasks_tab == 1:
                 return len(self._get_active_reminders()) + 2  # [+ Add Task] + Tasks + Back
             elif self._tasks_tab == 2:
-                return len(self._get_scheduled_alarms()) + 2  # [+ Set Alarm] + Alarms + Back
+                return len(self._get_scheduled_alarms()) + 3  # [+ Prime Alarm] + Clear All + Alarms + Back
             elif self._tasks_tab == 3:
-                return len(self._get_timers_menu_items()) + 1  # Presets/timers + Back
+                return len(self._get_timers_menu_items()) + 1  # Presets + Custom + Actives + Back
         elif self.state == ShopState.SETTINGS_MENU:
-            return 3  # 1. Edit Facts, 2. Toggles, 3. Back
+            return 3  # Edit Facts, Toggles, Back
         elif self.state == ShopState.FACTS_EDIT:
             return len(self._get_facts_menu_items()) + 1  # Facts + Back
         elif self.state == ShopState.TOGGLES_MENU:
@@ -1286,12 +1314,11 @@ class DeltaruneShopWindow(QWidget):
             if self._selected_index == 0:  # CHARACTER
                 self.state = ShopState.CHARACTER
                 self._selected_index = 0
-                self.set_dialogue("* Pink's Wardrobe! Other styles are coming soon, darling!")
+                self.set_dialogue("* Characters are coming soon! Only one companion in this world for now.")
             elif self._selected_index == 1:  # TASKS & ALARMS
-                self.state = ShopState.TASKS
-                self._tasks_tab = 1
+                self.state = ShopState.TASKS_SUBMENU
                 self._selected_index = 0
-                self.set_dialogue("* Tasks, Goals, Timers & Alarms command center!")
+                self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
             elif self._selected_index == 2:  # TALK
                 self.state = ShopState.TALK_MENU
                 self._selected_index = 0
@@ -1302,6 +1329,36 @@ class DeltaruneShopWindow(QWidget):
                 self.set_dialogue("* Sanctuary settings & permanent memory fact sheet.")
             elif self._selected_index == 4:  # EXIT
                 self._start_exit()
+
+        elif self.state == ShopState.TASKS_SUBMENU:
+            if self._selected_index == 0:  # Goals
+                self.state = ShopState.TASKS
+                self._tasks_tab = 0
+                self._selected_index = 0
+                self._goals_scroll_offset = 0
+                self.set_dialogue("* Target Milestones & Long-term Goals board.")
+            elif self._selected_index == 1:  # Tasks
+                self.state = ShopState.TASKS
+                self._tasks_tab = 1
+                self._selected_index = 0
+                self._tasks_scroll_offset = 0
+                self.set_dialogue("* Chores & Reminders board. Complete tasks for Pink Dollars!")
+            elif self._selected_index == 2:  # Alarms
+                self.state = ShopState.TASKS
+                self._tasks_tab = 2
+                self._selected_index = 0
+                self._alarms_scroll_offset = 0
+                self.set_dialogue("* Scheduled Clock Alarms center.")
+            elif self._selected_index == 3:  # Timers
+                self.state = ShopState.TASKS
+                self._tasks_tab = 3
+                self._selected_index = 0
+                self._timers_scroll_offset = 0
+                self.set_dialogue("* Focus Timers & Pomodoro countdowns.")
+            else:  # Back
+                self.state = ShopState.ROOT
+                self._selected_index = 1
+                self.set_dialogue(self._get_root_greeting())
 
         elif self.state == ShopState.CHARACTER:
             if self._selected_index < len(CHARACTER_FORMS):
@@ -1324,9 +1381,9 @@ class DeltaruneShopWindow(QWidget):
                     goal_text = goals[self._selected_index - 1]
                     self._open_item_action("goal", goal_text)
                 else:  # Back
-                    self.state = ShopState.ROOT
-                    self._selected_index = 1
-                    self.set_dialogue(self._get_root_greeting())
+                    self.state = ShopState.TASKS_SUBMENU
+                    self._selected_index = self._tasks_tab
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
 
             elif self._tasks_tab == 1:  # TASKS
                 reminders = self._get_active_reminders()
@@ -1336,9 +1393,9 @@ class DeltaruneShopWindow(QWidget):
                     task_text = reminders[self._selected_index - 1]
                     self._open_item_action("task", task_text)
                 else:  # Back
-                    self.state = ShopState.ROOT
-                    self._selected_index = 1
-                    self.set_dialogue(self._get_root_greeting())
+                    self.state = ShopState.TASKS_SUBMENU
+                    self._selected_index = self._tasks_tab
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
 
             elif self._tasks_tab == 2:  # ALARMS
                 alarms = self._get_scheduled_alarms()
@@ -1349,9 +1406,9 @@ class DeltaruneShopWindow(QWidget):
                     lbl = alarm_item.get("label", "Alarm")
                     self._open_item_action("alarm", lbl, alarm_item)
                 else:  # Back
-                    self.state = ShopState.ROOT
-                    self._selected_index = 1
-                    self.set_dialogue(self._get_root_greeting())
+                    self.state = ShopState.TASKS_SUBMENU
+                    self._selected_index = self._tasks_tab
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
 
             elif self._tasks_tab == 3:  # TIMERS
                 items = self._get_timers_menu_items()
@@ -1372,9 +1429,9 @@ class DeltaruneShopWindow(QWidget):
                         self.stop_timer()
                         self.set_dialogue("* All active timers halted, minion!")
                 else:  # Back
-                    self.state = ShopState.ROOT
-                    self._selected_index = 1
-                    self.set_dialogue(self._get_root_greeting())
+                    self.state = ShopState.TASKS_SUBMENU
+                    self._selected_index = self._tasks_tab
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
 
         elif self.state == ShopState.SETTINGS_MENU:
             if self._selected_index == 0:  # Edit Facts
@@ -1519,10 +1576,14 @@ class DeltaruneShopWindow(QWidget):
         if self._input_container.isVisible():
             self._on_input_cancelled()
             return
-        if self.state in (ShopState.CHARACTER, ShopState.TASKS, ShopState.SETTINGS_MENU, ShopState.TALK_MENU):
+        if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.SETTINGS_MENU, ShopState.TALK_MENU):
             self.state = ShopState.ROOT
             self._selected_index = 0
             self.set_dialogue(self._get_root_greeting())
+        elif self.state == ShopState.TASKS:
+            self.state = ShopState.TASKS_SUBMENU
+            self._selected_index = self._tasks_tab
+            self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
         elif self.state in (ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU):
             self.state = ShopState.SETTINGS_MENU
             self._selected_index = 0
@@ -1634,16 +1695,28 @@ class DeltaruneShopWindow(QWidget):
                 self._memory.add_reminder(val)
             self.set_dialogue(f"* Task registered to chore board:\n* \"{val}\"\n* Finish it for Pink Dollars!")
         elif self._input_mode == "new_alarm":
-            parts = val.split(" ", 1)
-            time_str = parts[0].strip()
-            lbl = parts[1].strip() if len(parts) > 1 else "Alarm"
+            m = re.match(r"^(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}[:.]\d{2})\s*(.*)$", val, re.IGNORECASE)
+            if m:
+                time_str = m.group(1).strip()
+                lbl = m.group(2).strip() or "Alarm"
+            else:
+                parts = val.split(" ", 1)
+                time_str = parts[0].strip()
+                lbl = parts[1].strip() if len(parts) > 1 else "Alarm"
+
             mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
             if mem and hasattr(mem, "add_alarm"):
                 item = mem.add_alarm(time_str, lbl)
                 if item:
-                    self.set_dialogue(f"* Clock alarm primed for {item.get('clock_time')} (\"{lbl}\")!")
+                    self.set_dialogue(
+                        f"* Calibrating chronometers and winding the pocket watch...\n"
+                        f"* Clock alarm primed for {item.get('clock_time')} (\"{lbl}\")!\n"
+                        f"* I will sound the bells right on schedule, minion!"
+                    )
                 else:
-                    self.set_dialogue("* Format error: Use e.g. 08:30 AM Meeting, dummy!")
+                    self.set_dialogue("* Format error: Use e.g. 08:30 AM Meeting or 14:30 Sync, dummy!")
+            else:
+                self.set_dialogue("* Alarm mechanism currently unavailable, mew!")
         elif self._input_mode == "custom_timer":
             try:
                 mins = int(val)
@@ -1682,10 +1755,10 @@ class DeltaruneShopWindow(QWidget):
                 self.close_shop()
             return
 
-        # Sub-tab switching in TASKS via Tab key
+        # Submenu return in TASKS via Tab key
         if key == Qt.Key_Tab and self.state == ShopState.TASKS:
-            self._tasks_tab = (self._tasks_tab + 1) % 4
-            self._selected_index = 0
+            self.state = ShopState.TASKS_SUBMENU
+            self._selected_index = self._tasks_tab
             self.update()
             return
 
@@ -1744,28 +1817,12 @@ class DeltaruneShopWindow(QWidget):
                     self._confirm_selection()
                     return
 
-            # 3. Check 4-Tab clicks in TASKS (y: 263..289)
-            if self.state == ShopState.TASKS and 263 <= pos_canvas.y() <= 289:
-                if 24 <= pos_canvas.x() <= 112:
-                    self._tasks_tab = 0
-                    self._selected_index = 0
-                    self.update()
-                    return
-                elif 118 <= pos_canvas.x() <= 206:
-                    self._tasks_tab = 1
-                    self._selected_index = 0
-                    self.update()
-                    return
-                elif 212 <= pos_canvas.x() <= 304:
-                    self._tasks_tab = 2
-                    self._selected_index = 0
-                    self.update()
-                    return
-                elif 310 <= pos_canvas.x() <= 402:
-                    self._tasks_tab = 3
-                    self._selected_index = 0
-                    self.update()
-                    return
+            # 3. Check Tasks Category Click (switch to Submenu if clicked)
+            if self.state == ShopState.TASKS and 263 <= pos_canvas.y() <= 289 and 24 <= pos_canvas.x() <= 380:
+                self.state = ShopState.TASKS_SUBMENU
+                self._selected_index = self._tasks_tab
+                self.update()
+                return
 
             # 4. Check Top-Right Inspector Card click (x: 412..628, y: 46..246)
             if 412 <= pos_canvas.x() <= 628 and 46 <= pos_canvas.y() <= 246:
@@ -1889,9 +1946,15 @@ class DeltaruneShopWindow(QWidget):
             if 412 <= pt.x() <= 628 and 406 <= pt.y() <= 461:
                 return len(CHARACTER_FORMS)
 
+        elif self.state == ShopState.TASKS_SUBMENU:
+            if 412 <= pt.x() <= 628 and 265 <= pt.y() <= 465:
+                idx = (pt.y() - 265) // 36
+                if 0 <= idx < 5:
+                    return idx
+
         elif self.state == ShopState.TASKS:
-            if 20 <= pt.x() <= 385 and 293 <= pt.y() <= 441:
-                row = (pt.y() - 293) // 36
+            if 20 <= pt.x() <= 385 and 280 <= pt.y() <= 455:
+                row = (pt.y() - 280) // 36
                 if 0 <= row < 4:
                     if self._tasks_tab == 0:
                         idx = row + self._goals_scroll_offset
@@ -1903,7 +1966,7 @@ class DeltaruneShopWindow(QWidget):
                             return idx
                     elif self._tasks_tab == 2:
                         idx = row + self._alarms_scroll_offset
-                        if idx < len(self._get_scheduled_alarms()) + 1:
+                        if idx < len(self._get_scheduled_alarms()) + 2:
                             return idx
                     elif self._tasks_tab == 3:
                         idx = row + self._timers_scroll_offset
@@ -1950,12 +2013,14 @@ class DeltaruneShopWindow(QWidget):
                     return 1
 
         elif self.state == ShopState.TALK_MENU:
-            if 276 <= pt.y() <= 456:
-                row = min(3, max(0, (pt.y() - 276) // 44))
-                col = 0 if pt.x() < 320 else 1
-                idx = row * 2 + col
-                if 0 <= idx < len(TALK_TOPICS):
-                    return idx
+            for i in range(len(TALK_TOPICS)):
+                col = i % 2
+                row = i // 2
+                x = 30 if col == 0 else 320
+                y = 276 + row * 44
+                rect = QRect(x, y, 280, 42)
+                if rect.contains(pt):
+                    return i
 
         return None
 
@@ -1984,6 +2049,8 @@ class DeltaruneShopWindow(QWidget):
                 self._draw_root_state(p)
             elif self.state == ShopState.CHARACTER:
                 self._draw_character_state(p)
+            elif self.state == ShopState.TASKS_SUBMENU:
+                self._draw_tasks_submenu_state(p)
             elif self.state == ShopState.TASKS:
                 self._draw_tasks_and_alarms_state(p)
             elif self.state == ShopState.SETTINGS_MENU:
@@ -2004,7 +2071,11 @@ class DeltaruneShopWindow(QWidget):
                 self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
                 p.setFont(self._font_small)
                 p.setPen(QColor(255, 255, 0))
-                p.drawText(430, 441, "[Click or press Z to Exit]")
+                p.drawText(
+                    QRect(416, 405, 204, 52),
+                    Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap,
+                    "[Click dialogue or press Z to Exit]"
+                )
 
         finally:
             p.end()
@@ -2059,14 +2130,11 @@ class DeltaruneShopWindow(QWidget):
         start_y = 286
         line_h = 42
 
-        for i, f in enumerate(CHARACTER_FORMS):
+        for i in range(len(CHARACTER_FORMS)):
             is_sel = (i == self._selected_index)
-            status = f.get("status", "LOCKED")
-            color = QColor(255, 255, 0) if is_sel else (QColor(170, 255, 230) if status == "EQUIPPED" else QColor(160, 160, 175))
+            color = QColor(255, 255, 0) if is_sel else QColor(160, 160, 175)
             p.setPen(color)
-
-            mark = f" [{status}]"
-            p.drawText(start_x, start_y + i * line_h, f"{f['name']}{mark}")
+            p.drawText(start_x, start_y + i * line_h, "COMING SOON")
 
             if is_sel and self._soul_heart:
                 p.drawPixmap(start_x - 24, start_y + i * line_h - 13, self._soul_heart)
@@ -2086,15 +2154,11 @@ class DeltaruneShopWindow(QWidget):
             p.drawPixmap(424, 422, self._soul_heart)
 
     def _draw_tasks_and_alarms_state(self, p: QPainter) -> None:
-        # 4 Tab Headers: [ GOALS ]  [ TASKS ]  [ ALARMS ]  [ TIMERS ]
+        # Category Header (Sub-submenu)
+        cat_headers = ["GOALS BOARD", "CHORES & REMINDERS", "CLOCK ALARMS", "FOCUS TIMERS"]
         p.setFont(self._font_title)
-        tab_titles = ["GOALS", "TASKS", "ALARMS", "TIMERS"]
-        tab_xs = [24, 118, 212, 310]
-
-        for i, tname in enumerate(tab_titles):
-            is_active = (self._tasks_tab == i)
-            p.setPen(QColor(255, 255, 0) if is_active else QColor(150, 150, 180))
-            p.drawText(tab_xs[i], 283, f"[{tname}]" if is_active else tname)
+        p.setPen(QColor(255, 255, 0))
+        p.drawText(36, 283, f"[{cat_headers[self._tasks_tab]}]")
 
         # Top-Right Details Card
         p.setFont(self._font_title)
@@ -2108,9 +2172,11 @@ class DeltaruneShopWindow(QWidget):
             p.drawText(426, 79, f"Active Goals: {len(goals)}")
             p.setPen(QColor(255, 255, 255))
             if 1 <= self._selected_index <= len(goals):
-                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, goals[self._selected_index - 1])
+                g_text = goals[self._selected_index - 1]
+                g_val = self.evaluate_goal_value(g_text)
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Valuation: +P$ {g_val:02d}\n\"{g_text}\"")
             else:
-                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Set personal milestones! Completing a milestone awards a bonus of +P$ 000005!")
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Set personal milestones! Pink evaluates each goal dynamically between P$ 03 and P$ 08!")
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
             p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
@@ -2169,7 +2235,7 @@ class DeltaruneShopWindow(QWidget):
 
         if self._tasks_tab == 0:  # GOALS
             goals = self._get_goals()
-            full_list = ["[+ Add New Goal]"] + [f"{i+1}. {g}" for i, g in enumerate(goals)]
+            full_list = ["[+ Add New Goal]"] + [g for g in goals]
             visible_items = full_list[self._goals_scroll_offset : self._goals_scroll_offset + 4]
             p.setFont(self._font_body)
             for row_idx, text in enumerate(visible_items):
@@ -2302,7 +2368,7 @@ class DeltaruneShopWindow(QWidget):
 
         # Bottom-Left Settings Menu
         p.setFont(self._font_title)
-        options = ["1. Edit Facts & Nickname", "2. Companion Toggles", "3. Back"]
+        options = ["Edit Facts & Nickname", "Companion Toggles", "Back"]
         start_x = 44
         start_y = 301
         line_h = 44
