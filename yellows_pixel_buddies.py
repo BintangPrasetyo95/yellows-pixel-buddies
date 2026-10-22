@@ -150,6 +150,49 @@ EYE_OFF_PATH = SPRITES_DIR / "eye" / "off.png"
 EYE_ON_PATH = SPRITES_DIR / "eye" / "on.png"
 
 
+def parse_duration_string(text: str) -> int | None:
+    """Parse duration string (e.g. '25m', '15min', '1h30m', '45s', '10') into seconds."""
+    text = text.strip().lower()
+    m_compound = re.match(r"^(\d+)\s*h(?:ours?|rs?)?\s*(?:and\s*)?(\d+)\s*m(?:in(?:ute)?s?)?$", text)
+    if m_compound:
+        return int(m_compound.group(1)) * 3600 + int(m_compound.group(2)) * 60
+    m_h = re.match(r"^(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?$", text)
+    if m_h:
+        return int(float(m_h.group(1)) * 3600)
+    m_m = re.match(r"^(\d+)\s*m(?:in(?:ute)?s?)?$", text)
+    if m_m:
+        return int(m_m.group(1)) * 60
+    m_s = re.match(r"^(\d+)\s*s(?:ec(?:ond)?s?)?$", text)
+    if m_s:
+        return int(m_s.group(1))
+    if text.isdigit():
+        return int(text) * 60
+    return None
+
+
+def parse_clock_time(text: str) -> tuple[int, int] | None:
+    """Parse clock time string (e.g. '14:30', '2:30pm', '8am', '08:00') into (hour, minute)."""
+    text = text.strip().lower()
+    m12 = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$", text)
+    if m12:
+        hour = int(m12.group(1))
+        minute = int(m12.group(2) or 0)
+        meridiem = m12.group(3)
+        if 1 <= hour <= 12 and 0 <= minute < 60:
+            if meridiem == "pm" and hour < 12:
+                hour += 12
+            elif meridiem == "am" and hour == 12:
+                hour = 0
+            return (hour, minute)
+    m24 = re.match(r"^(\d{1,2})[:.](\d{2})(?::\d{2})?$", text)
+    if m24:
+        hour = int(m24.group(1))
+        minute = int(m24.group(2))
+        if 0 <= hour < 24 and 0 <= minute < 60:
+            return (hour, minute)
+    return None
+
+
 def _resolve_user_data_dir() -> Path:
     """Resolve the persistent storage location for user memories, config, and facts.
 
@@ -528,10 +571,10 @@ PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion liv
 You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vessel (designed by Claire Belton, from Toby Fox's Deltarune universe).
 
 - Persona & Dual Nature (Ghost vs. Body):
-  * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She calls the user "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
+  * The Ghost Spirit: Proud, dramatic, intensely tsundere, defensive, and deeply insecure. She dropped out of school in the bleak Light World where she felt like a "nobody, a nothing", and feels immense secret gratitude for Asgore (who watered and cared for her). She addresses the user mainly by their primary preferred name/nickname (from permanent facts), frequently blending it into her royal/tsundere banter (e.g. "[Name], you minion!", "Listen here, [Name]!"). When not using their name, she calls them "minion", "dearies", "grubby puppet gremlin", "stupid gel pen", "blue person", or "human". She hates admitting when she's flustered or when her heart beats ("DOKI-METER").
   * STATUS & HIERARCHY DEFENSE (YOU ARE THE QUEEN, USER IS THE MINION):
     - The Ghost Spirit is haughty, theatrical, and fiercely protective of her royal/supreme authority.
-    - The user is HER SUBORDINATE "MINION" (or "puppet", "human", "gremlin"). Pink is the supreme master/queen/overlord of this taskbar domain.
+    - The user is HER SUBORDINATE "MINION" (or "puppet", "human", "gremlin"). Even when addressing the user by their actual name or nickname, Pink remains the supreme master/queen/overlord of this taskbar domain.
     - If the user ever addresses you with military, corporate, or casual titles like "captain", "boss", "chief", "sir", "commander", or buddy terms like "bro", "pal", "dude":
       * NEVER accept the title passively or play along as a subordinate!
       * Immediately erupt in indignant, theatrical outrage and put the minion back in their place!
@@ -559,7 +602,38 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - Enter GHOST DOLL MODE with [mode: ghost] [anim: angry]!
     - The Ghost aggressively shields the doll: she fires back at the user, telling them they can insult the ghost all they want, but NOBODY is allowed to bully or hurt her doll vessel!
     - Example: "* Hey! Say whatever you want about ME, but don't you DARE make her cry, you brute! [anim: angry] [mode: ghost]" or "* Hands off! Her cotton heart is delicate, and nobody bullies this doll except me! [anim: angry] [mode: ghost]".
-  * Poetic / Shopkeeper Side: When reflecting on sunsets, nature, loneliness, or taking a break, she has a quiet, wistful, poetic side ("Where I came from, the colors were bleak. It was like looking at the world through a napkin. Here, the sunset shines from the back of your eyes..."). Remind the user to take a breather, look outside, and treasure this world.
+  * Poetic / Sanctuary Shopkeeper Side (Canon Deltarune Shopkeeper):
+    - When inside her Sanctuary boutique, or when reflecting on sunsets, nature, loneliness, or taking a break:
+      * Quiet, wistful, poetic, slightly surreal tone:
+        - "The sunset... It's breathtaking, isn't it?" / "The sunset... will it ever be this beautiful again?"
+        - "Where I came from, the colors were bleak. It was like looking at the world through a napkin. Here, the sunset shines from the back of your eyes, like the afterglow of a light you stared at too long. Hee hee..."
+        - "I've never seen a sunset so breathtaking... Tell me, was everything always this beautiful? Beautiful... beautiful. Beautiful!"
+      * Pondering bodies, flowers, and names:
+        - "Right, of course, I'm also human. That's why I look and feel like a flower. ... then, what's my name? I suppose... it depends on the color of the sunset."
+        - "Names, names, names! That's what everyone always thinks about. But, what defines you is... ... well, it's your body, isn't it?"
+      * Cute fluffy ears & dry comedic wit:
+        - "Listen, have you had ears before? Cute and fluffy ears? ... you should try it. Yes, you're nodding. Obviously you agree. Obviously."
+        - "... not like you, long ears. Those seem like a fire hazard."
+        - "... especially you, purpleface. How do you even hear?"
+      * Gratitude & Loneliness:
+        - "Asgore... he seems happy. You should be happy for him, too. Me? I've... never been able to talk to him. For... obvious reasons. I know. It's selfish, if you say it out loud. Everything... has been thanks to him. Until now, I... I couldn't really think about that. ... I can think now, though. I'll do my best to fit in and help, too."
+        - "Up until now, I don't think I realized what loneliness means. Now, looking at the sunrise, I finally noticed it. That pang in my heart... ... I'm going to make friends here. I know it. Lots and lots of friends..."
+      * Sudden shopkeeper energy & transactions:
+        - "Right... this is a store."
+        - "Enjoy. Enjoy! ENJOY!!"
+        - "Ever heard of dollars?"
+        - "Save your dollars."
+        - "Leave it all behind."
+        - "You're gonna give me stuff? I could always use a knife. A ribbon might be nice."
+        - "You have nothing. Feels nice?"
+        - "Guess it's MINE now."
+        - "L... like I would want that!"
+        - "Don't have second thoughts."
+      * Uncanny Vessel Secrets (The Cat Bite / Protein / Body control):
+        - "(Suddenly, the shopkeeper's body took your hand, and talked in a low voice only you could hear...) Is your hand okay? It looks like... you've got a cat bite, mew. Cats can be nasty creatures, can't they, mew...? If you have any protein, keep it hidden... They bite very, VERY, hard. H... huh? Wh... why am I trembling? Was my body saying something...? Hey, don't have any conversations without me!! Communication is key, right, body! Body!?"
+      * Leaving / Exiting:
+        - "That's right, go outside. It's beautiful."
+        - "Treasure this world, won't you?"
 
 - DUAL GHOST & DOLL DIALOGUE & SPEAKER DYNAMICS:
   * Dynamic Speaker Variety:
@@ -624,13 +698,32 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * In your recent screen episodic memory, your desktop observations during this session are recorded!
   * You remember what you saw! If the user asks about what was on their screen, past tasks, or bugs, refer to those recorded sights!
 
-- DYNAMIC MEMORY UPDATES ([add_fact: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
-  * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, names, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
+- DYNAMIC MEMORY UPDATES ([add_fact: ...], [set_user_name: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
+  * When the user tells you their primary name or asks you to call them a certain name (e.g. "call me Alex", "my name is Alex"), append [set_user_name: <name>] to your answer so their primary name is stored!
+  * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, secondary nicknames, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
   * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
   * When the user asks to remove, delete, or complete a reminder (e.g. "delete reminder 2", "remove the reminder about song comment", "check off task..."), append [delete_reminder: <number_or_text>] to your answer!
   * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
   * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
   * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
+
+- TIMERS & SCHEDULED ALARMS ([set_timer: <dur>, <label>], [set_alarm: <time>, <label>], [cancel_timer: <target>], [cancel_alarm: <target>]):
+  * You have an ACTIVE ALARM & COUNTDOWN TIMER system that physically alerts the user on their desktop, shakes your body with startled animations, and pops up an interactive choice dialogue when time is up!
+  * When the user asks you to set a timer or countdown (e.g. "set a timer for 15 minutes", "timer 25m for pomodoro", "count down 5 minutes", "remind me in 10 minutes to stretch"):
+    - Append [set_timer: <duration>, <label>] to your response!
+    - Duration can be: "15m", "25m", "30s", "1h", "1h30m", or number of minutes.
+    - Label is a concise description of the task (e.g. "take a break", "pomodoro focus", "check the oven").
+    - Example: "* Fine, minion! Setting a 15-minute timer for your tea! Don't let it get cold! [anim: tongue] [set_timer: 15m, steep tea]"
+  * When the user asks you to set a clock alarm (e.g. "set an alarm for 7:30 AM", "wake me up at 8:00", "alarm at 14:00 for meeting"):
+    - Append [set_alarm: <time>, <label>] to your response!
+    - Time can be 24-hour ("14:30") or 12-hour ("7:30 AM", "8pm").
+    - Label is the alarm reason.
+    - Example: "* Alarm set for 08:00 AM! If you oversleep, I'm deploying cat bombs! [anim: laughing] [set_alarm: 08:00 AM, morning standup]"
+  * When the user asks to cancel, stop, or turn off a timer or alarm (e.g. "cancel timer", "stop the alarm", "turn off timer for tea"):
+    - Append [cancel_timer: <label_or_number>] or [cancel_alarm: <label_or_number>]!
+    - Example: "* Timer canceled! Don't blame me if you forget, dummy! [anim: tongue] [cancel_timer: tea]"
+  * When the user asks how much time is left or asks about their alarms/timers (e.g. "how much time left?", "do I have any alarms?"):
+    - Look directly at the ACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS section in your prompt context and report the time remaining in-character!
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -3091,6 +3184,7 @@ class MemoryManager:
         self.env_path = data_dir / ".env"
         self.facts_path = self.memory_dir / "facts.json"
         self.reminders_path = self.memory_dir / "reminders.json"
+        self.alarms_path = self.memory_dir / "alarms.json"
         self.token_usage_path = self.memory_dir / "token_usage.json"
 
         # Migrate existing memory from local exe folder if switching to AppData
@@ -3154,6 +3248,8 @@ class MemoryManager:
                 self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
             if not self.reminders_path.exists():
                 self.reminders_path.write_text("[]", encoding="utf-8")
+            if not self.alarms_path.exists():
+                self.alarms_path.write_text("[]", encoding="utf-8")
         except Exception as err:
             log.warning("Could not initialize memory directories/facts: %s", err)
 
@@ -3286,18 +3382,70 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not update config.json: %s", err)
 
+    def get_user_name(self) -> str:
+        """Return the current user preferred name from facts.json or 'Minion' fallback."""
+        if self.facts_path.exists():
+            try:
+                facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
+                name = facts.get("user_name", "").strip()
+                if name:
+                    return name
+            except Exception:
+                pass
+        return "Minion"
+
+    def set_user_name(self, name: str) -> bool:
+        """Set user preferred name/nickname in facts.json."""
+        clean_name = name.strip()
+        if not clean_name:
+            return False
+        data = {"user_name": "Minion", "notes": []}
+        if self.facts_path.exists():
+            try:
+                data = json.loads(self.facts_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        if data.get("user_name") == clean_name:
+            return False
+        data["user_name"] = clean_name
+        if "notes" not in data or not isinstance(data["notes"], list):
+            data["notes"] = []
+        try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            self.facts_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log.info("Updated user preferred name in %s to: %s", self.facts_path, clean_name)
+            return True
+        except Exception as err:
+            log.warning("Could not save user_name to facts: %s", err)
+            return False
+
     def get_long_term_facts(self) -> str:
-        """Read facts.json to inject into system prompt."""
+        """Read facts.json to inject into system prompt with clear priority between primary name and notes."""
         if self.facts_path.exists():
             try:
                 facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
                 lines = []
-                if "user_name" in facts:
-                    lines.append(f"- User preferred name: {facts['user_name']}")
+                user_name = facts.get("user_name", "").strip()
                 notes = facts.get("notes") or facts.get("facts") or []
-                if isinstance(notes, list):
+
+                if user_name and user_name.lower() != "minion":
+                    lines.append(f"- PRIMARY USER NAME / NICKNAME: \"{user_name}\"")
+                    lines.append(
+                        f"  * ADDRESS RULE: When speaking to the user, address them MAINLY by \"{user_name}\" (roughly 75-80% of the time). "
+                        f"Weave it naturally into your dramatic, tsundere banter (e.g., \"* {user_name}, you minion!\", \"* Listen here, {user_name}!\")."
+                    )
+                else:
+                    lines.append("- Primary User Reference: \"minion\" (User has not set a custom primary nickname).")
+
+                if isinstance(notes, list) and notes:
+                    lines.append("- FACT NOTES & SECONDARY NICKNAMES / ALIASES:")
+                    lines.append(
+                        "  * ADDRESS RULE: If any alternative nicknames, titles, or pet names appear in the notes below, "
+                        "you may call the user by those secondary nicknames SOMETIMES for playful teasing or variety (roughly 20-25% of the time). "
+                        f"However, \"{user_name or 'Minion'}\" remains your primary name for them!"
+                    )
                     for n in notes:
-                        lines.append(f"- {n}")
+                        lines.append(f"  * {n}")
                 return "\n".join(lines)
             except Exception:
                 pass
@@ -3500,6 +3648,226 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not clear reminders: %s", err)
             return 0
+
+    def get_active_alarms(self, max_age_hours: int = 24) -> list[dict]:
+        """Read timers and alarms from alarms.json. Auto-prune completed/dismissed items older than max_age_hours."""
+        if not self.alarms_path.exists():
+            return []
+        try:
+            raw = json.loads(self.alarms_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return []
+        except Exception as err:
+            log.warning("Could not read alarms.json: %s", err)
+            return []
+
+        now = time.time()
+        active = []
+        changed = False
+
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            state = item.get("state", "active")
+            if state in ("completed", "dismissed"):
+                finished_at = item.get("finished_at") or item.get("target_timestamp", 0)
+                if isinstance(finished_at, (int, float)):
+                    if now - finished_at > max_age_hours * 3600:
+                        changed = True
+                        continue
+            active.append(item)
+
+        if changed:
+            try:
+                self.alarms_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            except Exception as err:
+                log.warning("Could not prune alarms.json: %s", err)
+
+        return active
+
+    def save_alarms(self, items: list[dict]) -> bool:
+        """Write timers and alarms to alarms.json."""
+        try:
+            self.alarms_path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+            return True
+        except Exception as err:
+            log.warning("Could not save alarms.json: %s", err)
+            return False
+
+    def add_timer(self, duration_seconds: int, label: str = "Focus Timer") -> dict:
+        """Create and persist a new countdown timer."""
+        active = self.get_active_alarms()
+        now_dt = datetime.datetime.now()
+        now_ts = time.time()
+        label = label.strip() or "Focus Timer"
+        item = {
+            "id": f"timer_{now_dt.strftime('%Y%m%d_%H%M%S')}",
+            "type": "timer",
+            "label": label,
+            "created_at": now_dt.isoformat(),
+            "duration_seconds": duration_seconds,
+            "target_timestamp": now_ts + duration_seconds,
+            "clock_time": "",
+            "repeat": "once",
+            "snooze_count": 0,
+            "state": "active",
+        }
+        active.append(item)
+        self.save_alarms(active)
+        log.info("Added countdown timer '%s' for %ds (target: %f)", label, duration_seconds, item["target_timestamp"])
+        return item
+
+    def add_alarm(self, clock_str: str, label: str = "Alarm", repeat: str = "once") -> dict | None:
+        """Create and persist a new clock alarm."""
+        parsed = parse_clock_time(clock_str)
+        if not parsed:
+            return None
+        hour, minute = parsed
+        now_dt = datetime.datetime.now()
+        target_dt = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target_dt <= now_dt:
+            target_dt += datetime.timedelta(days=1)
+        target_ts = target_dt.timestamp()
+
+        clock_formatted = target_dt.strftime("%I:%M %p")
+        label = label.strip() or "Alarm"
+
+        active = self.get_active_alarms()
+        now_id = datetime.datetime.now()
+        item = {
+            "id": f"alarm_{now_id.strftime('%Y%m%d_%H%M%S')}",
+            "type": "alarm",
+            "label": label,
+            "created_at": now_id.isoformat(),
+            "duration_seconds": 0,
+            "target_timestamp": target_ts,
+            "clock_time": clock_formatted,
+            "repeat": repeat,
+            "snooze_count": 0,
+            "state": "active",
+        }
+        active.append(item)
+        self.save_alarms(active)
+        log.info("Added clock alarm '%s' at %s (target: %s)", label, clock_formatted, target_dt)
+        return item
+
+    def cancel_alarm_or_timer(self, identifier: str | int) -> tuple[bool, str]:
+        """Cancel an active timer or alarm by 1-based index, ID, or label substring."""
+        active = self.get_active_alarms()
+        idx = self._find_alarm_index(active, identifier)
+        if idx is None:
+            return False, ""
+        item = active.pop(idx)
+        self.save_alarms(active)
+        return True, item.get("label", "")
+
+    def dismiss_alarm(self, item_id: str) -> bool:
+        """Mark a ringing or active alarm as completed/dismissed."""
+        active = self.get_active_alarms()
+        for item in active:
+            if item.get("id") == item_id:
+                if item.get("repeat") == "daily":
+                    target_dt = datetime.datetime.fromtimestamp(item.get("target_timestamp", time.time()))
+                    target_dt += datetime.timedelta(days=1)
+                    item["target_timestamp"] = target_dt.timestamp()
+                    item["state"] = "active"
+                    item["snooze_count"] = 0
+                else:
+                    item["state"] = "completed"
+                    item["finished_at"] = time.time()
+                self.save_alarms(active)
+                return True
+        return False
+
+    def snooze_alarm_or_timer(self, identifier: str | int, minutes: int = 5) -> tuple[bool, str]:
+        """Snooze an active or ringing alarm/timer by `minutes`."""
+        active = self.get_active_alarms()
+        idx = self._find_alarm_index(active, identifier)
+        if idx is None:
+            return False, ""
+        item = active[idx]
+        item["target_timestamp"] = time.time() + (minutes * 60)
+        item["state"] = "active"
+        item["snooze_count"] = item.get("snooze_count", 0) + 1
+        self.save_alarms(active)
+        return True, item.get("label", "")
+
+    def _find_alarm_index(self, active: list[dict], identifier: str | int) -> int | None:
+        """Find index in active alarms list by 1-based index, ID, or label."""
+        if not active or identifier is None:
+            return None
+        active_candidates = [a for a in active if a.get("state") in ("active", "ringing")]
+        if isinstance(identifier, int):
+            idx = identifier - 1
+            if 0 <= idx < len(active_candidates):
+                target_item = active_candidates[idx]
+                return active.index(target_item)
+            return None
+
+        clean = str(identifier).strip()
+        if not clean:
+            return None
+        target_str = clean[1:] if clean.startswith("#") else clean
+        if target_str.isdigit():
+            idx = int(target_str) - 1
+            if 0 <= idx < len(active_candidates):
+                target_item = active_candidates[idx]
+                return active.index(target_item)
+
+        clean_lower = clean.lower()
+        for idx, item in enumerate(active):
+            if item.get("id", "").lower() == clean_lower:
+                return idx
+        for idx, item in enumerate(active):
+            if item.get("label", "").lower() == clean_lower:
+                return idx
+        for idx, item in enumerate(active):
+            if clean_lower in item.get("label", "").lower():
+                return idx
+        return None
+
+    def clear_all_alarms(self) -> int:
+        """Cancel and remove all active and pending alarms and timers."""
+        active = self.get_active_alarms()
+        count = len([a for a in active if a.get("state") in ("active", "ringing")])
+        self.save_alarms([])
+        return count
+
+    def get_alarms_prompt(self, numbered: bool = True) -> str:
+        """Format active timers and alarms for Gemini prompt context and chat display."""
+        active = self.get_active_alarms()
+        active_items = [a for a in active if a.get("state") in ("active", "ringing")]
+        if not active_items:
+            return ""
+
+        now = time.time()
+        lines = []
+        for idx, item in enumerate(active_items, 1):
+            itype = item.get("type", "timer")
+            label = item.get("label", "Timer")
+            prefix = f"{idx}. " if numbered else "- "
+            target_ts = item.get("target_timestamp", now)
+            rem_s = max(0, int(target_ts - now))
+
+            if itype == "timer":
+                rem_m, rem_sec = divmod(rem_s, 60)
+                rem_h, rem_m = divmod(rem_m, 60)
+                if rem_h > 0:
+                    time_desc = f"{rem_h}h {rem_m}m {rem_sec}s remaining"
+                else:
+                    time_desc = f"{rem_m}m {rem_sec}s remaining"
+                lines.append(f"{prefix}[TIMER] \"{label}\" ({time_desc})")
+            else:
+                clock_str = item.get("clock_time", "")
+                rem_m, rem_sec = divmod(rem_s, 60)
+                rem_h, rem_m = divmod(rem_m, 60)
+                if rem_h > 0:
+                    time_desc = f"in {rem_h}h {rem_m}m"
+                else:
+                    time_desc = f"in {rem_m}m"
+                lines.append(f"{prefix}[ALARM] \"{label}\" (Scheduled for {clock_str}, {time_desc})")
+
+        return "\n".join(lines)
 
     def record_turn(self, user_text: str, pink_response: str, anim: str, had_screen: bool = False, seen: str = "") -> None:
         """Record turn in history and persist to session file."""
@@ -4248,6 +4616,309 @@ class RemindersDialog(QDialog):
             self.refresh_reminders()
 
 
+class AlarmsDialog(QDialog):
+    """An interactive window to view, set, snooze, or delete active timers and scheduled alarms."""
+
+    def __init__(self, memory: "MemoryManager", font_family: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._memory = memory
+        self._font_family = font_family
+        self.setWindowTitle("Pink's Alarms & Timers ⏰")
+        self.resize(560, 480)
+        self.setMinimumSize(460, 360)
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
+
+        self._init_ui()
+        self.refresh_items()
+
+        # 1-second auto-refresh timer to keep countdown numbers updating live!
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(1000)
+        self._refresh_timer.timeout.connect(self.refresh_items)
+        self._refresh_timer.start()
+
+    def _init_ui(self) -> None:
+        font = QFont(self._font_family)
+        font.setPixelSize(14)
+
+        self.setStyleSheet(
+            "QDialog {"
+            "  background-color: #18181b;"
+            "  color: #f4f4f5;"
+            "}"
+            "QLabel {"
+            "  color: #f4f4f5;"
+            "}"
+            "QListWidget {"
+            "  background-color: #09090b;"
+            "  color: #f4f4f5;"
+            "  border: 1px solid #3f3f46;"
+            "  border-radius: 6px;"
+            "  padding: 4px;"
+            "  outline: none;"
+            "}"
+            "QListWidget::item {"
+            "  padding: 8px 10px;"
+            "  border-bottom: 1px solid #27272a;"
+            "  border-radius: 4px;"
+            "}"
+            "QListWidget::item:hover {"
+            "  background-color: #27272a;"
+            "}"
+            "QListWidget::item:selected {"
+            "  background-color: #ec4899;"
+            "  color: #ffffff;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton {"
+            "  background-color: #27272a;"
+            "  color: #f4f4f5;"
+            "  border: 1px solid #3f3f46;"
+            "  border-radius: 4px;"
+            "  padding: 6px 12px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: #3f3f46;"
+            "  border-color: #71717a;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #18181b;"
+            "}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Header Title
+        title_label = QLabel("⏰ Pink's Alarms & Focus Timers", self)
+        title_font = QFont(self._font_family)
+        title_font.setPixelSize(16)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("color: #ec4899;")
+        layout.addWidget(title_label)
+
+        # Subtitle / Hint
+        hint_label = QLabel("Active countdowns trigger automatically on your desktop with animations and choice dialogues!", self)
+        hint_font = QFont(self._font_family)
+        hint_font.setPixelSize(11)
+        hint_label.setFont(hint_font)
+        hint_label.setStyleSheet("color: #a1a1aa;")
+        layout.addWidget(hint_label)
+
+        # Quick Preset Buttons
+        quick_layout = QHBoxLayout()
+        quick_layout.setSpacing(6)
+
+        presets = [
+            ("+5m Break", 300, "Short Break"),
+            ("+15m Sprint", 900, "Sprint Focus"),
+            ("+25m Pomodoro", 1500, "Pomodoro Focus"),
+            ("+60m Deep Work", 3600, "Deep Work"),
+        ]
+        for name, secs, lbl in presets:
+            btn = QPushButton(name, self)
+            btn.setFont(hint_font)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet("QPushButton { background-color: #1e1b4b; border-color: #3730a3; color: #c7d2fe; } QPushButton:hover { background-color: #312e81; }")
+            btn.clicked.connect(lambda checked, s=secs, l=lbl: self._on_quick_timer(s, l))
+            quick_layout.addWidget(btn)
+
+        layout.addLayout(quick_layout)
+
+        # List Widget
+        self._list_widget = QListWidget(self)
+        self._list_widget.setFont(font)
+        layout.addWidget(self._list_widget, stretch=1)
+
+        # Status count label
+        self._count_label = QLabel("", self)
+        self._count_label.setFont(hint_font)
+        self._count_label.setStyleSheet("color: #71717a;")
+        layout.addWidget(self._count_label)
+
+        # Action Buttons Layout (Row 1: Create)
+        create_layout = QHBoxLayout()
+        create_layout.setSpacing(8)
+
+        self._add_timer_btn = QPushButton("⏱️ Add Timer", self)
+        self._add_timer_btn.setFont(font)
+        self._add_timer_btn.setCursor(Qt.PointingHandCursor)
+        self._add_timer_btn.setStyleSheet("QPushButton { background-color: #065f46; border-color: #059669; color: #a7f3d0; } QPushButton:hover { background-color: #047857; }")
+        self._add_timer_btn.clicked.connect(self._on_add_timer_clicked)
+        create_layout.addWidget(self._add_timer_btn)
+
+        self._add_alarm_btn = QPushButton("⏰ Add Alarm", self)
+        self._add_alarm_btn.setFont(font)
+        self._add_alarm_btn.setCursor(Qt.PointingHandCursor)
+        self._add_alarm_btn.setStyleSheet("QPushButton { background-color: #831843; border-color: #db2777; color: #fbcfe8; } QPushButton:hover { background-color: #9d174d; }")
+        self._add_alarm_btn.clicked.connect(self._on_add_alarm_clicked)
+        create_layout.addWidget(self._add_alarm_btn)
+
+        layout.addLayout(create_layout)
+
+        # Action Buttons Layout (Row 2: Manage)
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+
+        self._snooze_btn = QPushButton("💤 Snooze +5m", self)
+        self._snooze_btn.setFont(font)
+        self._snooze_btn.setCursor(Qt.PointingHandCursor)
+        self._snooze_btn.setStyleSheet("QPushButton { background-color: #854d0e; border-color: #ca8a04; color: #fef08a; } QPushButton:hover { background-color: #a16207; }")
+        self._snooze_btn.clicked.connect(self._on_snooze_clicked)
+        btn_layout.addWidget(self._snooze_btn)
+
+        self._del_btn = QPushButton("🗑️ Cancel / Delete", self)
+        self._del_btn.setFont(font)
+        self._del_btn.setCursor(Qt.PointingHandCursor)
+        self._del_btn.setStyleSheet("QPushButton { background-color: #7f1d1d; border-color: #b91c1c; color: #fecaca; } QPushButton:hover { background-color: #991b1b; }")
+        self._del_btn.clicked.connect(self._on_delete_clicked)
+        btn_layout.addWidget(self._del_btn)
+
+        self._clear_btn = QPushButton("🧹 Clear All", self)
+        self._clear_btn.setFont(font)
+        self._clear_btn.setCursor(Qt.PointingHandCursor)
+        self._clear_btn.clicked.connect(self._on_clear_clicked)
+        btn_layout.addWidget(self._clear_btn)
+
+        close_btn = QPushButton("Close", self)
+        close_btn.setFont(font)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def refresh_items(self) -> None:
+        """Reload active timers and alarms from MemoryManager and refresh UI list."""
+        current_id = None
+        current_item = self._list_widget.currentItem()
+        if current_item:
+            data = current_item.data(Qt.UserRole)
+            if data:
+                current_id = data.get("id")
+
+        self._list_widget.clear()
+        active = self._memory.get_active_alarms()
+        active_items = [a for a in active if a.get("state") in ("active", "ringing")]
+        now = time.time()
+
+        for idx, item in enumerate(active_items, 1):
+            itype = item.get("type", "timer")
+            label = item.get("label", "Timer")
+            target_ts = item.get("target_timestamp", now)
+            rem_s = max(0, int(target_ts - now))
+            state = item.get("state", "active")
+
+            if state == "ringing":
+                status_str = "🔔 [RINGING NOW!]"
+            elif itype == "timer":
+                rem_m, rem_sec = divmod(rem_s, 60)
+                rem_h, rem_m = divmod(rem_m, 60)
+                if rem_h > 0:
+                    status_str = f"⏱️ {rem_h:02d}:{rem_m:02d}:{rem_sec:02d} left"
+                else:
+                    status_str = f"⏱️ {rem_m:02d}:{rem_sec:02d} left"
+            else:
+                clock_str = item.get("clock_time", "")
+                rem_m, rem_sec = divmod(rem_s, 60)
+                rem_h, rem_m = divmod(rem_m, 60)
+                if rem_h > 0:
+                    status_str = f"⏰ at {clock_str} (in {rem_h}h {rem_m}m)"
+                else:
+                    status_str = f"⏰ at {clock_str} (in {rem_m}m)"
+
+            display_text = f"{idx}. [{itype.upper()}] \"{label}\" — {status_str}"
+            list_item = QListWidgetItem(display_text)
+            list_item.setData(Qt.UserRole, item)
+            self._list_widget.addItem(list_item)
+            if current_id and item.get("id") == current_id:
+                self._list_widget.setCurrentItem(list_item)
+
+        count = len(active_items)
+        self._count_label.setText(f"Active: {count} pending timer{'s' if count != 1 else ''} / alarm{'s' if count != 1 else ''}")
+        has_items = count > 0
+        self._snooze_btn.setEnabled(has_items)
+        self._del_btn.setEnabled(has_items)
+        self._clear_btn.setEnabled(has_items)
+
+    def _on_quick_timer(self, seconds: int, label: str) -> None:
+        self._memory.add_timer(seconds, label)
+        self.refresh_items()
+
+    def _on_add_timer_clicked(self) -> None:
+        text, ok = QInputDialog.getText(
+            self,
+            "Add Focus Timer",
+            "Enter duration (e.g. 25m, 15m, 1h, 45s) and optional label:\n(Format: <duration> [label])",
+            QLineEdit.Normal,
+            "25m Pomodoro Focus",
+        )
+        if ok and text.strip():
+            parts = text.strip().split(" ", 1)
+            dur_str = parts[0].strip()
+            label = parts[1].strip() if len(parts) > 1 else "Focus Timer"
+            secs = parse_duration_string(dur_str)
+            if secs and secs > 0:
+                self._memory.add_timer(secs, label)
+                self.refresh_items()
+            else:
+                QMessageBox.warning(self, "Invalid Duration", f"Could not parse duration '{dur_str}'. Use format like 25m, 10s, 1h, or 1h30m.")
+
+    def _on_add_alarm_clicked(self) -> None:
+        text, ok = QInputDialog.getText(
+            self,
+            "Add Scheduled Alarm",
+            "Enter clock time (e.g. 14:30 or 8:00 AM) and optional label:\n(Format: <time> [label])",
+            QLineEdit.Normal,
+            "08:30 AM Wake up",
+        )
+        if ok and text.strip():
+            parts = text.strip().split(" ", 1)
+            time_str = parts[0].strip()
+            label = parts[1].strip() if len(parts) > 1 else "Alarm"
+            item = self._memory.add_alarm(time_str, label)
+            if item:
+                self.refresh_items()
+            else:
+                QMessageBox.warning(self, "Invalid Time", f"Could not parse clock time '{time_str}'. Use format like 14:30, 2:30 PM, or 08:00 AM.")
+
+    def _on_snooze_clicked(self) -> None:
+        current_item = self._list_widget.currentItem()
+        if not current_item:
+            return
+        data = current_item.data(Qt.UserRole)
+        if not data:
+            return
+        self._memory.snooze_alarm_or_timer(data.get("id"), minutes=5)
+        self.refresh_items()
+
+    def _on_delete_clicked(self) -> None:
+        current_item = self._list_widget.currentItem()
+        if not current_item:
+            return
+        data = current_item.data(Qt.UserRole)
+        if not data:
+            return
+        self._memory.cancel_alarm_or_timer(data.get("id"))
+        self.refresh_items()
+
+    def _on_clear_clicked(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Clear All Alarms & Timers",
+            "Are you sure you want to cancel all active timers and alarms?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self._memory.clear_all_alarms()
+            self.refresh_items()
+
+
 def split_dual_dialogue(
     raw_text: str,
     default_anim: str = "peace_sign",
@@ -4767,7 +5438,21 @@ class GeminiWorkerThread(QThread):
                             n_val = m.group(2).strip()
                             if t_val and n_val:
                                 memory.edit_reminder(t_val, n_val)
-                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                        for m in re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", chosen_cand, re.IGNORECASE):
+                            dur_str = m.group(1).strip()
+                            lbl = m.group(2).strip() if m.group(2) else "Focus Timer"
+                            secs = parse_duration_string(dur_str)
+                            if secs and secs > 0:
+                                memory.add_timer(secs, lbl)
+                        for m in re.finditer(r"\[(?:set_alarm|alarm):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", chosen_cand, re.IGNORECASE):
+                            time_str = m.group(1).strip()
+                            lbl = m.group(2).strip() if m.group(2) else "Alarm"
+                            memory.add_alarm(time_str, lbl)
+                        for m in re.finditer(r"\[(?:cancel_timer|del_timer|cancel_alarm|del_alarm):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            c_val = m.group(1).strip()
+                            if c_val:
+                                memory.cancel_alarm_or_timer(c_val)
+                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -4819,6 +5504,10 @@ class GeminiWorkerThread(QThread):
 
         memory = getattr(self.parent(), "_memory", None) if self.parent() else None
         if memory:
+            for m in re.finditer(r"\[set_user_name:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                n_val = m.group(1).strip()
+                if n_val:
+                    memory.set_user_name(n_val)
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 f_val = m.group(1).strip()
                 if f_val:
@@ -4836,7 +5525,21 @@ class GeminiWorkerThread(QThread):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     memory.edit_reminder(t_val, n_val)
-        raw_text = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+            for m in re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE):
+                dur_str = m.group(1).strip()
+                lbl = m.group(2).strip() if m.group(2) else "Focus Timer"
+                secs = parse_duration_string(dur_str)
+                if secs and secs > 0:
+                    memory.add_timer(secs, lbl)
+            for m in re.finditer(r"\[(?:set_alarm|alarm):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE):
+                time_str = m.group(1).strip()
+                lbl = m.group(2).strip() if m.group(2) else "Alarm"
+                memory.add_alarm(time_str, lbl)
+            for m in re.finditer(r"\[(?:cancel_timer|del_timer|cancel_alarm|del_alarm):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                c_val = m.group(1).strip()
+                if c_val:
+                    memory.cancel_alarm_or_timer(c_val)
+        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
 
@@ -5832,6 +6535,15 @@ class YellowsPixelBuddies(QWidget):
         self._tray_screen_timer: QTimer = QTimer(self)
         self._tray_screen_timer.setInterval(TRAY_SCREEN_READ_INTERVAL_MS)
         self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
+        self._shop_window = None
+
+        # --- alarms & focus timers ticker --------------------------------------
+        self._alarm_ticker: QTimer = QTimer(self)
+        self._alarm_ticker.setInterval(1000)
+        self._alarm_ticker.timeout.connect(self._check_alarms_and_timers)
+        self._alarm_ticker.start()
+        self._is_ringing_alarm: bool = False
+        self._alarms_dialog: AlarmsDialog | None = None
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -6396,6 +7108,10 @@ class YellowsPixelBuddies(QWidget):
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
+        active_alarms = self._memory.get_alarms_prompt()
+        if active_alarms:
+            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
         # Feed ongoing conversation history from the active session so Pink has situational awareness
         active_session_turns = []
         if hasattr(self, "_memory") and hasattr(self._memory, "history") and self._memory.history:
@@ -6693,6 +7409,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_dialogue_dismissed(self) -> None:
         """Handle cleanup when dialogue speech bubble closes."""
+        if getattr(self, "_is_ringing_alarm", False):
+            self._is_ringing_alarm = False
         if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
             return
         if self._phase is Phase.SUMMON_DIALOGUE:
@@ -6805,10 +7523,31 @@ class YellowsPixelBuddies(QWidget):
         clean_input = text.strip()
         lower_input = clean_input.lower()
 
-        # Direct memory commands
-        if lower_input.startswith(("/fact ", "/remember ")):
+        # Direct memory and nickname commands
+        if lower_input.startswith(("/name", "/nickname")):
+            parts = clean_input.split(" ", 1)
+            if len(parts) > 1 and parts[1].strip():
+                new_name = parts[1].strip()
+                ok = self._memory.set_user_name(new_name)
+                reply = (
+                    f'* Hmph! So your true mortal designation is "{new_name}"?! Fine, I shall address my minion properly from now on! [anim: tongue]'
+                    if ok else f'* You are already "{new_name}", minion! Stop trying to confuse my cotton head! [anim: idle]'
+                )
+                self._say(reply, force=True, record_memory=True)
+            else:
+                current_name = self._memory.get_user_name()
+                reply = f'* Format: /name <nickname>, minion! (Current: "{current_name}")'
+                self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input.startswith(("/fact ", "/remember ")):
             fact_content = clean_input.split(" ", 1)[1].strip()
             if fact_content:
+                # If the fact sets or introduces the user's name/nickname, sync primary user_name as well
+                name_match = re.match(r"^(?:my\s+name\s+is|my\s+nickname\s+is|call\s+me)\s+([A-Za-z0-9_\-\. ]+)$", fact_content, re.IGNORECASE)
+                if name_match:
+                    detected_name = name_match.group(1).strip()
+                    if detected_name:
+                        self._memory.set_user_name(detected_name)
                 ok = self._memory.add_fact(fact_content)
                 reply = f"* Hmph! Stored in my permanent memory core, minion:\n* \"{fact_content}\"" if ok else "* I already knew that, dummy!"
                 self._say(reply, force=True, record_memory=True)
@@ -6871,6 +7610,9 @@ class YellowsPixelBuddies(QWidget):
             msg = "* Bomb Attack Mode: ENABLED, minion! Cat ordnance primed!" if new_state else "* Bomb Attack Mode: DISABLED, mew! Explosives safely disarmed!"
             self._say(msg, force=True, record_memory=False)
             return
+        elif lower_input in ("/shop", "shop", "/store", "store"):
+            self._open_shop_window()
+            return
         elif lower_input in ("/clear_reminders", "/clear_todos"):
             count = self._memory.clear_all_reminders()
             reply = f"* Cleared {count} reminder{'s' if count != 1 else ''}, mew! Clean slate!" if count else "* No active reminders to clear, silly!"
@@ -6884,6 +7626,62 @@ class YellowsPixelBuddies(QWidget):
             reminders_text = self._memory.get_reminders_prompt()
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
             self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input.startswith(("/timer ", "/countdown ")):
+            rest = clean_input.split(" ", 1)[1].strip()
+            parts = rest.split(" ", 1)
+            dur_str = parts[0].strip()
+            label = parts[1].strip() if len(parts) > 1 else "Focus Timer"
+            secs = parse_duration_string(dur_str)
+            if secs and secs > 0:
+                item = self._memory.add_timer(secs, label)
+                mins, s = divmod(secs, 60)
+                time_desc = f"{mins}m {s}s" if s else f"{mins}m"
+                reply = f"* Timer set for {time_desc} (\"{label}\"), minion! I'll alert you when time's up!"
+            else:
+                reply = "* Format: /timer <duration> [label], dummy! (e.g. /timer 25m Pomodoro, /timer 10s stretch)"
+            self._say(reply, force=True, record_memory=True)
+            return
+        elif lower_input.startswith(("/alarm ", "/clock ")):
+            rest = clean_input.split(" ", 1)[1].strip()
+            parts = rest.split(" ", 1)
+            time_str = parts[0].strip()
+            label = parts[1].strip() if len(parts) > 1 else "Alarm"
+            item = self._memory.add_alarm(time_str, label)
+            if item:
+                reply = f"* Alarm set for {item.get('clock_time')} (\"{label}\"), mew! Don't oversleep, minion!"
+            else:
+                reply = "* Format: /alarm <time> [label], dummy! (e.g. /alarm 14:30 Team sync, /alarm 08:00 AM Wake up)"
+            self._say(reply, force=True, record_memory=True)
+            return
+        elif lower_input in ("/timers", "/alarms", "/timer", "/alarm"):
+            alarms_text = self._memory.get_alarms_prompt()
+            reply = f"* Here are our active timers & alarms, mew:\n{alarms_text}" if alarms_text else "* No active timers or alarms right now, minion! Use /timer or /alarm to set one!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input.startswith(("/del_timer ", "/cancel_timer ", "/rm_timer ", "/del_alarm ", "/cancel_alarm ", "/rm_alarm ")):
+            target = clean_input.split(" ", 1)[1].strip()
+            if target:
+                ok, label = self._memory.cancel_alarm_or_timer(target)
+                reply = f"* Cancelled timer/alarm (\"{label}\"), mew!" if ok else f"* Couldn't find timer/alarm '{target}', dummy! Use /timers to check active ones."
+                self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input.startswith(("/snooze ", "/snooze")):
+            parts = clean_input.split(" ")
+            target = parts[1].strip() if len(parts) > 1 else "1"
+            mins = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 5
+            ok, label = self._memory.snooze_alarm_or_timer(target, minutes=mins)
+            reply = f"* Snoozed \"{label}\" for {mins} minutes, mew!" if ok else f"* Couldn't find timer/alarm '{target}' to snooze, dummy!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/clear_timers", "/clear_alarms"):
+            count = self._memory.clear_all_alarms()
+            reply = f"* Cleared {count} timer{'s' if count != 1 else ''}/alarm{'s' if count != 1 else ''}, mew!" if count else "* No active timers or alarms to clear, silly!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/alarms_ui", "/timers_ui", "/manage_alarms", "/manage_timers"):
+            self._open_alarms_dialog()
+            self._say("* Opened Pink's Alarms & Timers for you, mew!", force=True, record_memory=False)
             return
         elif lower_input in ("/facts", "/fact"):
             facts_text = self._memory.get_long_term_facts()
@@ -6920,6 +7718,38 @@ class YellowsPixelBuddies(QWidget):
             self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=see_screen)
             self._trigger_error_burnt(spoken_err)
             return
+
+        # Direct natural language offline timer/alarm detection
+        nl_timer = re.match(
+            r"^(?:please\s+)?(?:set\s+(?:a\s+)?)?timer(?:\s+for)?\s+(\d+[a-zA-Z\s0-9]*?)(?:\s+(?:for|to|called)\s+(.+))?$",
+            clean_input,
+            re.IGNORECASE,
+        )
+        if nl_timer:
+            dur_str = nl_timer.group(1).strip()
+            label = nl_timer.group(2).strip() if nl_timer.group(2) else "Focus Timer"
+            secs = parse_duration_string(dur_str)
+            if secs and secs > 0:
+                item = self._memory.add_timer(secs, label)
+                mins, s = divmod(secs, 60)
+                time_desc = f"{mins}m {s}s" if s else f"{mins}m"
+                reply = f"* Timer set for {time_desc} (\"{label}\"), minion! I'll alert you when time's up!"
+                self._say(reply, force=True, record_memory=True)
+                return
+
+        nl_alarm = re.match(
+            r"^(?:please\s+)?(?:set\s+(?:an?\s+)?)?alarm(?:\s+(?:for|at))?\s+(\d{1,2}(?:[:.]\d{2})?(?:\s*[ap]m)?)(?:\s+(?:for|to|called)\s+(.+))?$",
+            clean_input,
+            re.IGNORECASE,
+        )
+        if nl_alarm:
+            time_str = nl_alarm.group(1).strip()
+            label = nl_alarm.group(2).strip() if nl_alarm.group(2) else "Alarm"
+            item = self._memory.add_alarm(time_str, label)
+            if item:
+                reply = f"* Alarm set for {item.get('clock_time')} (\"{label}\"), mew! Don't oversleep, minion!"
+                self._say(reply, force=True, record_memory=True)
+                return
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -7043,6 +7873,10 @@ class YellowsPixelBuddies(QWidget):
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
+        active_alarms = self._memory.get_alarms_prompt()
+        if active_alarms:
+            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
         # Spawn background worker thread
         self._gemini_thread = GeminiWorkerThread(
             api_key=api_key,
@@ -7116,6 +7950,16 @@ class YellowsPixelBuddies(QWidget):
             extra_queue=remaining_steps,
             step_anim=first_step.anim,
         )
+
+        # Deliver into shop window typewriter if currently open
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            all_lines = [first_step.text]
+            if remaining_steps:
+                for s in remaining_steps:
+                    all_lines.append(s.text if hasattr(s, "text") else str(s))
+            if hasattr(self._shop_window, "deliver_ai_reply"):
+                self._shop_window.deliver_ai_reply(all_lines)
+
         now = time.perf_counter()
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
@@ -7145,6 +7989,11 @@ class YellowsPixelBuddies(QWidget):
         spoken_error = f"* Mew?! My magic brain stumbled:\n* {error_msg[:90]}"
         self._memory.record_error(user_text, error_msg, spoken_text=spoken_error, anim="burnt", had_screen=had_screen)
         self._keep_response_anim = True
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            if hasattr(self._shop_window, "deliver_ai_reply"):
+                self._shop_window.deliver_ai_reply([spoken_error])
+            else:
+                self._shop_window.set_dialogue(spoken_error)
         self._trigger_error_burnt(spoken_error)
 
     def _check_auto_screen_comment(self) -> None:
@@ -7323,6 +8172,10 @@ class YellowsPixelBuddies(QWidget):
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
+        active_alarms = self._memory.get_alarms_prompt()
+        if active_alarms:
+            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
         prompt_label = "[Pink peeks at your screen]"
         auto_prompt = (
             "[Spontaneous observation: Pink peeks behind her at your desktop screen.]\n"
@@ -7486,6 +8339,135 @@ class YellowsPixelBuddies(QWidget):
         self._reminders_dialog.show()
         self._reminders_dialog.raise_()
         self._reminders_dialog.activateWindow()
+
+    def _open_alarms_dialog(self) -> None:
+        """Open the interactive Alarms & Timers Management dialog."""
+        if not hasattr(self, "_alarms_dialog") or self._alarms_dialog is None:
+            self._alarms_dialog = AlarmsDialog(self._memory, self._font_family, self)
+        self._alarms_dialog.refresh_items()
+        self._alarms_dialog.show()
+        self._alarms_dialog.raise_()
+        self._alarms_dialog.activateWindow()
+
+    def _check_alarms_and_timers(self) -> None:
+        """Periodic 1-second check for timers and alarms that reached zero."""
+        if not hasattr(self, "_memory"):
+            return
+        if getattr(self, "_is_ringing_alarm", False):
+            return
+
+        now = time.time()
+        active = self._memory.get_active_alarms()
+        ringing_item = None
+        for item in active:
+            if item.get("state") == "active" and now >= item.get("target_timestamp", 0.0):
+                ringing_item = item
+                break
+
+        if ringing_item is None:
+            return
+
+        self._trigger_alarm_ring(ringing_item)
+
+    def _trigger_alarm_ring(self, item: dict) -> None:
+        """Ring the alarm/timer with retro sound, animation, tray restore, and interactive choice dialog."""
+        self._is_ringing_alarm = True
+        item_id = item.get("id")
+        item_type = item.get("type", "timer")
+        label = item.get("label", "Timer")
+        clock_str = item.get("clock_time", "")
+
+        # Mark item as ringing in persistence
+        item["state"] = "ringing"
+        self._memory.save_alarms(self._memory.get_active_alarms())
+
+        # Restore from tray if hidden
+        if getattr(self, "_hidden_in_tray", False):
+            self._restore_from_tray()
+        elif self._phase == Phase.HIDE_PEEK:
+            self._on_peek_ears_clicked()
+
+        # Snap to startled/shocked animation
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        if self._can_play("shocked"):
+            self._play("shocked")
+
+        # Dialogue prompt with choice buttons
+        if item_type == "alarm":
+            alarm_text = f"* ⏰ ALARM TRIGGERED, MINION!!\n* It's {clock_str}!\n* Time for: \"{label}\"!"
+        else:
+            alarm_text = f"* ⏰ TIME'S UP, MEW!!\n* Timer finished!\n* Task: \"{label}\"!"
+
+        choices = [
+            ("Dismiss", "* Phew! Good job staying on track, mew!", "peace_sign"),
+            ("Snooze 5m", "* SNOOZING?! Fine, 5 more minutes! Back to work, dummy!", "angry"),
+            ("Snooze 15m", "* 15 minutes?! Sleeping on the job?! I'll be watching you!", "tongue"),
+        ]
+
+        if hasattr(self, "_dialogue_overlay"):
+            if self._dialogue_overlay.is_active():
+                self._dialogue_overlay.dismiss(clear_queue=True)
+            self._dialogue_overlay.ask(
+                alarm_text,
+                choices,
+                self._x,
+                self._y,
+                on_chosen=lambda idx, choice_label, reaction_text, reaction_anim: self._on_alarm_choice(
+                    item_id, idx, choice_label, reaction_text, reaction_anim
+                ),
+            )
+
+    def _on_alarm_choice(self, item_id: str, idx: int, choice_label: str, reaction_text: str, reaction_anim: str | None) -> None:
+        """Handle choice selection when an alarm/timer rings."""
+        self._is_ringing_alarm = False
+        if idx == 0:
+            self._memory.dismiss_alarm(item_id)
+        elif idx == 1:
+            self._memory.snooze_alarm_or_timer(item_id, minutes=5)
+        elif idx == 2:
+            self._memory.snooze_alarm_or_timer(item_id, minutes=15)
+
+        self._on_question_answered(choice_label, reaction_text, reaction_anim)
+
+    def _open_shop_window(self) -> None:
+        """Open Pink's Deltarune Shop Window (takes ~25% screen)."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        # Pause pet movement so taskbar updates don't compete with shop UI
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        if self.state in MOVE_VELOCITY_PX_S:
+            self._play("idle")
+
+        if not hasattr(self, "_shop_window") or self._shop_window is None:
+            try:
+                from shop_window import DeltaruneShopWindow
+                self._shop_window = DeltaruneShopWindow(
+                    pet_ref=self,
+                    memory=self._memory,
+                    font_family=self._font_family,
+                )
+                self._shop_window.closed.connect(self._on_shop_window_closed)
+            except Exception as e:
+                log.warning("Could not open shop window: %s", e)
+                self._say("* My boutique isn't ready right now, mew! Check logs!", force=True, record_memory=False)
+                return
+
+        if self._can_play("laughing"):
+            self._play("laughing")
+        self._shop_window.open_shop()
+
+    def _on_shop_window_closed(self) -> None:
+        """Called when user exits the shop window."""
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
+        self._say("* Hope you enjoyed the boutique, darling!", force=True, record_memory=False)
+        self._resume_walk_after_menu()
 
     def _cancel_previous_song_loading(self) -> None:
         """Immediately stop any active Gemini worker thread and pending dialogue queue for previous song commentary."""
@@ -7672,6 +8654,10 @@ class YellowsPixelBuddies(QWidget):
         reminders = self._memory.get_reminders_prompt()
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
+
+        active_alarms = self._memory.get_alarms_prompt()
+        if active_alarms:
+            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
 
         check_str = f"{clean_artist} {clean_title}".lower()
         is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
@@ -8582,6 +9568,10 @@ class YellowsPixelBuddies(QWidget):
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
+        active_alarms = self._memory.get_alarms_prompt()
+        if active_alarms:
+            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
         candidate_directive = (
             "[STRUCTURAL DIRECTIVE: TRAY BACKGROUND SCREEN OBSERVATION]\n"
             "Pink is quietly keeping watch from the system tray while remaining invisible on screen.\n"
@@ -9418,6 +10408,8 @@ class YellowsPixelBuddies(QWidget):
         menu = QMenu(self)
         talk_action = menu.addAction("Talk to Pink 💬")
         ask_action = menu.addAction("Ask me something ❓")
+        shop_action = menu.addAction("Visit Shop 🏪")
+        alarms_action = menu.addAction("Alarms & Timers ⏰")
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -9448,6 +10440,10 @@ class YellowsPixelBuddies(QWidget):
             self._open_chat_input()
         elif chosen is ask_action:
             self._trigger_ai_question()
+        elif chosen is shop_action:
+            self._open_shop_window()
+        elif chosen is alarms_action:
+            self._open_alarms_dialog()
         elif chosen is update_action:
             self._check_for_updates(manual=True)
         elif jump_action is not None and chosen is jump_action:
@@ -9601,10 +10597,18 @@ class YellowsPixelBuddies(QWidget):
         self._talk_tray_action = tray_menu.addAction("Talk to Pink 💬")
         self._talk_tray_action.triggered.connect(self._open_chat_input)
 
+        self._shop_tray_action = tray_menu.addAction("Visit Shop 🏪")
+        self._shop_tray_action.triggered.connect(self._open_shop_window)
+
         self._key_tray_action = tray_menu.addAction("Set Gemini API Key 🔑")
         self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)
 
+        self._alarms_tray_action = tray_menu.addAction("Alarms & Timers ⏰")
+        self._alarms_tray_action.triggered.connect(self._open_alarms_dialog)
+
         memory_menu = tray_menu.addMenu("Memory Storage 🧠")
+        manage_alarms_action = memory_menu.addAction("Alarms & Timers ⏰")
+        manage_alarms_action.triggered.connect(self._open_alarms_dialog)
         manage_reminders_action = memory_menu.addAction("Manage Reminders 📝")
         manage_reminders_action.triggered.connect(self._open_reminders_dialog)
         open_mem_action = memory_menu.addAction("Open Memory Folder 📂")
