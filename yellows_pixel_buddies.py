@@ -504,19 +504,19 @@ STRESSED_SKIP_LINES: list[tuple[str, str]] = [
 ]
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
-DIALOGUE_QUESTION_CHANCE = 0.25       # 25% chance an idle pause dialogue is a question / advice / motivation
-DIALOGUE_QUESTION_COOLDOWN_S = 60.0   # Minimum cooldown in seconds between interactive questions
+DIALOGUE_QUESTION_CHANCE = 0.20       # 20% chance an idle pause dialogue is a question / advice / motivation
+DIALOGUE_QUESTION_COOLDOWN_S = 360.0  # Minimum cooldown in seconds between interactive questions (6 minutes)
 CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat input overlay (2 minutes)
 CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
-AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
+AUTO_SCREEN_COMMENT_INACTIVITY_S = 600.0         # 10 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
 TRAY_SCREEN_READ_INTERVAL_MS = 300000            # 5 minutes background screen reading while hidden in tray
 AUTO_SCREEN_MAX_USER_IDLE_S = 900.0              # 15 minutes of system-wide inactivity (keyboard/mouse) -> user away/asleep, pause peeking
 AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to justify commentary; otherwise screen is static
-AUTO_SCREEN_STATIC_BACKOFF_S = 300.0             # If screen hasn't changed, back off 5 minutes before checking again
+AUTO_SCREEN_STATIC_BACKOFF_S = 600.0             # If screen hasn't changed, back off 10 minutes before checking again
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -5718,7 +5718,7 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_action: QAction | None = None
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
-        self._last_question_dialogue_time: float = -9999.0
+        self._last_question_dialogue_time: float = time.perf_counter()
         self._keep_response_anim: bool = False
         self._pending_song_announcement: tuple | None = None
         self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
@@ -6041,6 +6041,7 @@ class YellowsPixelBuddies(QWidget):
                                and random.random() < DIALOGUE_QUESTION_CHANCE))
             if is_question:
                 self._last_question_dialogue_time = now
+                self._reset_ambient_ai_cooldowns(now)
                 # 1. Attempt dynamic AI question generation (from screen, memory, or personality)
                 if self._trigger_ai_question():
                     return
@@ -6159,7 +6160,9 @@ class YellowsPixelBuddies(QWidget):
             reaction_text = kwargs.get("reaction_text", "")
             reaction_anim = kwargs.get("reaction_anim")
 
-        self._last_question_dialogue_time = time.perf_counter()
+        now = time.perf_counter()
+        self._last_user_chat_time = now
+        self._reset_ambient_ai_cooldowns(now)
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if reaction_anim and self._can_play(reaction_anim):
@@ -6198,6 +6201,12 @@ class YellowsPixelBuddies(QWidget):
             )
         else:
             self._say(reaction_text, force=True, record_memory=False)
+
+    def _reset_ambient_ai_cooldowns(self, now: float | None = None) -> None:
+        """Reset all autonomous AI timers (screen peeking, questions) to enforce a unified quiet window."""
+        t = now if now is not None else time.perf_counter()
+        self._last_auto_screen_comment_time = t
+        self._last_question_dialogue_time = t
 
     def _has_memory_highlights(self) -> bool:
         """Check if there is rich memory or media context available for a memory-focused question."""
@@ -6486,6 +6495,7 @@ class YellowsPixelBuddies(QWidget):
 
         self._last_question_item = q_item
         self._last_dialogue = q_item.question
+        self._reset_ambient_ai_cooldowns()
         if not hasattr(self, "_recent_question_texts"):
             self._recent_question_texts = []
         self._recent_question_texts.append(q_item.question)
@@ -6683,7 +6693,7 @@ class YellowsPixelBuddies(QWidget):
 
         now = time.perf_counter()
         self._last_user_chat_time = now
-        self._last_auto_screen_comment_time = now
+        self._reset_ambient_ai_cooldowns(now)
 
         if not text:
             self._phase = Phase.PAUSE
@@ -6966,7 +6976,7 @@ class YellowsPixelBuddies(QWidget):
                 self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
             if seen:
                 self._memory.record_turn(user_text, "[stayed quiet]", "idle", had_screen=had_screen, seen=seen)
-            self._last_auto_screen_comment_time = time.perf_counter()
+            self._reset_ambient_ai_cooldowns()
             return
 
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
@@ -6991,7 +7001,7 @@ class YellowsPixelBuddies(QWidget):
         )
         now = time.perf_counter()
         self._last_user_chat_time = now
-        self._last_auto_screen_comment_time = now
+        self._reset_ambient_ai_cooldowns(now)
 
         # Record auto screen comments into ambient dialogue context so Pink knows if user immediately replies
         if had_screen and user_text.startswith("[Pink peeks"):
@@ -7006,7 +7016,7 @@ class YellowsPixelBuddies(QWidget):
         """Handle error from Gemini AI."""
         if not is_auto:
             self._is_handling_user_chat = False
-        self._last_auto_screen_comment_time = time.perf_counter()
+        self._reset_ambient_ai_cooldowns()
         if is_auto:
             log.warning("Auto screen comment error: %s", error_msg)
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -7078,7 +7088,7 @@ class YellowsPixelBuddies(QWidget):
         if is_workstation_locked() or get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
             return
 
-        self._last_auto_screen_comment_time = time.perf_counter()
+        self._reset_ambient_ai_cooldowns(time.perf_counter())
 
         # Briefly hide Pink and speech bubble so she doesn't screenshot herself
         if hasattr(self, "_dialogue_overlay"):
@@ -7532,6 +7542,7 @@ class YellowsPixelBuddies(QWidget):
 
         now = time.perf_counter()
         self._last_ai_song_comment_time = now
+        self._reset_ambient_ai_cooldowns(now)
 
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
@@ -7632,6 +7643,7 @@ class YellowsPixelBuddies(QWidget):
             return
 
         self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
+        self._reset_ambient_ai_cooldowns()
         steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=False)
         if not steps:
             return

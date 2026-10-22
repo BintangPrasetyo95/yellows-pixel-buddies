@@ -291,10 +291,10 @@ GEMINI_TIMEOUT_S = 35              # Request timeout in seconds (supports vision
 
 ### Interactive Dialogue & Questions
 ```python
-DIALOGUE_ENABLED = True            # Enable speech bubbles / dialogue popups
-DIALOGUE_QUESTION_CHANCE = 0.25    # 25% chance an idle dialogue is an interactive question
-DIALOGUE_QUESTION_COOLDOWN_S = 60.0# Cooldown between interactive question prompts
-DIALOGUE_TYPEWRITER_MS = 32        # Typewriter speed (~31 chars/sec)
+DIALOGUE_ENABLED = True             # Enable speech bubbles / dialogue popups
+DIALOGUE_QUESTION_CHANCE = 0.20     # 20% chance an idle dialogue is an interactive question
+DIALOGUE_QUESTION_COOLDOWN_S = 360.0# Cooldown between interactive question prompts (6 minutes)
+DIALOGUE_TYPEWRITER_MS = 32         # Typewriter speed (~31 chars/sec)
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4 # Extra pause ticks on punctuation for retro pacing
 ```
 
