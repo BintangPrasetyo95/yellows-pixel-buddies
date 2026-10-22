@@ -119,7 +119,7 @@ from PyQt5.QtWidgets import (
 # =============================================================================
 
 # --- Application Metadata & Auto-Update --------------------------------------
-APP_VERSION = "1.0.0"
+APP_VERSION = "0.9.7"
 GITHUB_REPO = "BintangPrasetyo95/yellows-pixel-buddies"
 
 # --- Paths & Sprites ---------------------------------------------------------

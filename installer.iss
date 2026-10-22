@@ -2,7 +2,7 @@
 ; Uses Inno Setup (http://www.jrsoftware.org/isinfo.php)
 
 #define MyAppName "Yellow's Pixel Buddies"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "0.9.7"
 #define MyAppPublisher "BintangPrasetyo95"
 #define MyAppURL "https://github.com/BintangPrasetyo95/yellows-pixel-buddies"
 #define MyAppExeName "Yellows-Pixel-Buddies.exe"
