@@ -834,28 +834,31 @@ class QuestionItem:
 
 # --- Question Dialogue Variant (Desktop, Work, Fun Stuff, Advices, Motivations) ---
 QUESTION_ITEMS: list[QuestionItem] = [
-    # Desktop
+    # Desktop & Environment
     QuestionItem(
-        question="* Why do you have thirty browser tabs open?! Are you trying to melt this PC?!",
+        question="* How many tabs do you even have open right now?! Don't tell me you're hoarding digital junk!",
         choices=[
-            ("I need all of them!", "* LIES! You haven't looked at twenty-five of them all week, mew!", "angry"),
-            ("I'll close some...", "* Good! Purge the digital clutter before this PC combusts!", "peace_sign"),
+            ("Just a few!", "* Hmph! Sure, tell yourself that! I bet three of them are frozen, mew!", "tongue"),
+            ("I hoard tabs.", "* LIES AND HOARDING! Purge them before this PC combusts, mew!", "angry"),
+            ("Close them for me?", "* What do I look like, an antivirus cleaner?! Do it yourself, lazy!", "shocked"),
         ],
         category="desktop",
     ),
     QuestionItem(
-        question="* Is your desktop always this chaotic?! Where do you even find your files, mew?!",
+        question="* Look at this desktop territory! Should I claim it as my royal magical kingdom?!",
         choices=[
-            ("Organized chaos!", "* 'Organized chaos' is an excuse made by amateurs!", "tongue"),
-            ("I'll clean it...", "* Hah! You better! My paws need clean runway to strut on!", "laughing"),
+            ("All yours, queen!", "* OHO! A loyal minion who knows true royalty! Bow before my plush empire! [add_fact: User swore allegiance to Pink's desktop empire]", "laughing"),
+            ("Stay on taskbar.", "* Hmph! Stingy! Fine, but my rent is three daily headpats!", "tongue"),
+            ("Declare war!", "* WAR?! You dare challenge me?! Cat bombs primed and aimed!!", "angry"),
         ],
         category="desktop",
     ),
     QuestionItem(
         question="* Who is that on your wallpaper?! They're not cooler than me, are they?!",
         choices=[
-            ("No one is cooler!", "* Hmph! Obviously! At least you know your place, minion!", "peace_sign"),
-            ("Actually, they are.", "* WHAT?! BLASPHEMY! Cat bombs incoming directly at your head!!", "angry"),
+            ("You're cooler!", "* Hmph! Obviously! At least you know your place, minion! [add_fact: User admits Pink is cooler than their wallpaper]", "peace_sign"),
+            ("They are cooler.", "* WHAT?! BLASPHEMY! Cat bombs incoming directly at your head!!", "angry"),
+            ("It's default black.", "* A DEFAULT WALLPAPER?! Where is the drama?! Where is the sparkle?!", "shocked"),
         ],
         category="desktop",
     ),
@@ -863,23 +866,26 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* What's hidden in your Recycle Bin?! Don't tell me cursed spirits live in there?!",
         choices=[
             ("Just old files.", "* Good... ghosts like me prefer luxury plush bodies, not trash bins!", "idle"),
-            ("Full of ghosts!", "* WHAT?! Are my lazy cousins squatting in there?! EMPTY IT NOW!!", "shocked"),
+            ("Angry spirits!", "* WHAT?! Are my lazy cousins squatting in there?! EMPTY IT NOW!!", "shocked"),
+            ("Your cat bombs.", "* HEY! Those are precision munitions, not garbage!!", "angry"),
         ],
         category="desktop",
     ),
     QuestionItem(
-        question="* Why are there so many icons on this taskbar?! Give my feet some walking room!",
+        question="* My plush paws need sprinting room! Clear me a runway on this taskbar, mew!",
         choices=[
-            ("I'll unpin some!", "* Excellent! Clear the stage for the ultimate magical superstar!", "laughing"),
+            ("Runway cleared!", "* Excellent! Watch me dash with 120% magical girl velocity!", "laughing"),
             ("Deal with it, doll.", "* DOLL?! I am an ethereal warrior trapped in cotton! SHOW RESPECT!!", "angry"),
+            ("Hop on my cursor!", "* Leaping into battle! Prepare for feline airborne dominance!", "peace_sign"),
         ],
         category="desktop",
     ),
     QuestionItem(
         question="* Do you ever shut down this computer, or does it run on pure stubbornness like me?!",
         choices=[
-            ("Pure stubbornness!", "* Ha! A fellow creature of unrelenting spite! I can respect that!", "laughing"),
-            ("I restart regularly.", "* Phew... even ghost-infused PCs need beauty sleep once in a while!", "peace_sign"),
+            ("Pure stubbornness!", "* Ha! A fellow creature of unrelenting spite! I respect that! [add_fact: User's PC runs on pure stubbornness]", "laughing"),
+            ("I restart daily.", "* Phew... even ghost-infused PCs need beauty sleep once in a while!", "peace_sign"),
+            ("It never sleeps.", "* An eternal vigil?! Are you guarding ancient forbidden knowledge?!", "shocked"),
         ],
         category="desktop",
     ),
@@ -887,17 +893,19 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Are you hiding secret windows behind that one?! Show me, mew!",
         choices=[
             ("Nothing secret!", "* Suspicious... but I'll let it slide. For now!", "behind"),
-            ("Top secret stuff!", "* Ooh! Is it a rival magical girl conspiracy?! Let me inspect!!", "shocked"),
+            ("Top secret memes!", "* Ooh! Forbidden comedy archives?! Share the punchline, dummy!", "laughing"),
+            ("Magical plans.", "* WH-WHAT?! You're studying magical tactics without me?! Show me!!", "shocked"),
         ],
         category="desktop",
     ),
 
-    # Work
+    # Work & Battle
     QuestionItem(
         question="* Hey, are you actually making progress, or just clicking back and forth?!",
         choices=[
-            ("Working hard!", "* That's what I like to hear! Keep that momentum going, mew!", "peace_sign"),
-            ("Procrastinating...", "* UNACCEPTABLE!! Stop dawdling or I'll fire ocular lasers at you!!", "angry"),
+            ("Making moves!", "* That's what I like to hear! Keep that momentum burning, mew!", "peace_sign"),
+            ("Clicking aimlessly.", "* UNACCEPTABLE!! Snap out of it or I'll fire ocular lasers at you!!", "angry"),
+            ("Shh, in the zone.", "* ...Fine! I'll whisper! But only because I expect greatness!", "wistful"),
         ],
         category="work",
     ),
@@ -905,31 +913,35 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* What kind of project is this anyway?! Does it have a dramatic tournament arc?!",
         choices=[
             ("Full of drama!", "* YES!! High stakes, explosive climaxes! That's the only way to work!", "laughing"),
-            ("Just normal work.", "* Ugh, boring?! Add some glitter fireworks to your documents then!", "tongue"),
+            ("Calm & steady.", "* Ugh, boring! Add some glitter explosions to your documents then!", "tongue"),
+            ("It's the final boss!", "* THEN FIGHT! Channel every ounce of determination and crush it!!", "laughing"),
         ],
         category="work",
     ),
     QuestionItem(
         question="* Are you typing important documents, or secretly writing fanfiction?!",
         choices=[
-            ("Important work!", "* Hmph! Make sure there are zero typos, or I'll grade it with red ink!", "idle"),
-            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! Let me proofread it!!", "shocked"),
+            ("Serious work!", "* Hmph! Zero typos allowed, or I'll grade it with red ink!", "idle"),
+            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! Let me proofread it!! [add_fact: User secretly writes fanfiction]", "shocked"),
+            ("Writing about you.", "* ...Wh-what?! Don't say weird sentimental things out of nowhere, idiot!", "embarrassed"),
         ],
         category="work",
     ),
     QuestionItem(
         question="* Is that deadline breathing down your neck?! Need me to throw a cat bomb at it?!",
         choices=[
-            ("Yes, destroy it!", "* FUSE IGNITED! KA-BOOM!! Deadline annihilated! Now finish the work anyway!!", "angry"),
+            ("Destroy it!!", "* FUSE IGNITED! KA-BOOM!! Deadline annihilated! Now finish the work anyway!!", "angry"),
             ("Under control!", "* Oho! Look at you being all competent! Don't let your guard down!", "peace_sign"),
+            ("What deadline?", "* Living on the edge of destruction?! Wild! Reckless! I love it!!", "laughing"),
         ],
         category="work",
     ),
     QuestionItem(
         question="* How long have you been staring at that screen?! Did a bug steal your soul?!",
         choices=[
-            ("Found the bug!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "laughing"),
-            ("Still stuck...", "* Grrr! Step back, take a breath, and strike again with boiling rage!", "kneeling"),
+            ("Squashing bugs!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "laughing"),
+            ("Soul is gone...", "* Grrr! Stand back, take a breath, and strike again with boiling rage!", "kneeling"),
+            ("Bug is my friend.", "* A FRIEND?! Traitor! Bug-lovers get zero cat bomb support!!", "angry"),
         ],
         category="work",
     ),
@@ -937,7 +949,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Finished your tasks for today?! Or are you planning to procrastinate forever?!",
         choices=[
             ("All finished!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "laughing"),
-            ("Not even close...", "* Then why are your hands off the keyboard?! Back to the battlefield!!", "angry"),
+            ("Still grinding.", "* Then why are your hands off the keys?! Back to the battlefield!!", "angry"),
+            ("Procrastinating :P", "* HEY! Don't stick your tongue out at me! Get to work, dummy!!", "tongue"),
         ],
         category="work",
     ),
@@ -946,24 +959,27 @@ QUESTION_ITEMS: list[QuestionItem] = [
         choices=[
             ("It challenged me!", "* THEN FIGHT! Unleash your ultimate combo and claim victory!!", "laughing"),
             ("Just frustrated.", "* Don't let a bunch of pixels bully you! You're stronger than that, mew!", "peace_sign"),
+            ("Victory is near!", "* FINISH IT! Deliver the final sparkle blow and take the crown!!", "laughing"),
         ],
         category="work",
     ),
 
-    # Fun stuff
+    # Fun stuff & Lore
     QuestionItem(
         question="* Have you watched Mew Mew Kissy Cutie yet?! ...WHAT DO YOU MEAN 'NO'?!",
         choices=[
-            ("I love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!!", "laughing"),
+            ("Love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!! [add_fact: User loves Mew Mew Kissy Cutie]", "laughing"),
             ("Never seen it.", "* TRAVESTY! Binge all four seasons right now or face my wrath!!", "angry"),
+            ("Mew Mew who?", "* BLASPHEMY! That's it, ocular laser bombardment sequence initiated!!", "angry"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* If we fought an epic final boss right now, what weapon would you bring?!",
         choices=[
-            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!!", "laughing"),
+            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!! [add_fact: User's weapon of choice is a giant laser cannon]", "laughing"),
             ("A sturdy shield.", "* Defensive?! BORING! Offense is the greatest defense, mew!", "tongue"),
+            ("Cat-head bombs!", "* YOU UNDERSTAND TRUE GENIUS! Unlimited explosive feline ordnance!! [add_fact: User's weapon of choice is cat-head bombs]", "laughing"),
         ],
         category="fun",
     ),
@@ -971,14 +987,16 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Do you think giant sparkly explosions count as high art?! (Hint: YES!)",
         choices=[
             ("Pure masterpiece!", "* FINALLY someone understands true aesthetics!! More explosions for all!!", "laughing"),
-            ("Too loud and bright.", "* GAH! You have zero taste in theatrical pyrotechnics!!", "angry"),
+            ("Too loud & bright.", "* GAH! You have zero taste in theatrical pyrotechnics!!", "angry"),
+            ("Needs more glitter!", "* YES!! Glitter fallout that blinds enemy sensors! GENIUS!!", "singing"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* What's the battle theme song playing in your head right now?! Sing it loud!",
         choices=[
-            ("Something epic!", "* Ooh, I hear the trumpets and bass drops from here!! Rock on, mew!!", "singing"),
+            ("Heavy metal boss!", "* Ooh, I hear the double-bass and screeching guitars from here!! Rock on, mew!! [add_fact: User's battle theme of choice is heavy metal]", "singing"),
+            ("Retro chiptune!", "* 8-bit square waves and pixel nostalgia! Peak battle aesthetic, mew! [add_fact: User's battle theme of choice is retro chiptune]", "peace_sign"),
             ("Pure silence.", "* Silence?! How do you even fight without background hype music?!", "shocked"),
         ],
         category="fun",
@@ -986,58 +1004,65 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* If you were a ghost, which plushie body would you possess?! Choose wisely!",
         choices=[
-            ("A cute cat doll!", "* Hey! Don't steal my look! Though feline aesthetics are supreme!", "peace_sign"),
+            ("Cute cat doll!", "* Hey! Don't steal my look! Though feline aesthetics are supreme!", "peace_sign"),
             ("Giant teddy bear.", "* Haha! Big, slow, and squishy! You'd make a great shield for me!", "laughing"),
+            ("Sentient toaster.", "* A TOASTER?! Are you planning to electrocute bathtub monsters?! Bold!", "shocked"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* Video games or anime tonight?! You better pick something with high drama!",
         choices=[
-            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!!", "laughing"),
-            ("Anime marathon!", "* Stock up on popcorn and get ready to cry during the emotional climax!!", "peace_sign"),
+            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!! [add_fact: User prefers video games for unwinding]", "laughing"),
+            ("Anime marathon!", "* Stock up on popcorn and get ready to cry during the emotional climax!! [add_fact: User prefers anime marathons for unwinding]", "peace_sign"),
+            ("Sleep marathon.", "* Sleep?! ...Actually, ten hours of hibernation sounds heavenly, mew...", "wistful"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* Do you think heart-shaped glitter bombs should be standard issue?! I do!",
         choices=[
-            ("Mandatory worldwide!", "* YES! When I rule the world, everyone gets glitter ordnance!", "laughing"),
+            ("Worldwide law!", "* YES! When I rule the world, everyone gets glitter ordnance!", "laughing"),
             ("Too much mess.", "* You can NEVER have too much glitter! It builds character!!", "tongue"),
+            ("Only on holidays.", "* A sparkling holiday tradition?! I accept this compromise!!", "peace_sign"),
         ],
         category="fun",
     ),
 
-    # Advices
+    # Health & Advices
     QuestionItem(
         question="* Hey, dummy! Have you had any water today?! Dehydrated minions are useless!",
         choices=[
-            ("Just drank some!", "* Good! Hydrated minions work with peak efficiency, mew!", "peace_sign"),
-            ("Oops, forgot...", "* GO DRINK SOME RIGHT NOW! Don't make me splash you with lasers!!", "angry"),
+            ("Hydrated!", "* Good! Hydrated minions work with peak efficiency, mew!", "peace_sign"),
+            ("Forgot...", "* GO DRINK SOME RIGHT NOW! Don't make me splash you with lasers!!", "angry"),
+            ("Only coffee.", "* Coffee is NOT water, you gremlin! Go get real water right now!! [add_fact: User fuels themselves on coffee]", "shocked"),
         ],
         category="advices",
     ),
     QuestionItem(
         question="* Check your posture right now! Sit up straight like a fierce warrior, mew!",
         choices=[
-            ("Straightened up!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
-            ("I like slouching.", "* Stop curling like a boiled shrimp! Your spine is crying for mercy!!", "shocked"),
+            ("Straightened!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
+            ("Shrimp posture.", "* Stop curling like a boiled crustacean! Your spine is screaming!!", "shocked"),
+            ("I'm a liquid.", "* Cats are liquid, humans are bone! Sit straight, dummy!", "tongue"),
         ],
         category="advices",
     ),
     QuestionItem(
         question="* Blink your eyes! Staring at the screen like a zombie will fry your retinas!",
         choices=[
-            ("Blinked three times!", "* Good! Retinas preserved for another grueling battle!", "peace_sign"),
-            ("My eyes are fine.", "* They look like dry marbles! Blink before they roll out of your skull!!", "angry"),
+            ("Blinked!", "* Good! Retinas preserved for another grueling battle!", "peace_sign"),
+            ("Can't look away.", "* They look like dry marbles! Blink before they roll out of your skull!!", "angry"),
+            ("Staring contest!", "* YOU DARE CHALLENGE ME?! ...O-ow, my cotton eyes! You win!!", "shocked"),
         ],
         category="advices",
     ),
     QuestionItem(
         question="* Have you stretched your shoulders yet?! Don't stiffen up like a wooden dummy!",
         choices=[
-            ("Just stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "laughing"),
-            ("Too stiff to move.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
+            ("All stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "laughing"),
+            ("Too stiff.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
+            ("Pop my neck!", "* CRACK?! Aahh! Don't do that, it sounds like snapping seams!!", "shocked"),
         ],
         category="advices",
     ),
@@ -1045,7 +1070,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* When was the last time you ate something healthy?! Candy doesn't count!",
         choices=[
             ("Ate a good meal!", "* Excellent! Fuel the vessel so you can fight another day!", "peace_sign"),
-            ("Surviving on snacks.", "* Junk food?! Even my plush stomach is churning in horror! Go eat!!", "shocked"),
+            ("Living on snacks.", "* Junk food?! Even my plush stomach is churning in horror! Go eat!!", "shocked"),
+            ("Ordering pizza!", "* PIZZA?! Save a slice for me! ...Wait, cotton dolls can't digest cheese, mew!", "wistful"),
         ],
         category="advices",
     ),
@@ -1053,7 +1079,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Go look away from the monitor for twenty seconds! Rest those peepers!",
         choices=[
             ("Looking away now!", "* Good! Let the distant horizon refresh your optical sensors, mew!", "wistful"),
-            ("Too glued to work!", "* The screen isn't going anywhere, dummy! Twenty seconds won't kill you!!", "tongue"),
+            ("Glued to screen.", "* The screen isn't going anywhere, dummy! Twenty seconds won't kill you!!", "tongue"),
+            ("Looking at you!", "* WH-WHAT?! S-stop staring at me! Look at a wall, idiot!!", "embarrassed"),
         ],
         category="advices",
     ),
@@ -1062,16 +1089,18 @@ QUESTION_ITEMS: list[QuestionItem] = [
         choices=[
             ("Taking breaks!", "* Smart! Rest is a tactical component of supreme victory!", "peace_sign"),
             ("Nonstop grind!", "* Burnout is for rookies! Rest five minutes or face a tactical timeout!!", "angry"),
+            ("Just micro-naps.", "* Cat naps?! A feline tactic! I approve, but don't faceplant the keyboard!", "laughing"),
         ],
         category="advices",
     ),
 
-    # Motivations
+    # Motivations & Determination
     QuestionItem(
         question="* Feeling overwhelmed?! Remember: a true magical girl NEVER surrenders!",
         choices=[
-            ("I won't give up!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "laughing"),
+            ("Never surrender!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "laughing"),
             ("It's pretty tough...", "* Tough times build elite warriors! I believe in you... don't make me repeat it!!", "embarrassed"),
+            ("Unleash sparkle!", "* YES!! Overload the battlefield with pure dazzling power!!", "singing"),
         ],
         category="motivations",
     ),
@@ -1079,7 +1108,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* You're not thinking of quitting now, are you?! Not on my watch, dummy!",
         choices=[
             ("Still fighting!", "* HAW! That's the determination I expect from my number one minion!!", "laughing"),
-            ("Losing motivation...", "* Borrow some of my boiling fury then! Stand tall and finish it!!", "angry"),
+            ("Need motivation...", "* Borrow some of my boiling fury then! Stand tall and finish it!!", "angry"),
+            ("Just getting started!", "* OHO! Look at that fire in your eyes! Go obliterate that task!!", "peace_sign"),
         ],
         category="motivations",
     ),
@@ -1087,15 +1117,17 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Put some boiling fury into your work! Smash through that task like a boss!",
         choices=[
             ("Fired up now!!", "* YES!! Burn with passion and obliterate every obstacle in your path!!", "laughing"),
-            ("Need some calm.", "* Then channel cool focus! A master swordsman strikes with precision!", "wistful"),
+            ("Need calm focus.", "* Then channel cool focus! A master swordsman strikes with precision!", "wistful"),
+            ("Chaos mode on!", "* PURE CHAOS?! Now you're speaking my language! Let's cause trouble!!", "laughing"),
         ],
         category="motivations",
     ),
     QuestionItem(
         question="* Take a deep breath! You've got this... not that I'm cheering for you or anything!",
         choices=[
-            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot!!", "embarrassed"),
-            ("Needed that breath.", "* Hmph! See? A clear mind makes quick work of any enemy!", "peace_sign"),
+            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot!! [add_fact: User appreciates Pink's encouragement]", "embarrassed"),
+            ("Needed that.", "* Hmph! See? A clear mind makes quick work of any enemy!", "peace_sign"),
+            ("Breathed in fury!", "* HAH! Good! Use that fiery oxygen to torch your roadblocks!!", "laughing"),
         ],
         category="motivations",
     ),
@@ -1103,15 +1135,17 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Even if today is exhausting, you're doing great! Keep your chin up, mew!",
         choices=[
             ("Doing my best!", "* And your best is more than enough! Keep walking forward proudly!!", "peace_sign"),
-            ("Feeling exhausted.", "* Rest when you're done, champion. You've earned every bit of peace!", "wistful"),
+            ("Exhausted...", "* Rest when you're done, champion. You've earned every bit of peace!", "wistful"),
+            ("Almost at the goal!", "* Then sprint across the finish line! I'll be waving the victory flag!!", "laughing"),
         ],
         category="motivations",
     ),
     QuestionItem(
         question="* Channel your inner boss monster! Show this day who's really in charge!",
         choices=[
-            ("I am in charge!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
-            ("The day is winning.", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "laughing"),
+            ("I am the boss!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
+            ("Phase Two active!", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "laughing"),
+            ("Need a potion.", "* Chug an energy elixir then! Re-engage with maximum HP!!", "peace_sign"),
         ],
         category="motivations",
     ),
@@ -1119,73 +1153,82 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Every mistake is just training for the final battle! Keep pushing, mew!",
         choices=[
             ("Learning & growing!", "* That's how legends are born! Every setback is just XP in disguise!!", "peace_sign"),
-            ("Hate making mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "laughing"),
+            ("Hate mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "laughing"),
+            ("Level up soon!", "* YES! Ding ding! New abilities unlocked! Strike back harder!!", "singing"),
         ],
         category="motivations",
     ),
 
-    # Canon Pink Lore & Dating (from Pink_Battle_Notes)
+    # Canon Pink Lore & Dating (Undertale / Deltarune)
     QuestionItem(
         question="* Wh-what's going on!? School!? I don't... even go to school anymore... And you wanna WALK ME HOME!?",
         choices=[
-            ("Yes! Let's walk.", "* ...! Hmph! Fine, but don't you dare get any weird ideas, dearies!", "embarrassed"),
-            ("No way, walk alone.", "* HAH! Good! I can walk myself, you little grubby puppet gremlin!", "tongue"),
+            ("Yes! Let's walk.", "* ...! Hmph! Fine, but don't you dare get any weird ideas, dearies! [add_fact: User offered to walk Pink home]", "embarrassed"),
+            ("Walk alone, doll.", "* HAH! Good! I can walk myself, you little grubby puppet gremlin!", "tongue"),
+            ("Only if you fly!", "* Fly?! Ghosts float, they don't give piggyback rides, fool!", "laughing"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* It's... because you think this body's CUTE, right!? You... wish you never met me, right...?",
         choices=[
-            ("I'm glad we met!", "* Wh-WHAT?! S-stop looking deep into my eyes, idiots! Heart went funny...", "embarrassed"),
-            ("Wish I never did.", "* FOOL! You'll regret those words when I unleash a cat bomb on your desktop!", "angry"),
+            ("Glad we met!", "* Wh-WHAT?! S-stop looking deep into my eyes, idiot! Heart went funny... [add_fact: User is glad they met Pink]", "embarrassed"),
+            ("Wish I never did.", "* FOOL! You'll regret those words when I unleash a cat bomb on your head!", "angry"),
+            ("You're hilarious.", "* H-hilarious?! I am a fearsome warrior, not a stand-up comedian!!", "shocked"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* If you were getting a gift for me... what would you even pick, mew?!",
         choices=[
-            ("Stinky fish!", "* Body: PERFECTION! Rotten, smelly, and peak feline cuisine, mew!\n* Ghost: ...Gross!!", "laughing"),
-            ("A silk ribbon!", "* Ghost: Silk ribbons cost more than this PC!\n* Body: A ribbon might be nice, mew!", "peace_sign"),
+            ("Stinky fish!", "* PERFECTION! Rotten, smelly, and peak feline cuisine, mew!\n* Gross!! Keep that stench away from my cotton! [add_fact: User would gift Pink stinky fish]", "laughing"),
+            ("Silk ribbon!", "* Silk ribbons cost more than this PC!\n* A ribbon might be nice, mew! [add_fact: User would gift Pink a silk ribbon]", "peace_sign"),
+            ("Cat-head bomb!", "* YES! More ammunition for my arsenal! You have exquisite taste! [add_fact: User would gift Pink cat bombs]", "laughing"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* Date location? Where would you take an elite sensation like me?!",
         choices=[
-            ("Go to mountain!", "* Take a HIKE!! ...Wait, mountain sunsets are actually breathtaking...", "wistful"),
-            ("Fancy floral tea cafe!", "* A little floral tea will have you ticked pink! Pink! PINK!!!", "singing"),
+            ("Mountain sunset!", "* Take a HIKE!! ...Wait, mountain sunsets are actually breathtaking... [add_fact: User's ideal date with Pink is a mountain sunset]", "wistful"),
+            ("Fancy tea cafe!", "* A little floral tea will have you ticked pink! Pink! PINK!!! [add_fact: User's ideal date with Pink is a floral tea cafe]", "singing"),
+            ("Underground dump.", "* The DUMP?! Are you taking me to visit my cousin in the garbage?! RUDE!!", "angry"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* If I became something I loved... wouldn't that fix everything? Or am I just puppeting this doll...?",
         choices=[
-            ("Love us both.", "* Love... us both? ...Hmph. Don't go saying cheesy lines to make a ghost cry.", "wistful"),
-            ("You're a sensation!", "* Ghost: Obviously! I've got friends, enemies, neutrals!\n* Body: And a Doki-meter, mew!", "peace_sign"),
+            ("Love us both.", "* Love... us both? ...Hmph. Don't go saying cheesy lines to make a ghost cry. [add_fact: User cares for both the doll vessel and ghost spirit]", "wistful"),
+            ("You're a sensation!", "* Obviously! I've got friends, enemies, neutrals!\n* And a Doki-meter, mew!", "peace_sign"),
+            ("You are you.", "* ...I am me, huh? Simple answers for complicated spirits. Thank you.", "wistful"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* I want to eat sand on the beach with you, mew!",
         choices=[
-            ("Let's go eat sand!", "* Body: Mew!! Let's go!\n* Ghost: NO!! Stop encouraging her to eat silica, you fool!!", "shocked"),
-            ("Sand is inedible.", "* Body: Aww, mew...\n* Ghost: Exactly! What that body wants is STUPID!", "laughing"),
+            ("Let's eat sand!", "* Mew!! Let's go!\n* NO!! Stop encouraging her to eat silica, you fool!!", "shocked"),
+            ("Sand is inedible.", "* Aww, mew...\n* Exactly! What that body wants is STUPID!", "laughing"),
+            ("Bring salt & pepper.", "* SALT ON SAND?! You two are both completely out of your minds!!", "angry"),
         ],
         category="lore",
     ),
     QuestionItem(
         question="* Have you ever had ears before? Cute and fluffy ears? ...You should try it.",
         choices=[
-            ("Nod in agreement.", "* Yes, you're nodding! Obviously you agree! Obviously!", "peace_sign"),
-            ("Sounds like a hassle.", "* Hmph! Uncultured! Fluffy cat ears are the pinnacle of fashion!", "tongue"),
+            ("Nod in agreement.", "* Yes, you're nodding! Obviously you agree! Obviously! [add_fact: User appreciates fluffy cat ears]", "peace_sign"),
+            ("Sounds like hassle.", "* Hmph! Uncultured! Fluffy cat ears are the pinnacle of fashion!", "tongue"),
+            ("Get me some ears!", "* OHO! A convert to the feline order! Welcome aboard, mew!!", "laughing"),
         ],
         category="lore",
     ),
     QuestionItem(
         question="* Hey... be honest. If someone tried to rip my doll seams or throw me away, what would you do?!",
         choices=[
-            ("I'd protect you both!", "* Ghost: ...Hmph! As if an amateur like you could fight! ...B-but thanks, idiot.\n* Body: We're safe with you, mew!", "embarrassed"),
-            ("It's just cotton.", "* Ghost: Touch a single stitch on this doll and I will haunt you across dimensions!!\n* Body: Eek, mew!", "angry"),
+            ("Protect you both!", "* ...Hmph! As if an amateur like you could fight! ...B-but thanks, idiot.\n* We're safe with you, mew! [add_fact: User promised to protect Pink's seams and ghost spirit]", "embarrassed"),
+            ("It's just cotton.", "* Touch a single stitch on this doll and I will haunt you across dimensions!!\n* Eek, mew!", "angry"),
+            ("Armor-stitch seams!", "* Armor-reinforced plush seams?! I would be INDESTRUCTIBLE!!", "laughing"),
         ],
         category="lore",
     ),
@@ -1230,7 +1273,6 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     # Tongue
     "tongue": [
         "* :P",
-        "* Mew! :P",
     ],
     # Kneeling
     "kneeling": [
@@ -2307,6 +2349,11 @@ class DialogueOverlay(QWidget):
         if not self._skippable or not self._active:
             event.accept()
             return
+        if event.button() == Qt.RightButton:
+            # Right-click dismisses dialogue overlay immediately (including active questions)
+            self.dismiss(clear_queue=True)
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             if self._visible_chars < self._total_chars:
                 self.advance_or_dismiss()
@@ -2976,7 +3023,7 @@ class MemoryManager:
             self.prune_empty_sessions()
             if not self.facts_path.exists():
                 default_facts = {
-                    "user_name": "Dork",
+                    "user_name": "Minion",
                     "notes": [],
                 }
                 self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
@@ -4085,6 +4132,19 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[:anim_match.start()] + l[anim_match.end():]
 
+        # Strip explicit role prefixes like "* Body:" or "* Ghost:" if present
+        body_prefix = re.match(r"^\*?\s*(?:body|doll)\s*:\s*", l, re.IGNORECASE)
+        if body_prefix:
+            line_ghost = False
+            l = l[body_prefix.end():]
+
+        ghost_prefix = re.match(r"^\*?\s*(?:ghost|spirit)\s*:\s*", l, re.IGNORECASE)
+        if ghost_prefix:
+            line_ghost = True
+            if not line_anim:
+                line_anim = "angry"
+            l = l[ghost_prefix.end():]
+
         l = re.sub(r"\[(?:seen|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
@@ -4111,8 +4171,8 @@ def split_dual_dialogue(
         t = line_dict["text"].lower()
         return bool(re.search(r"^\*\s*(hmph|fool|shut up|grrr|w-what|hey!|hands off|as if)", t) or any(k in t for k in ["minion", "dummy", "gremlin", "boiling rage", "spectral", "haunt", "recycle bin"]))
 
-    has_doll = any(_is_doll(p) for p in parsed_lines)
-    has_ghost = any(_is_ghost(p) for p in parsed_lines)
+    has_doll = any(_is_doll(p) or p.get("is_ghost") is False for p in parsed_lines)
+    has_ghost = any(_is_ghost(p) or p.get("is_ghost") is True for p in parsed_lines)
     has_distinct_anims = len({p["anim"] for p in parsed_lines if p["anim"]}) > 1
 
     if (has_doll and has_ghost) or has_distinct_anims:
@@ -5889,7 +5949,12 @@ class YellowsPixelBuddies(QWidget):
         if reaction_anim and self._can_play(reaction_anim):
             self._play(reaction_anim)
         self._keep_response_anim = True
-        if hasattr(self, "_memory"):
+        if hasattr(self, "_memory") and self._memory:
+            # Extract any permanent facts embedded in the reaction
+            for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                f_val = m.group(1).strip()
+                if f_val:
+                    self._memory.add_fact(f_val)
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -6063,20 +6128,25 @@ class YellowsPixelBuddies(QWidget):
             '  "question": "* ... (in-character question, starting with \'* \', max 20 words)",\n'
             '  "choices": [\n'
             "    {\n"
-            '      "label": "Short option button text (1-4 words)",\n'
-            '      "reaction": "* Pink\'s in-character reaction if user clicks this choice (starts with \'* \', 10-25 words)",\n'
+            '      "label": "Punchy button text (1-3 words)",\n'
+            '      "reaction": "* Pink\'s in-character reaction (starts with \'* \', 10-25 words)",\n'
             '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
             "    },\n"
             "    {\n"
-            '      "label": "Short option button text (1-4 words)",\n'
-            '      "reaction": "* Pink\'s in-character reaction if user clicks this choice (starts with \'* \', 10-25 words)",\n'
+            '      "label": "Punchy button text (1-3 words)",\n'
+            '      "reaction": "* Pink\'s in-character reaction (starts with \'* \', 10-25 words)",\n'
             '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
             "    }\n"
             "  ]\n"
             "}\n"
             "RULES:\n"
-            "- Exactly 2 choices (option 1 and option 2).\n"
-            "- Both choices should be natural, fun responses for the player.\n"
+            "- Provide 2 or 3 choices (maximum 3).\n"
+            "- Button labels MUST be punchy and short (1-3 words) to fit the retro speech box (e.g. 'Working hard!', 'Need snacks', 'Silence, doll').\n"
+            "- DELTARUNE / UNDERTALE CHOICE ENERGY:\n"
+            "  * Avoid boring binary 'good student vs bad slacker' questionnaire choices.\n"
+            "  * Make choices witty and varied: one enthusiastic/play-along, one sarcastic pushback/defiance, and optionally one quirky/absurd Toby Fox choice.\n"
+            "  * Never give patronizing lectures or guilt trips about productivity or health.\n"
+            "- PERSISTENT FACTS: If an option reveals a clear user preference, habit, or nickname, append [add_fact: User prefers ...] to that option's reaction so Pink remembers it permanently!\n"
             "- Question must start with '* '.\n"
             "- Each reaction must start with '* ' and include a valid anim from the list above.\n"
             "- Keep wording concise so it fits comfortably in the Undertale-style speech box.\n"
