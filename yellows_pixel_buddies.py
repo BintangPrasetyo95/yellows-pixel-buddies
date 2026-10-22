@@ -93,6 +93,7 @@ import random
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import time
 import winreg
@@ -117,6 +118,10 @@ from PyQt5.QtWidgets import (
 #  1. CONFIGURATION - every tunable value lives here
 # =============================================================================
 
+# --- Application Metadata & Auto-Update --------------------------------------
+APP_VERSION = "1.0.0"
+GITHUB_REPO = "BintangPrasetyo95/yellows-pixel-buddies"
+
 # --- Paths & Sprites ---------------------------------------------------------
 if getattr(sys, "frozen", False):
     # Running inside a PyInstaller .exe bundle
@@ -131,15 +136,43 @@ if getattr(sys, "frozen", False):
         FONTS_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "fonts"
     _base_dir = Path(getattr(sys, "_MEIPASS", _exe_dir))
 else:
-    SPRITES_DIR = Path(__file__).resolve().parent / "sprites"   # sprites/<state>/N.png
-    FONTS_DIR = Path(__file__).resolve().parent / "fonts"       # fonts/determination/...
-    _base_dir = Path(__file__).resolve().parent
+    _exe_dir = Path(__file__).resolve().parent
+    SPRITES_DIR = _exe_dir / "sprites"   # sprites/<state>/N.png
+    FONTS_DIR = _exe_dir / "fonts"       # fonts/determination/...
+    _base_dir = _exe_dir
 
 ICON_PATH = _base_dir / "app_icon.ico"
+if not ICON_PATH.exists() and (_exe_dir / "app_icon.ico").exists():
+    ICON_PATH = _exe_dir / "app_icon.ico"
 DIALOGUE_BOX_PATH = SPRITES_DIR / "dialogue_box.png"
 DETERMINATION_FONT_PATH = FONTS_DIR / "determination" / "determination.ttf"
 EYE_OFF_PATH = SPRITES_DIR / "eye" / "off.png"
 EYE_ON_PATH = SPRITES_DIR / "eye" / "on.png"
+
+
+def _resolve_user_data_dir() -> Path:
+    """Resolve the persistent storage location for user memories, config, and facts.
+
+    Priority:
+    1. Explicit portable mode override: 'portable.txt' next to the .exe / script.
+    2. Development mode: Running raw python script in repo where local 'memory/' exists.
+    3. Production mode: Standard Windows %APPDATA%/YellowsPixelBuddies (survives updates & re-installs).
+    """
+    if (_exe_dir / "portable.txt").exists():
+        return _exe_dir
+
+    if not getattr(sys, "frozen", False) and (_exe_dir / "memory").exists():
+        return _exe_dir
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        target = Path(appdata) / "YellowsPixelBuddies"
+    else:
+        target = Path.home() / ".yellows_pixel_buddies"
+    return target
+
+
+USER_DATA_DIR = _resolve_user_data_dir()
 
 # On-screen size in *logical* pixels. The window is exactly SPRITE_SIZE x SPRITE_SIZE.
 # PNGs of any size are scaled to fit (aspect ratio kept, anchored bottom-centre).
@@ -2976,15 +3009,19 @@ def capture_screen_base64() -> str:
 class MemoryManager:
     """Manages local session chat logs, long-term facts, and config/API key storage."""
 
-    def __init__(self, base_dir: Path) -> None:
-        self.base_dir = base_dir
-        self.memory_dir = base_dir / "memory"
+    def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
+        self.base_dir = data_dir  # Backwards compatibility
+        self.memory_dir = data_dir / "memory"
         self.sessions_dir = self.memory_dir / "sessions"
         self.config_path = self.memory_dir / "config.json"
-        self.env_path = base_dir / ".env"
+        self.env_path = data_dir / ".env"
         self.facts_path = self.memory_dir / "facts.json"
         self.reminders_path = self.memory_dir / "reminders.json"
         self.token_usage_path = self.memory_dir / "token_usage.json"
+
+        # Migrate existing memory from local exe folder if switching to AppData
+        self._migrate_existing_data()
 
         # Token usage tracking (session and persistent)
         self.session_prompt_tokens = 0
@@ -3003,6 +3040,21 @@ class MemoryManager:
         self.history: list[dict[str, any]] = []
         # Temporary in-memory only storage for immediate ambient dialogue reactions (never saved to disk)
         self.recent_ambient_dialogues: deque[dict[str, any]] = deque(maxlen=4)
+
+    def _migrate_existing_data(self) -> None:
+        """If transitioning from local exe directory to AppData, seamlessly copy existing memory."""
+        try:
+            if self.data_dir.resolve() == _exe_dir.resolve():
+                return
+            local_mem = _exe_dir / "memory"
+            if local_mem.is_dir() and not self.memory_dir.exists():
+                log.info("Migrating existing memory from %s to %s", local_mem, self.memory_dir)
+                shutil.copytree(str(local_mem), str(self.memory_dir), dirs_exist_ok=True)
+            local_env = _exe_dir / ".env"
+            if local_env.is_file() and not self.env_path.exists():
+                shutil.copy2(str(local_env), str(self.env_path))
+        except Exception as err:
+            log.warning("Memory migration check skipped: %s", err)
 
     def _generate_new_session_file(self) -> None:
         """Generate a unique session file path for a fresh session."""
@@ -3089,6 +3141,20 @@ class MemoryManager:
             except Exception:
                 pass
 
+        # Fallback check in local exe dir .env if running from installed/portable location
+        if _exe_dir.resolve() != self.data_dir.resolve():
+            local_env = _exe_dir / ".env"
+            if local_env.exists():
+                try:
+                    for line in local_env.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line.startswith("GEMINI_API_KEY="):
+                            val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            if val:
+                                return val
+                except Exception:
+                    pass
+
         if self.config_path.exists():
             try:
                 cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -3098,6 +3164,18 @@ class MemoryManager:
             except Exception:
                 pass
 
+        # Fallback check in local exe dir memory/config.json
+        if _exe_dir.resolve() != self.data_dir.resolve():
+            local_cfg = _exe_dir / "memory" / "config.json"
+            if local_cfg.exists():
+                try:
+                    cfg = json.loads(local_cfg.read_text(encoding="utf-8"))
+                    val = cfg.get("gemini_api_key", "").strip()
+                    if val:
+                        return val
+                except Exception:
+                    pass
+
         return ""
 
     def save_api_key(self, api_key: str) -> None:
@@ -3105,24 +3183,22 @@ class MemoryManager:
         api_key = api_key.strip()
         os.environ["GEMINI_API_KEY"] = api_key
 
-        env_lines = []
-        found = False
-        if self.env_path.exists():
-            try:
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            env_lines = []
+            found = False
+            if self.env_path.exists():
                 for line in self.env_path.read_text(encoding="utf-8").splitlines():
                     if line.strip().startswith("GEMINI_API_KEY="):
                         env_lines.append(f'GEMINI_API_KEY="{api_key}"')
                         found = True
                     else:
                         env_lines.append(line)
-            except Exception:
-                pass
-        if not found:
-            env_lines.append(f'GEMINI_API_KEY="{api_key}"')
-        try:
+            if not found:
+                env_lines.append(f'GEMINI_API_KEY="{api_key}"')
             self.env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
         except Exception as err:
-            log.warning("Could not update .env: %s", err)
+            log.debug("Could not update .env: %s", err)
 
         cfg = {}
         if self.config_path.exists():
@@ -3132,6 +3208,7 @@ class MemoryManager:
                 pass
         cfg["gemini_api_key"] = api_key
         try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
             self.config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         except Exception as err:
             log.warning("Could not update config.json: %s", err)
@@ -5451,6 +5528,139 @@ def is_token_query(text: str) -> bool:
     return False
 
 
+class UpdateCheckerThread(QThread):
+    """Checks GitHub Releases for new versions of Yellow's Pixel Buddies in background."""
+    update_available = pyqtSignal(str, str, str, str)  # (version, changelog, download_url, asset_name)
+    no_update = pyqtSignal()
+    check_failed = pyqtSignal(str)
+
+    def __init__(self, current_version: str, repo: str) -> None:
+        super().__init__()
+        self.current_version = current_version
+        self.repo = repo
+
+    @staticmethod
+    def _parse_version(v_str: str) -> tuple[int, ...]:
+        clean = re.sub(r"^[^\d]*", "", v_str.strip())
+        parts = []
+        for p in clean.split("."):
+            m = re.match(r"^(\d+)", p)
+            if m:
+                parts.append(int(m.group(1)))
+            else:
+                break
+        return tuple(parts) if parts else (0,)
+
+    def run(self) -> None:
+        try:
+            url = f"https://api.github.com/repos/{self.repo}/releases/latest"
+            headers = {
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "YellowsPixelBuddies-App"
+            }
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 404:
+                self.no_update.emit()
+                return
+            resp.raise_for_status()
+            data = resp.json()
+
+            tag = data.get("tag_name", "")
+            body = data.get("body", "Bug fixes and improvements.")
+            assets = data.get("assets", [])
+
+            remote_ver = self._parse_version(tag)
+            curr_ver = self._parse_version(self.current_version)
+
+            if remote_ver > curr_ver:
+                target_asset = None
+                for a in assets:
+                    name = a.get("name", "").lower()
+                    if name.endswith(".exe"):
+                        target_asset = a
+                        if "setup" in name or "installer" in name:
+                            break
+                if target_asset:
+                    dl_url = target_asset.get("browser_download_url", "")
+                    asset_name = target_asset.get("name", "update.exe")
+                    self.update_available.emit(tag, body, dl_url, asset_name)
+                    return
+            self.no_update.emit()
+        except Exception as err:
+            self.check_failed.emit(str(err))
+
+
+class UpdateDownloaderThread(QThread):
+    """Downloads update asset and triggers Windows updater script."""
+    progress = pyqtSignal(int)
+    completed = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, download_url: str, target_filename: str) -> None:
+        super().__init__()
+        self.download_url = download_url
+        self.target_filename = target_filename
+
+    def run(self) -> None:
+        try:
+            update_dir = Path(os.environ.get("TEMP", ".")) / "yellows_update"
+            update_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = update_dir / self.target_filename
+
+            resp = requests.get(self.download_url, stream=True, timeout=30)
+            resp.raise_for_status()
+            total_size = int(resp.headers.get("content-length", 0))
+            downloaded = 0
+
+            with open(dest_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0:
+                            pct = int((downloaded / total_size) * 100)
+                            self.progress.emit(pct)
+
+            self.completed.emit(str(dest_path))
+        except Exception as err:
+            self.failed.emit(str(err))
+
+
+def apply_application_update(update_file_path: str) -> None:
+    """Launches updater script or installer, then terminates current process.
+    Your memories and facts in AppData are 100% safe!"""
+    up_path = Path(update_file_path).resolve()
+    current_exe = Path(sys.executable).resolve()
+
+    if not getattr(sys, "frozen", False):
+        log.info("Running in development mode; update saved to: %s", up_path)
+        try:
+            os.startfile(str(up_path.parent))
+        except Exception:
+            pass
+        return
+
+    try:
+        if "setup" in up_path.name.lower() or "installer" in up_path.name.lower():
+            # Run installer executable directly
+            subprocess.Popen([str(up_path)], creationflags=0x00000008 if os.name == "nt" else 0)
+        else:
+            # Standalone .exe replacement via lightweight batch updater script
+            bat_path = up_path.parent / "apply_update.bat"
+            bat_content = f"""@echo off
+timeout /t 2 /nobreak > nul
+copy /y "{up_path}" "{current_exe}"
+start "" "{current_exe}"
+del "%~f0"
+"""
+            bat_path.write_text(bat_content, encoding="utf-8")
+            subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=0x00000008 if os.name == "nt" else 0)
+    except Exception as err:
+        log.error("Failed to execute update helper: %s", err)
+
+    QApplication.quit()
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
@@ -5496,7 +5706,10 @@ class YellowsPixelBuddies(QWidget):
         self._chat_input.submitted.connect(self._on_chat_submitted)
         self._chat_input.cancelled.connect(self._on_chat_cancelled)
         self._chat_input.timed_out.connect(self._on_chat_timeout)
-        self._memory = MemoryManager(_base_dir)
+        self._memory = MemoryManager(USER_DATA_DIR)
+        self._update_checker_thread: UpdateCheckerThread | None = None
+        self._update_downloader_thread: UpdateDownloaderThread | None = None
+        self._available_update_info: tuple[str, str, str, str] | None = None
         self._gemini_thread: GeminiWorkerThread | None = None
         self._is_ghost_talking: bool = False
         self._ghost_aura_cache: dict[int, QPixmap] = {}
@@ -5666,6 +5879,9 @@ class YellowsPixelBuddies(QWidget):
 
         self._init_tray_icon()
         self._install_exception_hook()
+
+        # Background update check 15 seconds after startup (non-blocking)
+        QTimer.singleShot(15000, lambda: self._check_for_updates(manual=False))
 
     def _install_exception_hook(self) -> None:
         """Global exception hook to catch uncaught runtime exceptions and trigger burnt state + explosion."""
@@ -7050,6 +7266,90 @@ class YellowsPixelBuddies(QWidget):
         if self._can_play("peace_sign"):
             self._play("peace_sign")
         self._say(first_line, force=True, extra_queue=extra, record_memory=False)
+
+    # ------------------------------------------------------------- auto-update
+    def _check_for_updates(self, manual: bool = False) -> None:
+        """Check GitHub releases for updates to Yellow's Pixel Buddies."""
+        if self._update_checker_thread and self._update_checker_thread.isRunning():
+            if manual:
+                self._say("* Already checking for updates, hold your horses mew!", force=True, record_memory=False)
+            return
+
+        if manual:
+            self._say("* Checking GitHub for updates, mew...", force=True, record_memory=False)
+
+        self._update_checker_thread = UpdateCheckerThread(APP_VERSION, GITHUB_REPO)
+        self._update_checker_thread.update_available.connect(
+            lambda v, b, u, a: self._on_update_available(v, b, u, a, manual)
+        )
+        self._update_checker_thread.no_update.connect(
+            lambda: self._on_no_update_available(manual)
+        )
+        self._update_checker_thread.check_failed.connect(
+            lambda err: self._on_update_check_failed(err, manual)
+        )
+        self._update_checker_thread.start()
+
+    def _on_update_available(self, version: str, body: str, download_url: str, asset_name: str, manual: bool) -> None:
+        self._available_update_info = (version, body, download_url, asset_name)
+        log.info("Update available: %s (%s)", version, download_url)
+
+        notes = body.strip()
+        if len(notes) > 280:
+            notes = notes[:280] + "..."
+
+        msg = (
+            f"A new version ({version}) of Yellow's Pixel Buddies is available!\n\n"
+            f"Changelog:\n{notes}\n\n"
+            "Would you like Pink to download and install the update now?\n\n"
+            "(Your memories, facts, and chat logs in AppData remain 100% safe!)"
+        )
+
+        reply = QMessageBox.question(
+            None,
+            "Update Available! 🚀",
+            msg,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+
+        if reply == QMessageBox.Yes:
+            self._start_update_download(download_url, asset_name)
+        else:
+            self._say(f"* Update to {version} postponed, mew!", force=True, record_memory=False)
+
+    def _on_no_update_available(self, manual: bool) -> None:
+        if manual:
+            self._say(f"* You're already running the latest version! ({APP_VERSION}) mew!", force=True, record_memory=False)
+            if self._can_play("peace_sign"):
+                self._play("peace_sign")
+
+    def _on_update_check_failed(self, error: str, manual: bool) -> None:
+        log.warning("Update check failed: %s", error)
+        if manual:
+            self._say("* Mew... couldn't check for updates right now.", force=True, record_memory=False)
+
+    def _start_update_download(self, download_url: str, asset_name: str) -> None:
+        if self._update_downloader_thread and self._update_downloader_thread.isRunning():
+            return
+        self._say("* Downloading the new update... hang tight, mew!", force=True, record_memory=False)
+        self._update_downloader_thread = UpdateDownloaderThread(download_url, asset_name)
+        self._update_downloader_thread.progress.connect(self._on_update_progress)
+        self._update_downloader_thread.completed.connect(self._on_update_downloaded)
+        self._update_downloader_thread.failed.connect(self._on_update_download_failed)
+        self._update_downloader_thread.start()
+
+    def _on_update_progress(self, percent: int) -> None:
+        if percent in (25, 50, 75):
+            self._say(f"* Downloading update: {percent}%... mew!", force=True, record_memory=False)
+
+    def _on_update_downloaded(self, file_path: str) -> None:
+        self._say("* Update downloaded! Restarting to apply... See you in a second, mew!!", force=True, record_memory=False)
+        QTimer.singleShot(1500, lambda: apply_application_update(file_path))
+
+    def _on_update_download_failed(self, err: str) -> None:
+        log.warning("Update download failed: %s", err)
+        self._say("* Mew?! Update download failed. You can update manually on GitHub!", force=True, record_memory=False)
 
     def _open_reminders_dialog(self) -> None:
         """Open the interactive Reminders Management dialog."""
@@ -8982,6 +9282,8 @@ class YellowsPixelBuddies(QWidget):
         hide_tray_action = menu.addAction("Hide to Tray 📥")
         hide_action = menu.addAction("Hide (Peek Ears) 🐾")
         menu.addSeparator()
+        update_action = menu.addAction("Check for Updates 🔄")
+        menu.addSeparator()
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -8999,6 +9301,8 @@ class YellowsPixelBuddies(QWidget):
             self._open_chat_input()
         elif chosen is ask_action:
             self._trigger_ai_question()
+        elif chosen is update_action:
+            self._check_for_updates(manual=True)
         elif jump_action is not None and chosen is jump_action:
             self._schedule_debug_jump()
 
@@ -9162,6 +9466,10 @@ class YellowsPixelBuddies(QWidget):
         reset_mem_action.triggered.connect(self._reset_session_memory)
         token_usage_action = memory_menu.addAction("AI Token Usage 📊")
         token_usage_action.triggered.connect(self._show_token_usage_dialogue)
+
+        tray_menu.addSeparator()
+        self._update_tray_action = tray_menu.addAction("Check for Updates 🔄")
+        self._update_tray_action.triggered.connect(lambda: self._check_for_updates(manual=True))
 
         self._hide_tray_action = tray_menu.addAction("Hide to Tray 📥")
         self._hide_tray_action.triggered.connect(self._toggle_hide_to_tray)
