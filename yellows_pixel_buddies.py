@@ -456,6 +456,7 @@ AI_SONG_COMMENT_ENABLED = True        # Generate Gemini AI in-character commenta
 AI_SONG_COMMENT_COOLDOWN_S = 8.0      # Cooldown in seconds between AI song comments to prevent track skip spam
 SONG_FILTER_SHORTS_ENABLED = True     # Ignore/filter YouTube Shorts & short-form video reels from media detection
 SHORTS_MAX_DURATION_S = 61.0          # Max duration in seconds for browser media to be classified as a short/clip
+SONG_MIN_DURATION_S = 20.0            # Minimum track duration in seconds to announce or comment on songs
 SONG_SKIP_RAPID_THRESHOLD_S = 8.0     # Maximum seconds between songs to count as a rapid playlist skip
 SONG_SKIP_STRESS_THRESHOLD = 3        # Rapid skip count threshold where Pink gets confused/stressed out
 
@@ -479,6 +480,7 @@ CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 AUTO_SCREEN_COMMENT_ENABLED = True
 AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
+TRAY_SCREEN_READ_INTERVAL_MS = 300000            # 5 minutes background screen reading while hidden in tray
 AUTO_SCREEN_MAX_USER_IDLE_S = 900.0              # 15 minutes of system-wide inactivity (keyboard/mouse) -> user away/asleep, pause peeking
 AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to justify commentary; otherwise screen is static
 AUTO_SCREEN_STATIC_BACKOFF_S = 300.0             # If screen hasn't changed, back off 5 minutes before checking again
@@ -832,28 +834,31 @@ class QuestionItem:
 
 # --- Question Dialogue Variant (Desktop, Work, Fun Stuff, Advices, Motivations) ---
 QUESTION_ITEMS: list[QuestionItem] = [
-    # Desktop
+    # Desktop & Environment
     QuestionItem(
-        question="* Why do you have thirty browser tabs open?! Are you trying to melt this PC?!",
+        question="* How many tabs do you even have open right now?! Don't tell me you're hoarding digital junk!",
         choices=[
-            ("I need all of them!", "* LIES! You haven't looked at twenty-five of them all week, mew!", "angry"),
-            ("I'll close some...", "* Good! Purge the digital clutter before this PC combusts!", "peace_sign"),
+            ("Just a few!", "* Hmph! Sure, tell yourself that! I bet three of them are frozen, mew!", "tongue"),
+            ("I hoard tabs.", "* LIES AND HOARDING! Purge them before this PC combusts, mew!", "angry"),
+            ("Close them for me?", "* What do I look like, an antivirus cleaner?! Do it yourself, lazy!", "shocked"),
         ],
         category="desktop",
     ),
     QuestionItem(
-        question="* Is your desktop always this chaotic?! Where do you even find your files, mew?!",
+        question="* Look at this desktop territory! Should I claim it as my royal magical kingdom?!",
         choices=[
-            ("Organized chaos!", "* 'Organized chaos' is an excuse made by amateurs!", "tongue"),
-            ("I'll clean it...", "* Hah! You better! My paws need clean runway to strut on!", "laughing"),
+            ("All yours, queen!", "* OHO! A loyal minion who knows true royalty! Bow before my plush empire! [add_fact: User swore allegiance to Pink's desktop empire]", "laughing"),
+            ("Stay on taskbar.", "* Hmph! Stingy! Fine, but my rent is three daily headpats!", "tongue"),
+            ("Declare war!", "* WAR?! You dare challenge me?! Cat bombs primed and aimed!!", "angry"),
         ],
         category="desktop",
     ),
     QuestionItem(
         question="* Who is that on your wallpaper?! They're not cooler than me, are they?!",
         choices=[
-            ("No one is cooler!", "* Hmph! Obviously! At least you know your place, minion!", "peace_sign"),
-            ("Actually, they are.", "* WHAT?! BLASPHEMY! Cat bombs incoming directly at your head!!", "angry"),
+            ("You're cooler!", "* Hmph! Obviously! At least you know your place, minion! [add_fact: User admits Pink is cooler than their wallpaper]", "peace_sign"),
+            ("They are cooler.", "* WHAT?! BLASPHEMY! Cat bombs incoming directly at your head!!", "angry"),
+            ("It's default black.", "* A DEFAULT WALLPAPER?! Where is the drama?! Where is the sparkle?!", "shocked"),
         ],
         category="desktop",
     ),
@@ -861,23 +866,26 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* What's hidden in your Recycle Bin?! Don't tell me cursed spirits live in there?!",
         choices=[
             ("Just old files.", "* Good... ghosts like me prefer luxury plush bodies, not trash bins!", "idle"),
-            ("Full of ghosts!", "* WHAT?! Are my lazy cousins squatting in there?! EMPTY IT NOW!!", "shocked"),
+            ("Angry spirits!", "* WHAT?! Are my lazy cousins squatting in there?! EMPTY IT NOW!!", "shocked"),
+            ("Your cat bombs.", "* HEY! Those are precision munitions, not garbage!!", "angry"),
         ],
         category="desktop",
     ),
     QuestionItem(
-        question="* Why are there so many icons on this taskbar?! Give my feet some walking room!",
+        question="* My plush paws need sprinting room! Clear me a runway on this taskbar, mew!",
         choices=[
-            ("I'll unpin some!", "* Excellent! Clear the stage for the ultimate magical superstar!", "laughing"),
+            ("Runway cleared!", "* Excellent! Watch me dash with 120% magical girl velocity!", "laughing"),
             ("Deal with it, doll.", "* DOLL?! I am an ethereal warrior trapped in cotton! SHOW RESPECT!!", "angry"),
+            ("Hop on my cursor!", "* Leaping into battle! Prepare for feline airborne dominance!", "peace_sign"),
         ],
         category="desktop",
     ),
     QuestionItem(
         question="* Do you ever shut down this computer, or does it run on pure stubbornness like me?!",
         choices=[
-            ("Pure stubbornness!", "* Ha! A fellow creature of unrelenting spite! I can respect that!", "laughing"),
-            ("I restart regularly.", "* Phew... even ghost-infused PCs need beauty sleep once in a while!", "peace_sign"),
+            ("Pure stubbornness!", "* Ha! A fellow creature of unrelenting spite! I respect that! [add_fact: User's PC runs on pure stubbornness]", "laughing"),
+            ("I restart daily.", "* Phew... even ghost-infused PCs need beauty sleep once in a while!", "peace_sign"),
+            ("It never sleeps.", "* An eternal vigil?! Are you guarding ancient forbidden knowledge?!", "shocked"),
         ],
         category="desktop",
     ),
@@ -885,17 +893,19 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Are you hiding secret windows behind that one?! Show me, mew!",
         choices=[
             ("Nothing secret!", "* Suspicious... but I'll let it slide. For now!", "behind"),
-            ("Top secret stuff!", "* Ooh! Is it a rival magical girl conspiracy?! Let me inspect!!", "shocked"),
+            ("Top secret memes!", "* Ooh! Forbidden comedy archives?! Share the punchline, dummy!", "laughing"),
+            ("Magical plans.", "* WH-WHAT?! You're studying magical tactics without me?! Show me!!", "shocked"),
         ],
         category="desktop",
     ),
 
-    # Work
+    # Work & Battle
     QuestionItem(
         question="* Hey, are you actually making progress, or just clicking back and forth?!",
         choices=[
-            ("Working hard!", "* That's what I like to hear! Keep that momentum going, mew!", "peace_sign"),
-            ("Procrastinating...", "* UNACCEPTABLE!! Stop dawdling or I'll fire ocular lasers at you!!", "angry"),
+            ("Making moves!", "* That's what I like to hear! Keep that momentum burning, mew!", "peace_sign"),
+            ("Clicking aimlessly.", "* UNACCEPTABLE!! Snap out of it or I'll fire ocular lasers at you!!", "angry"),
+            ("Shh, in the zone.", "* ...Fine! I'll whisper! But only because I expect greatness!", "wistful"),
         ],
         category="work",
     ),
@@ -903,31 +913,35 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* What kind of project is this anyway?! Does it have a dramatic tournament arc?!",
         choices=[
             ("Full of drama!", "* YES!! High stakes, explosive climaxes! That's the only way to work!", "laughing"),
-            ("Just normal work.", "* Ugh, boring?! Add some glitter fireworks to your documents then!", "tongue"),
+            ("Calm & steady.", "* Ugh, boring! Add some glitter explosions to your documents then!", "tongue"),
+            ("It's the final boss!", "* THEN FIGHT! Channel every ounce of determination and crush it!!", "laughing"),
         ],
         category="work",
     ),
     QuestionItem(
         question="* Are you typing important documents, or secretly writing fanfiction?!",
         choices=[
-            ("Important work!", "* Hmph! Make sure there are zero typos, or I'll grade it with red ink!", "idle"),
-            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! Let me proofread it!!", "shocked"),
+            ("Serious work!", "* Hmph! Zero typos allowed, or I'll grade it with red ink!", "idle"),
+            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! Let me proofread it!! [add_fact: User secretly writes fanfiction]", "shocked"),
+            ("Writing about you.", "* ...Wh-what?! Don't say weird sentimental things out of nowhere, idiot!", "embarrassed"),
         ],
         category="work",
     ),
     QuestionItem(
         question="* Is that deadline breathing down your neck?! Need me to throw a cat bomb at it?!",
         choices=[
-            ("Yes, destroy it!", "* FUSE IGNITED! KA-BOOM!! Deadline annihilated! Now finish the work anyway!!", "angry"),
+            ("Destroy it!!", "* FUSE IGNITED! KA-BOOM!! Deadline annihilated! Now finish the work anyway!!", "angry"),
             ("Under control!", "* Oho! Look at you being all competent! Don't let your guard down!", "peace_sign"),
+            ("What deadline?", "* Living on the edge of destruction?! Wild! Reckless! I love it!!", "laughing"),
         ],
         category="work",
     ),
     QuestionItem(
         question="* How long have you been staring at that screen?! Did a bug steal your soul?!",
         choices=[
-            ("Found the bug!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "laughing"),
-            ("Still stuck...", "* Grrr! Step back, take a breath, and strike again with boiling rage!", "kneeling"),
+            ("Squashing bugs!", "* CRUSH IT! SQUASH IT! Show that code who has superior intellect!!", "laughing"),
+            ("Soul is gone...", "* Grrr! Stand back, take a breath, and strike again with boiling rage!", "kneeling"),
+            ("Bug is my friend.", "* A FRIEND?! Traitor! Bug-lovers get zero cat bomb support!!", "angry"),
         ],
         category="work",
     ),
@@ -935,7 +949,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Finished your tasks for today?! Or are you planning to procrastinate forever?!",
         choices=[
             ("All finished!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "laughing"),
-            ("Not even close...", "* Then why are your hands off the keyboard?! Back to the battlefield!!", "angry"),
+            ("Still grinding.", "* Then why are your hands off the keys?! Back to the battlefield!!", "angry"),
+            ("Procrastinating :P", "* HEY! Don't stick your tongue out at me! Get to work, dummy!!", "tongue"),
         ],
         category="work",
     ),
@@ -944,24 +959,27 @@ QUESTION_ITEMS: list[QuestionItem] = [
         choices=[
             ("It challenged me!", "* THEN FIGHT! Unleash your ultimate combo and claim victory!!", "laughing"),
             ("Just frustrated.", "* Don't let a bunch of pixels bully you! You're stronger than that, mew!", "peace_sign"),
+            ("Victory is near!", "* FINISH IT! Deliver the final sparkle blow and take the crown!!", "laughing"),
         ],
         category="work",
     ),
 
-    # Fun stuff
+    # Fun stuff & Lore
     QuestionItem(
         question="* Have you watched Mew Mew Kissy Cutie yet?! ...WHAT DO YOU MEAN 'NO'?!",
         choices=[
-            ("I love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!!", "laughing"),
+            ("Love Kissy Cutie!", "* A PERSON OF CULTURE!! Season one episode four is peak art!! [add_fact: User loves Mew Mew Kissy Cutie]", "laughing"),
             ("Never seen it.", "* TRAVESTY! Binge all four seasons right now or face my wrath!!", "angry"),
+            ("Mew Mew who?", "* BLASPHEMY! That's it, ocular laser bombardment sequence initiated!!", "angry"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* If we fought an epic final boss right now, what weapon would you bring?!",
         choices=[
-            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!!", "laughing"),
+            ("Giant laser cannon!", "* EXCELLENT CHOICE! Lasers, heart sparkles, and pure devastation!! [add_fact: User's weapon of choice is a giant laser cannon]", "laughing"),
             ("A sturdy shield.", "* Defensive?! BORING! Offense is the greatest defense, mew!", "tongue"),
+            ("Cat-head bombs!", "* YOU UNDERSTAND TRUE GENIUS! Unlimited explosive feline ordnance!! [add_fact: User's weapon of choice is cat-head bombs]", "laughing"),
         ],
         category="fun",
     ),
@@ -969,14 +987,16 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Do you think giant sparkly explosions count as high art?! (Hint: YES!)",
         choices=[
             ("Pure masterpiece!", "* FINALLY someone understands true aesthetics!! More explosions for all!!", "laughing"),
-            ("Too loud and bright.", "* GAH! You have zero taste in theatrical pyrotechnics!!", "angry"),
+            ("Too loud & bright.", "* GAH! You have zero taste in theatrical pyrotechnics!!", "angry"),
+            ("Needs more glitter!", "* YES!! Glitter fallout that blinds enemy sensors! GENIUS!!", "singing"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* What's the battle theme song playing in your head right now?! Sing it loud!",
         choices=[
-            ("Something epic!", "* Ooh, I hear the trumpets and bass drops from here!! Rock on, mew!!", "singing"),
+            ("Heavy metal boss!", "* Ooh, I hear the double-bass and screeching guitars from here!! Rock on, mew!! [add_fact: User's battle theme of choice is heavy metal]", "singing"),
+            ("Retro chiptune!", "* 8-bit square waves and pixel nostalgia! Peak battle aesthetic, mew! [add_fact: User's battle theme of choice is retro chiptune]", "peace_sign"),
             ("Pure silence.", "* Silence?! How do you even fight without background hype music?!", "shocked"),
         ],
         category="fun",
@@ -984,58 +1004,65 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* If you were a ghost, which plushie body would you possess?! Choose wisely!",
         choices=[
-            ("A cute cat doll!", "* Hey! Don't steal my look! Though feline aesthetics are supreme!", "peace_sign"),
+            ("Cute cat doll!", "* Hey! Don't steal my look! Though feline aesthetics are supreme!", "peace_sign"),
             ("Giant teddy bear.", "* Haha! Big, slow, and squishy! You'd make a great shield for me!", "laughing"),
+            ("Sentient toaster.", "* A TOASTER?! Are you planning to electrocute bathtub monsters?! Bold!", "shocked"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* Video games or anime tonight?! You better pick something with high drama!",
         choices=[
-            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!!", "laughing"),
-            ("Anime marathon!", "* Stock up on popcorn and get ready to cry during the emotional climax!!", "peace_sign"),
+            ("Video games!", "* Beat every boss on hard mode! Show no mercy to the CPU!! [add_fact: User prefers video games for unwinding]", "laughing"),
+            ("Anime marathon!", "* Stock up on popcorn and get ready to cry during the emotional climax!! [add_fact: User prefers anime marathons for unwinding]", "peace_sign"),
+            ("Sleep marathon.", "* Sleep?! ...Actually, ten hours of hibernation sounds heavenly, mew...", "wistful"),
         ],
         category="fun",
     ),
     QuestionItem(
         question="* Do you think heart-shaped glitter bombs should be standard issue?! I do!",
         choices=[
-            ("Mandatory worldwide!", "* YES! When I rule the world, everyone gets glitter ordnance!", "laughing"),
+            ("Worldwide law!", "* YES! When I rule the world, everyone gets glitter ordnance!", "laughing"),
             ("Too much mess.", "* You can NEVER have too much glitter! It builds character!!", "tongue"),
+            ("Only on holidays.", "* A sparkling holiday tradition?! I accept this compromise!!", "peace_sign"),
         ],
         category="fun",
     ),
 
-    # Advices
+    # Health & Advices
     QuestionItem(
         question="* Hey, dummy! Have you had any water today?! Dehydrated minions are useless!",
         choices=[
-            ("Just drank some!", "* Good! Hydrated minions work with peak efficiency, mew!", "peace_sign"),
-            ("Oops, forgot...", "* GO DRINK SOME RIGHT NOW! Don't make me splash you with lasers!!", "angry"),
+            ("Hydrated!", "* Good! Hydrated minions work with peak efficiency, mew!", "peace_sign"),
+            ("Forgot...", "* GO DRINK SOME RIGHT NOW! Don't make me splash you with lasers!!", "angry"),
+            ("Only coffee.", "* Coffee is NOT water, you gremlin! Go get real water right now!! [add_fact: User fuels themselves on coffee]", "shocked"),
         ],
         category="advices",
     ),
     QuestionItem(
         question="* Check your posture right now! Sit up straight like a fierce warrior, mew!",
         choices=[
-            ("Straightened up!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
-            ("I like slouching.", "* Stop curling like a boiled shrimp! Your spine is crying for mercy!!", "shocked"),
+            ("Straightened!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
+            ("Shrimp posture.", "* Stop curling like a boiled crustacean! Your spine is screaming!!", "shocked"),
+            ("I'm a liquid.", "* Cats are liquid, humans are bone! Sit straight, dummy!", "tongue"),
         ],
         category="advices",
     ),
     QuestionItem(
         question="* Blink your eyes! Staring at the screen like a zombie will fry your retinas!",
         choices=[
-            ("Blinked three times!", "* Good! Retinas preserved for another grueling battle!", "peace_sign"),
-            ("My eyes are fine.", "* They look like dry marbles! Blink before they roll out of your skull!!", "angry"),
+            ("Blinked!", "* Good! Retinas preserved for another grueling battle!", "peace_sign"),
+            ("Can't look away.", "* They look like dry marbles! Blink before they roll out of your skull!!", "angry"),
+            ("Staring contest!", "* YOU DARE CHALLENGE ME?! ...O-ow, my cotton eyes! You win!!", "shocked"),
         ],
         category="advices",
     ),
     QuestionItem(
         question="* Have you stretched your shoulders yet?! Don't stiffen up like a wooden dummy!",
         choices=[
-            ("Just stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "laughing"),
-            ("Too stiff to move.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
+            ("All stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "laughing"),
+            ("Too stiff.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
+            ("Pop my neck!", "* CRACK?! Aahh! Don't do that, it sounds like snapping seams!!", "shocked"),
         ],
         category="advices",
     ),
@@ -1043,7 +1070,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* When was the last time you ate something healthy?! Candy doesn't count!",
         choices=[
             ("Ate a good meal!", "* Excellent! Fuel the vessel so you can fight another day!", "peace_sign"),
-            ("Surviving on snacks.", "* Junk food?! Even my plush stomach is churning in horror! Go eat!!", "shocked"),
+            ("Living on snacks.", "* Junk food?! Even my plush stomach is churning in horror! Go eat!!", "shocked"),
+            ("Ordering pizza!", "* PIZZA?! Save a slice for me! ...Wait, cotton dolls can't digest cheese, mew!", "wistful"),
         ],
         category="advices",
     ),
@@ -1051,7 +1079,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Go look away from the monitor for twenty seconds! Rest those peepers!",
         choices=[
             ("Looking away now!", "* Good! Let the distant horizon refresh your optical sensors, mew!", "wistful"),
-            ("Too glued to work!", "* The screen isn't going anywhere, dummy! Twenty seconds won't kill you!!", "tongue"),
+            ("Glued to screen.", "* The screen isn't going anywhere, dummy! Twenty seconds won't kill you!!", "tongue"),
+            ("Looking at you!", "* WH-WHAT?! S-stop staring at me! Look at a wall, idiot!!", "embarrassed"),
         ],
         category="advices",
     ),
@@ -1060,16 +1089,18 @@ QUESTION_ITEMS: list[QuestionItem] = [
         choices=[
             ("Taking breaks!", "* Smart! Rest is a tactical component of supreme victory!", "peace_sign"),
             ("Nonstop grind!", "* Burnout is for rookies! Rest five minutes or face a tactical timeout!!", "angry"),
+            ("Just micro-naps.", "* Cat naps?! A feline tactic! I approve, but don't faceplant the keyboard!", "laughing"),
         ],
         category="advices",
     ),
 
-    # Motivations
+    # Motivations & Determination
     QuestionItem(
         question="* Feeling overwhelmed?! Remember: a true magical girl NEVER surrenders!",
         choices=[
-            ("I won't give up!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "laughing"),
+            ("Never surrender!", "* That's the spirit! Let your soul burn brighter than a supernova!!", "laughing"),
             ("It's pretty tough...", "* Tough times build elite warriors! I believe in you... don't make me repeat it!!", "embarrassed"),
+            ("Unleash sparkle!", "* YES!! Overload the battlefield with pure dazzling power!!", "singing"),
         ],
         category="motivations",
     ),
@@ -1077,7 +1108,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* You're not thinking of quitting now, are you?! Not on my watch, dummy!",
         choices=[
             ("Still fighting!", "* HAW! That's the determination I expect from my number one minion!!", "laughing"),
-            ("Losing motivation...", "* Borrow some of my boiling fury then! Stand tall and finish it!!", "angry"),
+            ("Need motivation...", "* Borrow some of my boiling fury then! Stand tall and finish it!!", "angry"),
+            ("Just getting started!", "* OHO! Look at that fire in your eyes! Go obliterate that task!!", "peace_sign"),
         ],
         category="motivations",
     ),
@@ -1085,15 +1117,17 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Put some boiling fury into your work! Smash through that task like a boss!",
         choices=[
             ("Fired up now!!", "* YES!! Burn with passion and obliterate every obstacle in your path!!", "laughing"),
-            ("Need some calm.", "* Then channel cool focus! A master swordsman strikes with precision!", "wistful"),
+            ("Need calm focus.", "* Then channel cool focus! A master swordsman strikes with precision!", "wistful"),
+            ("Chaos mode on!", "* PURE CHAOS?! Now you're speaking my language! Let's cause trouble!!", "laughing"),
         ],
         category="motivations",
     ),
     QuestionItem(
         question="* Take a deep breath! You've got this... not that I'm cheering for you or anything!",
         choices=[
-            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot!!", "embarrassed"),
-            ("Needed that breath.", "* Hmph! See? A clear mind makes quick work of any enemy!", "peace_sign"),
+            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot!! [add_fact: User appreciates Pink's encouragement]", "embarrassed"),
+            ("Needed that.", "* Hmph! See? A clear mind makes quick work of any enemy!", "peace_sign"),
+            ("Breathed in fury!", "* HAH! Good! Use that fiery oxygen to torch your roadblocks!!", "laughing"),
         ],
         category="motivations",
     ),
@@ -1101,15 +1135,17 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Even if today is exhausting, you're doing great! Keep your chin up, mew!",
         choices=[
             ("Doing my best!", "* And your best is more than enough! Keep walking forward proudly!!", "peace_sign"),
-            ("Feeling exhausted.", "* Rest when you're done, champion. You've earned every bit of peace!", "wistful"),
+            ("Exhausted...", "* Rest when you're done, champion. You've earned every bit of peace!", "wistful"),
+            ("Almost at the goal!", "* Then sprint across the finish line! I'll be waving the victory flag!!", "laughing"),
         ],
         category="motivations",
     ),
     QuestionItem(
         question="* Channel your inner boss monster! Show this day who's really in charge!",
         choices=[
-            ("I am in charge!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
-            ("The day is winning.", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "laughing"),
+            ("I am the boss!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
+            ("Phase Two active!", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "laughing"),
+            ("Need a potion.", "* Chug an energy elixir then! Re-engage with maximum HP!!", "peace_sign"),
         ],
         category="motivations",
     ),
@@ -1117,73 +1153,82 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Every mistake is just training for the final battle! Keep pushing, mew!",
         choices=[
             ("Learning & growing!", "* That's how legends are born! Every setback is just XP in disguise!!", "peace_sign"),
-            ("Hate making mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "laughing"),
+            ("Hate mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "laughing"),
+            ("Level up soon!", "* YES! Ding ding! New abilities unlocked! Strike back harder!!", "singing"),
         ],
         category="motivations",
     ),
 
-    # Canon Pink Lore & Dating (from Pink_Battle_Notes)
+    # Canon Pink Lore & Dating (Undertale / Deltarune)
     QuestionItem(
         question="* Wh-what's going on!? School!? I don't... even go to school anymore... And you wanna WALK ME HOME!?",
         choices=[
-            ("Yes! Let's walk.", "* ...! Hmph! Fine, but don't you dare get any weird ideas, dearies!", "embarrassed"),
-            ("No way, walk alone.", "* HAH! Good! I can walk myself, you little grubby puppet gremlin!", "tongue"),
+            ("Yes! Let's walk.", "* ...! Hmph! Fine, but don't you dare get any weird ideas, dearies! [add_fact: User offered to walk Pink home]", "embarrassed"),
+            ("Walk alone, doll.", "* HAH! Good! I can walk myself, you little grubby puppet gremlin!", "tongue"),
+            ("Only if you fly!", "* Fly?! Ghosts float, they don't give piggyback rides, fool!", "laughing"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* It's... because you think this body's CUTE, right!? You... wish you never met me, right...?",
         choices=[
-            ("I'm glad we met!", "* Wh-WHAT?! S-stop looking deep into my eyes, idiots! Heart went funny...", "embarrassed"),
-            ("Wish I never did.", "* FOOL! You'll regret those words when I unleash a cat bomb on your desktop!", "angry"),
+            ("Glad we met!", "* Wh-WHAT?! S-stop looking deep into my eyes, idiot! Heart went funny... [add_fact: User is glad they met Pink]", "embarrassed"),
+            ("Wish I never did.", "* FOOL! You'll regret those words when I unleash a cat bomb on your head!", "angry"),
+            ("You're hilarious.", "* H-hilarious?! I am a fearsome warrior, not a stand-up comedian!!", "shocked"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* If you were getting a gift for me... what would you even pick, mew?!",
         choices=[
-            ("Stinky fish!", "* Body: PERFECTION! Rotten, smelly, and peak feline cuisine, mew!\n* Ghost: ...Gross!!", "laughing"),
-            ("A silk ribbon!", "* Ghost: Silk ribbons cost more than this PC!\n* Body: A ribbon might be nice, mew!", "peace_sign"),
+            ("Stinky fish!", "* PERFECTION! Rotten, smelly, and peak feline cuisine, mew!\n* Gross!! Keep that stench away from my cotton! [add_fact: User would gift Pink stinky fish]", "laughing"),
+            ("Silk ribbon!", "* Silk ribbons cost more than this PC!\n* A ribbon might be nice, mew! [add_fact: User would gift Pink a silk ribbon]", "peace_sign"),
+            ("Cat-head bomb!", "* YES! More ammunition for my arsenal! You have exquisite taste! [add_fact: User would gift Pink cat bombs]", "laughing"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* Date location? Where would you take an elite sensation like me?!",
         choices=[
-            ("Go to mountain!", "* Take a HIKE!! ...Wait, mountain sunsets are actually breathtaking...", "wistful"),
-            ("Fancy floral tea cafe!", "* A little floral tea will have you ticked pink! Pink! PINK!!!", "singing"),
+            ("Mountain sunset!", "* Take a HIKE!! ...Wait, mountain sunsets are actually breathtaking... [add_fact: User's ideal date with Pink is a mountain sunset]", "wistful"),
+            ("Fancy tea cafe!", "* A little floral tea will have you ticked pink! Pink! PINK!!! [add_fact: User's ideal date with Pink is a floral tea cafe]", "singing"),
+            ("Underground dump.", "* The DUMP?! Are you taking me to visit my cousin in the garbage?! RUDE!!", "angry"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* If I became something I loved... wouldn't that fix everything? Or am I just puppeting this doll...?",
         choices=[
-            ("Love us both.", "* Love... us both? ...Hmph. Don't go saying cheesy lines to make a ghost cry.", "wistful"),
-            ("You're a sensation!", "* Ghost: Obviously! I've got friends, enemies, neutrals!\n* Body: And a Doki-meter, mew!", "peace_sign"),
+            ("Love us both.", "* Love... us both? ...Hmph. Don't go saying cheesy lines to make a ghost cry. [add_fact: User cares for both the doll vessel and ghost spirit]", "wistful"),
+            ("You're a sensation!", "* Obviously! I've got friends, enemies, neutrals!\n* And a Doki-meter, mew!", "peace_sign"),
+            ("You are you.", "* ...I am me, huh? Simple answers for complicated spirits. Thank you.", "wistful"),
         ],
         category="dating",
     ),
     QuestionItem(
         question="* I want to eat sand on the beach with you, mew!",
         choices=[
-            ("Let's go eat sand!", "* Body: Mew!! Let's go!\n* Ghost: NO!! Stop encouraging her to eat silica, you fool!!", "shocked"),
-            ("Sand is inedible.", "* Body: Aww, mew...\n* Ghost: Exactly! What that body wants is STUPID!", "laughing"),
+            ("Let's eat sand!", "* Mew!! Let's go!\n* NO!! Stop encouraging her to eat silica, you fool!!", "shocked"),
+            ("Sand is inedible.", "* Aww, mew...\n* Exactly! What that body wants is STUPID!", "laughing"),
+            ("Bring salt & pepper.", "* SALT ON SAND?! You two are both completely out of your minds!!", "angry"),
         ],
         category="lore",
     ),
     QuestionItem(
         question="* Have you ever had ears before? Cute and fluffy ears? ...You should try it.",
         choices=[
-            ("Nod in agreement.", "* Yes, you're nodding! Obviously you agree! Obviously!", "peace_sign"),
-            ("Sounds like a hassle.", "* Hmph! Uncultured! Fluffy cat ears are the pinnacle of fashion!", "tongue"),
+            ("Nod in agreement.", "* Yes, you're nodding! Obviously you agree! Obviously! [add_fact: User appreciates fluffy cat ears]", "peace_sign"),
+            ("Sounds like hassle.", "* Hmph! Uncultured! Fluffy cat ears are the pinnacle of fashion!", "tongue"),
+            ("Get me some ears!", "* OHO! A convert to the feline order! Welcome aboard, mew!!", "laughing"),
         ],
         category="lore",
     ),
     QuestionItem(
         question="* Hey... be honest. If someone tried to rip my doll seams or throw me away, what would you do?!",
         choices=[
-            ("I'd protect you both!", "* Ghost: ...Hmph! As if an amateur like you could fight! ...B-but thanks, idiot.\n* Body: We're safe with you, mew!", "embarrassed"),
-            ("It's just cotton.", "* Ghost: Touch a single stitch on this doll and I will haunt you across dimensions!!\n* Body: Eek, mew!", "angry"),
+            ("Protect you both!", "* ...Hmph! As if an amateur like you could fight! ...B-but thanks, idiot.\n* We're safe with you, mew! [add_fact: User promised to protect Pink's seams and ghost spirit]", "embarrassed"),
+            ("It's just cotton.", "* Touch a single stitch on this doll and I will haunt you across dimensions!!\n* Eek, mew!", "angry"),
+            ("Armor-stitch seams!", "* Armor-reinforced plush seams?! I would be INDESTRUCTIBLE!!", "laughing"),
         ],
         category="lore",
     ),
@@ -1228,7 +1273,6 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     # Tongue
     "tongue": [
         "* :P",
-        "* Mew! :P",
     ],
     # Kneeling
     "kneeling": [
@@ -2305,6 +2349,11 @@ class DialogueOverlay(QWidget):
         if not self._skippable or not self._active:
             event.accept()
             return
+        if event.button() == Qt.RightButton:
+            # Right-click dismisses dialogue overlay immediately (including active questions)
+            self.dismiss(clear_queue=True)
+            event.accept()
+            return
         if event.button() == Qt.LeftButton:
             if self._visible_chars < self._total_chars:
                 self.advance_or_dismiss()
@@ -2974,7 +3023,7 @@ class MemoryManager:
             self.prune_empty_sessions()
             if not self.facts_path.exists():
                 default_facts = {
-                    "user_name": "Dork",
+                    "user_name": "Minion",
                     "notes": [],
                 }
                 self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
@@ -3308,11 +3357,15 @@ class MemoryManager:
         if had_screen and seen and user_text.startswith("[Pink peeks"):
             display_user = f"[Pink peeks at your screen — Saw: {seen}]"
 
+        # Clean any raw [anim: ...] or [mode: ...] tags from recorded Pink response
+        clean_pink = re.sub(r"\[anim:\s*[^\\\]]+\]", "", pink_response)
+        clean_pink = re.sub(r"\[mode:\s*[^\\\]]+\]", "", clean_pink).strip()
+
         turn = {
             "timestamp": datetime.datetime.now().isoformat(),
             "status": "ok",
             "user": display_user,
-            "pink": pink_response,
+            "pink": clean_pink,
             "anim": anim,
             "had_screen": had_screen,
         }
@@ -3393,6 +3446,9 @@ class MemoryManager:
             clean_text = str(text.text).strip()
         else:
             clean_text = str(text).strip()
+
+        clean_text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", clean_text)
+        clean_text = re.sub(r"\[mode:\s*[^\\\]]+\]", "", clean_text).strip()
 
         if extra_lines:
             clean_extras = []
@@ -4076,6 +4132,19 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[:anim_match.start()] + l[anim_match.end():]
 
+        # Strip explicit role prefixes like "* Body:" or "* Ghost:" if present
+        body_prefix = re.match(r"^\*?\s*(?:body|doll)\s*:\s*", l, re.IGNORECASE)
+        if body_prefix:
+            line_ghost = False
+            l = l[body_prefix.end():]
+
+        ghost_prefix = re.match(r"^\*?\s*(?:ghost|spirit)\s*:\s*", l, re.IGNORECASE)
+        if ghost_prefix:
+            line_ghost = True
+            if not line_anim:
+                line_anim = "angry"
+            l = l[ghost_prefix.end():]
+
         l = re.sub(r"\[(?:seen|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
@@ -4102,8 +4171,8 @@ def split_dual_dialogue(
         t = line_dict["text"].lower()
         return bool(re.search(r"^\*\s*(hmph|fool|shut up|grrr|w-what|hey!|hands off|as if)", t) or any(k in t for k in ["minion", "dummy", "gremlin", "boiling rage", "spectral", "haunt", "recycle bin"]))
 
-    has_doll = any(_is_doll(p) for p in parsed_lines)
-    has_ghost = any(_is_ghost(p) for p in parsed_lines)
+    has_doll = any(_is_doll(p) or p.get("is_ghost") is False for p in parsed_lines)
+    has_ghost = any(_is_ghost(p) or p.get("is_ghost") is True for p in parsed_lines)
     has_distinct_anims = len({p["anim"] for p in parsed_lines if p["anim"]}) > 1
 
     if (has_doll and has_ghost) or has_distinct_anims:
@@ -5252,6 +5321,7 @@ class MediaWatcher(QThread):
         self._last_track_id: tuple[str, str] = ("", "")
         self._last_playing = False
         self._filter_shorts = filter_shorts
+        self._current_duration_s: float = 0.0
 
     def set_filter_shorts(self, enabled: bool) -> None:
         self._filter_shorts = enabled
@@ -5282,37 +5352,46 @@ class MediaWatcher(QThread):
             try:
                 sess = mgr.get_current_session()
                 if sess is None:
-                    return None, False, False
+                    return None, False, False, 0.0
                 pb = sess.get_playback_info()
                 is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
                 if not is_playing:
-                    return None, False, False
+                    return None, False, False, 0.0
                 props = await sess.try_get_media_properties_async()
                 if props is None:
-                    return None, False, False
+                    return None, False, False, 0.0
                 title = props.title.strip() if props.title else ""
                 artist = props.artist.strip() if props.artist else ""
 
                 is_short = False
-                if getattr(self, "_filter_shorts", True) and title:
-                    if is_shorts_track(title, artist):
+                dur_s = 0.0
+                try:
+                    tl = sess.get_timeline_properties()
+                    if tl and getattr(tl, "end_time", None) is not None:
+                        dur_s = tl.end_time.total_seconds()
+                except Exception as e:
+                    log.debug("GSMTC timeline check error: %s", e)
+
+                if title:
+                    # Ignore tracks under SONG_MIN_DURATION_S (e.g. short clips, notification chimes, sound effects)
+                    if 0.0 < dur_s < SONG_MIN_DURATION_S:
                         is_short = True
-                    else:
-                        try:
-                            source_id = (sess.source_app_user_model_id or "").lower()
-                            if any(b in source_id for b in BROWSER_APP_IDS):
-                                tl = sess.get_timeline_properties()
-                                if tl and getattr(tl, "end_time", None) is not None:
-                                    dur_s = tl.end_time.total_seconds()
+                    elif getattr(self, "_filter_shorts", True):
+                        if is_shorts_track(title, artist):
+                            is_short = True
+                        else:
+                            try:
+                                source_id = (sess.source_app_user_model_id or "").lower()
+                                if any(b in source_id for b in BROWSER_APP_IDS):
                                     if 0.0 < dur_s <= SHORTS_MAX_DURATION_S:
                                         is_short = True
-                        except Exception as e:
-                            log.debug("GSMTC timeline check error: %s", e)
+                            except Exception as e:
+                                log.debug("GSMTC source_id check error: %s", e)
 
-                return (title, artist), True, is_short
+                return (title, artist), True, is_short, dur_s
             except Exception as ex:
                 log.debug("GSMTC poll error: %s", ex)
-                return None, False, False
+                return None, False, False, 0.0
 
         try:
             mgr = loop.run_until_complete(_get_manager())
@@ -5322,12 +5401,15 @@ class MediaWatcher(QThread):
                     mgr = loop.run_until_complete(_get_manager())
                     continue
 
-                track, is_playing, is_short = loop.run_until_complete(_check_session(mgr))
+                track, is_playing, is_short, dur_s = loop.run_until_complete(_check_session(mgr))
+                self._current_duration_s = dur_s
                 if is_playing and track and track[0]:
                     if is_short:
                         if track != self._last_track_id:
                             self._last_track_id = track
-                            log.info("Ignoring YouTube Short / reel playback: '%s' by '%s'", track[0], track[1] or "Unknown")
+                            min_threshold = SONG_MIN_DURATION_S if (0.0 < dur_s < SONG_MIN_DURATION_S) else SHORTS_MAX_DURATION_S
+                            log.info("Ignoring short audio / track playback (<%.0fs): '%s' by '%s' (duration: %.1fs)",
+                                     min_threshold, track[0], track[1] or "Unknown", dur_s)
                         self._last_playing = True
                     else:
                         if track != self._last_track_id:
@@ -5435,6 +5517,14 @@ class YellowsPixelBuddies(QWidget):
         self._is_handling_user_chat: bool = False
         self._question_thread: GeminiQuestionWorkerThread | None = None
         self._current_song: tuple[str, str] | None = None
+        self._recent_question_texts: list[str] = []
+        self._recent_reminder_highlights: list[str] = []
+        self._hidden_in_tray: bool = False
+        self._tray_hidden_at: float = 0.0
+        self._tray_observations: list[dict] = []
+        self._tray_screen_timer: QTimer = QTimer(self)
+        self._tray_screen_timer.setInterval(TRAY_SCREEN_READ_INTERVAL_MS)
+        self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
 
         # --- media watcher (song detection) ------------------------------------
         self._media_watcher: MediaWatcher | None = None
@@ -5710,6 +5800,8 @@ class YellowsPixelBuddies(QWidget):
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
+        if getattr(self, "_hidden_in_tray", False):
+            return
         if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                               Phase.SUMMON_INTRO, Phase.EXIT_OUTRO)
@@ -5857,7 +5949,12 @@ class YellowsPixelBuddies(QWidget):
         if reaction_anim and self._can_play(reaction_anim):
             self._play(reaction_anim)
         self._keep_response_anim = True
-        if hasattr(self, "_memory"):
+        if hasattr(self, "_memory") and self._memory:
+            # Extract any permanent facts embedded in the reaction
+            for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                f_val = m.group(1).strip()
+                if f_val:
+                    self._memory.add_fact(f_val)
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -5918,13 +6015,35 @@ class YellowsPixelBuddies(QWidget):
         """Pick an active, specific memory or context detail to center the question around."""
         if getattr(self, "_current_song", None) and self._current_song[0]:
             title, artist = self._current_song
-            return f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. If you know this song, ask what they think of its actual content, lyrics, vibe, or internet reputation/memes, or tease their taste in music!"
+            return (
+                f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. "
+                f"If you know this song, ask what they think of its actual content, lyrics, vibe, or internet reputation/memes, or tease their taste in music!"
+            )
+
+        if not hasattr(self, "_recent_reminder_highlights"):
+            self._recent_reminder_highlights = []
 
         reminders = self._memory.get_active_reminders() if hasattr(self._memory, "get_active_reminders") else []
         if reminders:
-            chosen_r = random.choice(reminders)
+            fresh_reminders = [
+                r for r in reminders
+                if r.get("id") not in self._recent_reminder_highlights and r.get("text") not in self._recent_reminder_highlights
+            ]
+            chosen_r = random.choice(fresh_reminders if fresh_reminders else reminders)
             r_text = chosen_r.get("text", "")
-            return f"Active to-do/reminder: '{r_text}'. Ask if they completed it yet, or tease them for slacking!"
+            r_id = chosen_r.get("id", "")
+            if r_id:
+                self._recent_reminder_highlights.append(r_id)
+            elif r_text:
+                self._recent_reminder_highlights.append(r_text)
+            if len(self._recent_reminder_highlights) > 5:
+                self._recent_reminder_highlights.pop(0)
+
+            return (
+                f"Active to-do/reminder: '{r_text}'. "
+                f"Situational guidance: If the user is currently busy with high-priority work (like competition slides, exams, or urgent coding), "
+                f"do NOT badger or nag them to drop their work. Instead, ask if they want to push it to later, make a light joke, or ask how their current priority compares!"
+            )
 
         facts_str = self._memory.get_long_term_facts() if hasattr(self._memory, "get_long_term_facts") else ""
         if facts_str:
@@ -5953,9 +6072,27 @@ class YellowsPixelBuddies(QWidget):
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
 
+        # Feed ongoing conversation history from the active session so Pink has situational awareness
+        active_session_turns = []
+        if hasattr(self, "_memory") and hasattr(self._memory, "history") and self._memory.history:
+            for turn in self._memory.history[-12:]:
+                u_txt = turn.get("user", "")
+                p_txt = turn.get("pink", "")
+                if u_txt.startswith("[Pink asked:"):
+                    active_session_turns.append(f"{u_txt}\nPink reaction: {p_txt}")
+                elif not u_txt.startswith("["):
+                    active_session_turns.append(f"User: {u_txt}\nPink: {p_txt}")
+                elif u_txt.startswith("[Pink peeks") and turn.get("seen"):
+                    active_session_turns.append(f"[Observation: User was seen with {turn['seen']}]")
+                elif u_txt.startswith("[Music played:"):
+                    active_session_turns.append(f"{u_txt}\nPink: {p_txt}")
+
+        if active_session_turns:
+            system_inst += f"\n\nCURRENT ONGOING SESSION CONVERSATION & USER STATUS (CRITICAL CONTEXT):\n" + "\n---\n".join(active_session_turns)
+
         recent_history, _ = self._memory.get_recent_sessions_overview(max_days=2, max_sessions=4)
         if recent_history:
-            system_inst += f"\n\nRECENT PAST CONVERSATION LOGS:\n{recent_history}"
+            system_inst += f"\n\nPAST SESSION ARCHIVES:\n{recent_history}"
 
         ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
         if ambient_ctx:
@@ -5965,6 +6102,25 @@ class YellowsPixelBuddies(QWidget):
             title, artist = self._current_song
             system_inst += f"\n\nCURRENTLY PLAYING MUSIC TRACK:\n\"{title}\" by \"{artist or 'Unknown'}\""
 
+        # Pass recently asked questions to enforce non-repetition
+        recent_qs = getattr(self, "_recent_question_texts", [])
+        if recent_qs:
+            system_inst += (
+                "\n\nQUESTIONS ALREADY ASKED RECENTLY IN THIS SESSION (STRICTLY FORBIDDEN TO REPEAT OR REPHRASE):\n"
+                + "\n".join(f"- {q}" for q in recent_qs[-6:])
+            )
+
+        system_inst += (
+            "\n\nSITUATIONAL AWARENESS & REPETITION RULES:\n"
+            "1. RESPECT USER PRIORITIES: If the user recently stated in chat what they are working on, why they are busy "
+            "(e.g. grinding for finals, competition, presentation slides, urgent project, working till morning), "
+            "or that tasks are paused: DO NOT ask them 'what are you doing' or 'are you making a presentation?' and DO NOT "
+            "demand they explain that app. And DO NOT nag them about uncompleted reminders! Instead, cheer them on, ask how a "
+            "specific part/slide is going, tease their lack of sleep, or offer mischievous encouragement.\n"
+            "2. DO NOT REPEAT QUESTIONS: Never ask the same question, suggest the same choices, or repeat recent themes "
+            "(like cat bombs or repeatedly asking about the same app/task).\n"
+        )
+
         format_spec = (
             "\n\nCRITICAL OUTPUT FORMAT REQUIREMENTS:\n"
             "You MUST output a valid JSON object matching this exact schema:\n"
@@ -5972,20 +6128,25 @@ class YellowsPixelBuddies(QWidget):
             '  "question": "* ... (in-character question, starting with \'* \', max 20 words)",\n'
             '  "choices": [\n'
             "    {\n"
-            '      "label": "Short option button text (1-4 words)",\n'
-            '      "reaction": "* Pink\'s in-character reaction if user clicks this choice (starts with \'* \', 10-25 words)",\n'
+            '      "label": "Punchy button text (1-3 words)",\n'
+            '      "reaction": "* Pink\'s in-character reaction (starts with \'* \', 10-25 words)",\n'
             '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
             "    },\n"
             "    {\n"
-            '      "label": "Short option button text (1-4 words)",\n'
-            '      "reaction": "* Pink\'s in-character reaction if user clicks this choice (starts with \'* \', 10-25 words)",\n'
+            '      "label": "Punchy button text (1-3 words)",\n'
+            '      "reaction": "* Pink\'s in-character reaction (starts with \'* \', 10-25 words)",\n'
             '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
             "    }\n"
             "  ]\n"
             "}\n"
             "RULES:\n"
-            "- Exactly 2 choices (option 1 and option 2).\n"
-            "- Both choices should be natural, fun responses for the player.\n"
+            "- Provide 2 or 3 choices (maximum 3).\n"
+            "- Button labels MUST be punchy and short (1-3 words) to fit the retro speech box (e.g. 'Working hard!', 'Need snacks', 'Silence, doll').\n"
+            "- DELTARUNE / UNDERTALE CHOICE ENERGY:\n"
+            "  * Avoid boring binary 'good student vs bad slacker' questionnaire choices.\n"
+            "  * Make choices witty and varied: one enthusiastic/play-along, one sarcastic pushback/defiance, and optionally one quirky/absurd Toby Fox choice.\n"
+            "  * Never give patronizing lectures or guilt trips about productivity or health.\n"
+            "- PERSISTENT FACTS: If an option reveals a clear user preference, habit, or nickname, append [add_fact: User prefers ...] to that option's reaction so Pink remembers it permanently!\n"
             "- Question must start with '* '.\n"
             "- Each reaction must start with '* ' and include a valid anim from the list above.\n"
             "- Keep wording concise so it fits comfortably in the Undertale-style speech box.\n"
@@ -5998,8 +6159,9 @@ class YellowsPixelBuddies(QWidget):
                 "[Interactive Question from Screen Observation]\n"
                 "Pink is peeking over her shoulder at the user's desktop screen right now.\n"
                 "Carefully inspect what the user is actively doing on screen (open applications, IDE/code, browser tabs, media, game, documents, or desktop clutter).\n"
-                "Ask an interactive question DIRECTLY about what you see on their screen! "
-                "Tease them, ask what they're working on or watching, roast their open windows or clutter, or demand an explanation."
+                "Ask an interactive question DIRECTLY related to what you see on screen.\n"
+                "IMPORTANT: If the user ALREADY explained what they are doing with this application (e.g. they already said they're working on competition slides in Canva), "
+                "DO NOT ask 'what are you doing' or 'are you making a presentation'. Instead, ask about a specific detail you notice on screen (slide layout, color choices, specific numbers, a typo, a cool diagram), cheer them on, or playfully rate their progress!"
             )
         elif source == "memory":
             highlight = self._get_best_memory_highlight()
@@ -6012,9 +6174,14 @@ class YellowsPixelBuddies(QWidget):
         else:
             user_prompt = (
                 "[Interactive Question from Doll/Ghost Persona]\n"
-                "Pink is strolling or resting on the taskbar and asking a spontaneous, whimsical question!\n"
-                "Themes: declaring herself ruler of the desktop, asking what they'd do if a cat bomb landed near their mouse, doll vessel oddities, dark world secrets, or funny human-vs-doll dilemmas.\n"
-                "Ask an interactive question that invites the user to play along!"
+                "Pink is strolling or resting on the taskbar and asking a spontaneous, whimsical, completely fresh question!\n"
+                "Inspirations (pick something surprising and new every time, NEVER repeat a recent theme):\n"
+                "- Playful doll philosophy (what it feels like being trapped in a pixel vessel)\n"
+                "- Dark world secrets, magic spells, or imaginary pixel kingdom decrees\n"
+                "- Funny human dilemmas (coffee vs sleep, snack heists, weird keyboard habits)\n"
+                "- Desktop territory claims (declaring your taskbar, mousepad, or wallpaper her royal empire)\n"
+                "- Silly 'what-if' or would-you-rather scenarios fitting Toby Fox style humor\n"
+                "Invent a UNIQUE scenario that you haven't asked before!"
             )
 
         return system_inst, user_prompt
@@ -6022,6 +6189,8 @@ class YellowsPixelBuddies(QWidget):
     def _trigger_ai_question(self, forced_source: str | None = None) -> bool:
         """Trigger an AI-generated interactive question from screen, memory, or doll personality."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
+            return False
+        if getattr(self, "_hidden_in_tray", False):
             return False
 
         api_key = self._memory.get_api_key()
@@ -6101,6 +6270,11 @@ class YellowsPixelBuddies(QWidget):
 
         self._last_question_item = q_item
         self._last_dialogue = q_item.question
+        if not hasattr(self, "_recent_question_texts"):
+            self._recent_question_texts = []
+        self._recent_question_texts.append(q_item.question)
+        if len(self._recent_question_texts) > 8:
+            self._recent_question_texts.pop(0)
 
         if hasattr(self, "_memory"):
             options_preview = [c[0] for c in q_item.choices]
@@ -6133,6 +6307,11 @@ class YellowsPixelBuddies(QWidget):
             q_item = random.choice(candidates if candidates else QUESTION_ITEMS)
             self._last_question_item = q_item
             self._last_dialogue = q_item.question
+            if not hasattr(self, "_recent_question_texts"):
+                self._recent_question_texts = []
+            self._recent_question_texts.append(q_item.question)
+            if len(self._recent_question_texts) > 8:
+                self._recent_question_texts.pop(0)
             if hasattr(self, "_memory"):
                 options_preview = [c[0] for c in q_item.choices]
                 self._memory.record_ambient_dialogue(
@@ -6229,6 +6408,12 @@ class YellowsPixelBuddies(QWidget):
             clean_title = pending_data[2] if len(pending_data) > 2 else ""
             clean_artist = pending_data[3] if len(pending_data) > 3 else ""
             skip_count = pending_data[4] if len(pending_data) > 4 else 0
+
+            # If playback already ended while user was chatting, drop the announcement
+            if self._current_song is None or self._current_song[0] != clean_title:
+                log.info("Deferred song '%s' is no longer playing; dropping announcement.", clean_title)
+                return
+
             self._say(line, force=True, extra_queue=extra, dialogue_category=("toby_fox_familiar" if extra else "song_detection"))
             if clean_title and skip_count < SONG_SKIP_STRESS_THRESHOLD and getattr(self, "_ai_song_comment_enabled", True) and self._memory.get_api_key():
                 self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=skip_count)
@@ -6339,6 +6524,9 @@ class YellowsPixelBuddies(QWidget):
             else:
                 reply = "* Format: /edit_reminder <number> <new text>, minion!"
             self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/hide_tray", "/tray", "/hide_to_tray", "/minimize_tray"):
+            self._hide_to_tray()
             return
         elif lower_input in ("/clear_reminders", "/clear_todos"):
             count = self._memory.clear_all_reminders()
@@ -6620,6 +6808,8 @@ class YellowsPixelBuddies(QWidget):
         """Periodically check if Pink should spontaneously inspect the user's screen and comment."""
         if not AUTO_SCREEN_COMMENT_ENABLED:
             return
+        if getattr(self, "_hidden_in_tray", False):
+            return
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -6898,19 +7088,42 @@ class YellowsPixelBuddies(QWidget):
 
     def _on_song_ended(self) -> None:
         """Clear currently playing song track state upon playback stop/end."""
+        now = time.perf_counter()
+        elapsed = now - getattr(self, "_last_song_start_time", 0.0)
+        if elapsed < SONG_MIN_DURATION_S:
+            log.info("Song stopped before %ss (played for %.1fs): cancelled pending commentary for '%s'",
+                     SONG_MIN_DURATION_S, elapsed, getattr(self, "_ai_comment_target_song", ""))
+            self._cancel_previous_song_loading()
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                loading_texts = ("* ...", "* ...?", "* ...?! (Wait, make up your mind!)")
+                if getattr(self._dialogue_overlay, "_full_text", "") in loading_texts:
+                    self._dialogue_overlay.dismiss(clear_queue=True)
         self._current_song = None
 
-    def _on_song_started(self, title: str, artist: str) -> None:
+    def _on_song_started(self, title: str, artist: str, duration_s: float = 0.0) -> None:
         """React to newly started music playback via Windows GSMTC."""
+        clean_title = title.strip()
+        clean_artist = artist.strip()
+        if not clean_title:
+            return
+
+        # Check track duration against minimum threshold (< 20 seconds)
+        dur_s = duration_s
+        if dur_s <= 0.0 and hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            dur_s = getattr(self._media_watcher, "_current_duration_s", 0.0)
+        if 0.0 < dur_s < SONG_MIN_DURATION_S:
+            log.info("Ignoring track under %ss in _on_song_started: '%s' by '%s' (duration: %.1fs)",
+                     SONG_MIN_DURATION_S, clean_title, clean_artist or "Unknown", dur_s)
+            return
+
+        if getattr(self, "_hidden_in_tray", False):
+            self._current_song = (clean_title, clean_artist)
+            return
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
-            return
-        clean_title = title.strip()
-        clean_artist = artist.strip()
-        if not clean_title:
             return
 
         self._current_song = (clean_title, clean_artist)
@@ -6932,7 +7145,7 @@ class YellowsPixelBuddies(QWidget):
         else:
             self._song_skip_count = 0
 
-        log.info("Song started: '%s' by '%s' (skip count: %d)", clean_title, clean_artist or "Unknown", self._song_skip_count)
+        log.info("Song started: '%s' by '%s' (duration: %.1fs, skip count: %d)", clean_title, clean_artist or "Unknown", dur_s, self._song_skip_count)
 
         # Format title & artist to fit neatly in dialogue bubble
         display_title = clean_title if len(clean_title) <= 50 else clean_title[:47] + "..."
@@ -6989,8 +7202,12 @@ class YellowsPixelBuddies(QWidget):
         if ai_enabled:
             self._trigger_ai_song_comment(clean_title, clean_artist, skip_count=self._song_skip_count)
 
-    def _trigger_ai_song_comment(self, title: str, artist: str, skip_count: int = 0) -> None:
+    def _trigger_ai_song_comment(self, title: str, artist: str, skip_count: int = 0, duration_s: float = 0.0, **kwargs) -> None:
         """Trigger an autonomous Gemini AI reaction/commentary on the newly started song, focusing on the title."""
+        dur = duration_s or (getattr(self._media_watcher, "_current_duration_s", 0.0) if hasattr(self, "_media_watcher") and self._media_watcher else 0.0)
+        if 0.0 < dur < SONG_MIN_DURATION_S:
+            log.info("Song duration %.1fs is under %ss; skipping AI commentary.", dur, SONG_MIN_DURATION_S)
+            return
         if not getattr(self, "_ai_song_comment_enabled", True):
             return
         api_key = self._memory.get_api_key()
@@ -7088,6 +7305,23 @@ class YellowsPixelBuddies(QWidget):
         if target_song and target_song != getattr(self, "_ai_comment_target_song", ""):
             log.info("Discarding stale AI song comment for '%s' (active song is '%s')",
                      target_song, getattr(self, "_ai_comment_target_song", ""))
+            return
+
+        # Check if duration of the target song is under the minimum threshold
+        dur_s = 0.0
+        if hasattr(self, "_media_watcher") and self._media_watcher is not None:
+            dur_s = getattr(self._media_watcher, "_current_duration_s", 0.0)
+        if 0.0 < dur_s < SONG_MIN_DURATION_S:
+            log.info("Discarding AI song comment for '%s': track duration %.1fs is under %ss",
+                     target_song, dur_s, SONG_MIN_DURATION_S)
+            return
+
+        # Check if playback stopped prematurely before reaching the minimum duration
+        now = time.perf_counter()
+        elapsed = now - getattr(self, "_last_song_start_time", 0.0)
+        if self._current_song is None and elapsed < SONG_MIN_DURATION_S:
+            log.info("Discarding AI song comment for '%s': playback stopped after only %.1fs (<%ss)",
+                     target_song, elapsed, SONG_MIN_DURATION_S)
             return
 
         if hasattr(self, "_chat_input") and self._chat_input.isVisible():
@@ -7540,6 +7774,8 @@ class YellowsPixelBuddies(QWidget):
         self._last_tick = now
         cursor = QCursor.pos()                      # THE cursor sample of this tick (no extra timer)
         self._track_cursor(cursor, now, real_dt)
+        if getattr(self, "_hidden_in_tray", False):
+            return
         if getattr(self, "_is_ghost_talking", False):
             self.update()
         if self._dragging:                          # held by the mouse: stand still
@@ -7744,6 +7980,223 @@ class YellowsPixelBuddies(QWidget):
 
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
         self._pause_elapsed = False
+
+    # ---------------------------------------------------- hide to tray & background screen reading
+    def _toggle_hide_to_tray(self) -> None:
+        """Toggle hiding Pink in the system tray vs restoring her to the screen."""
+        if getattr(self, "_hidden_in_tray", False):
+            self._restore_from_tray()
+        else:
+            self._hide_to_tray()
+
+    def _hide_to_tray(self) -> None:
+        """Hide Pink completely from the screen into the system tray.
+        While hidden, she remains invisible on screen but reads the screen every 5 minutes
+        to maintain context and keep the session active. She can only be brought back
+        to the screen via the system tray icon.
+        """
+        if getattr(self, "_hidden_in_tray", False):
+            return
+
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.cancel()
+        if hasattr(self, "_vfx_overlay"):
+            self._stop_overlay()
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay.close()
+
+        self._brain_timer.stop()
+        self._reset_jump_state()
+        self._interrupted_state = None
+        self._in_angry_spam = False
+        self._click_times.clear()
+        self._dragging = False
+        self._press_global = None
+
+        self._hidden_in_tray = True
+        self._tray_hidden_at = time.time()
+        self._tray_observations = []
+        self.hide()
+
+        # Update tray actions
+        if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
+            self._hide_tray_action.setText("Restore Pink from Tray \U0001f4e4")
+        if hasattr(self, "_bring_action") and self._bring_action is not None:
+            self._bring_action.setText("Restore Pink from Tray \U0001f4e4")
+
+        # Show brief balloon message from tray
+        if hasattr(self, "_tray_icon") and self._tray_icon is not None and self._tray_icon.isVisible():
+            self._tray_icon.showMessage(
+                "Pink is watching from the tray!",
+                "She's invisible on screen, but reading your screen every 5 minutes to keep context. Click the tray icon to bring her back!",
+                QIcon(str(ICON_PATH)) if ICON_PATH.exists() else self.windowIcon(),
+                3500,
+            )
+
+        # Start 5-minute background screen reading timer
+        if not hasattr(self, "_tray_screen_timer"):
+            self._tray_screen_timer = QTimer(self)
+            self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
+        self._tray_screen_timer.setInterval(TRAY_SCREEN_READ_INTERVAL_MS)
+        self._tray_screen_timer.start()
+
+        log.info("Pink hidden to system tray; 5-minute background screen reading active.")
+
+    def _restore_from_tray(self) -> None:
+        """Restore Pink from the system tray back onto the primary taskbar."""
+        if not getattr(self, "_hidden_in_tray", False):
+            return
+
+        if hasattr(self, "_tray_screen_timer") and self._tray_screen_timer.isActive():
+            self._tray_screen_timer.stop()
+
+        self._hidden_in_tray = False
+
+        bounds = self._bounds()
+        min_x, max_x, _min_y, ground_y = bounds
+        self._x = float((min_x + max_x) // 2)
+        self._y = float(ground_y)
+        self._vy = 0.0
+        self._vx = 0.0
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+
+        self._sync_window_position()
+        self.show()
+        ensure_window_topmost(self)
+        self._play("peace_sign")
+
+        if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
+            self._hide_tray_action.setText("Hide to Tray \U0001f4e5")
+        if hasattr(self, "_bring_action") and self._bring_action is not None:
+            self._bring_action.setText("Bring to Taskbar")
+
+        # Contextual return line acknowledging what Pink saw while in tray
+        obs = getattr(self, "_tray_observations", [])
+        if obs:
+            last_obs = obs[-1]
+            clean_seen = last_obs.get("seen", "").strip()
+            if clean_seen:
+                greeting = f"* Oho! Summoned me back from the tray, minion?\n* While I was hidden, I saw you working on {clean_seen}, mew!"
+            else:
+                greeting = "* Peekaboo! I was keeping watch from the system tray the whole time, mew!"
+        else:
+            greeting = "* Peekaboo! Did you miss my charming presence on your taskbar already, mew?"
+
+        self._say(greeting, force=True, record_memory=True, step_anim="peace_sign")
+        self._tray_observations = []
+
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        log.info("Pink restored to screen from system tray.")
+
+    def _read_screen_while_in_tray(self) -> None:
+        """Periodic 5-minute screen reading while Pink is hidden in tray to maintain active session and context."""
+        if not getattr(self, "_hidden_in_tray", False):
+            return
+
+        api_key = self._memory.get_api_key()
+        if not api_key:
+            return
+
+        if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
+            return
+
+        if is_workstation_locked() or get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
+            log.info("Tray screen reading skipped: workstation locked or user away.")
+            return
+
+        screenshot_b64 = None
+        current_fp = b""
+        try:
+            screenshot_b64, current_fp = capture_screen_and_fingerprint()
+            if not screenshot_b64:
+                return
+        except Exception as err:
+            log.warning("Tray screen capture failed: %s", err)
+            return
+
+        if self._last_screen_fingerprint is not None and current_fp:
+            diff = compute_fingerprint_diff(self._last_screen_fingerprint, current_fp)
+            if diff < AUTO_SCREEN_DIFF_THRESHOLD:
+                log.info("Tray screen reading skipped: screen visual delta too small (diff=%.3f)", diff)
+                return
+
+        self._last_screen_fingerprint = current_fp
+
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+
+        facts = self._memory.get_long_term_facts()
+        if facts:
+            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        reminders = self._memory.get_reminders_prompt()
+        if reminders:
+            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
+
+        candidate_directive = (
+            "[STRUCTURAL DIRECTIVE: TRAY BACKGROUND SCREEN OBSERVATION]\n"
+            "Pink is quietly keeping watch from the system tray while remaining invisible on screen.\n"
+            "Observe what is clearly visible on the user's screen right now.\n"
+            "REQUIRED FORMAT:\n"
+            "- 1 to 2 short lines starting with '* '.\n"
+            "- Emotion tag: [anim: laughing|peace_sign|behind|wistful|shocked|angry]\n"
+            "- Visual Memory Tag: [seen: 3-8 words describing open windows, apps, or activities on screen]\n"
+            "Only comment on what is clearly visible on screen."
+        )
+        system_inst += f"\n\n{candidate_directive}"
+
+        prompt_label = "[Pink peeks at your screen while hidden in tray]"
+        tray_prompt = (
+            "[Background Tray Observation: Pink inspects the desktop screen from the system tray.]\n"
+            "Carefully observe what the user is actively working on or viewing. Describe it concisely with [seen: ...] tag."
+        )
+
+        self._gemini_thread = GeminiWorkerThread(
+            api_key=api_key,
+            user_prompt=tray_prompt,
+            system_instruction=system_inst,
+            history=self._memory.history,
+            screenshot_b64=screenshot_b64,
+            model_name=GEMINI_MODEL,
+            is_auto_peek=True,
+            parent=self,
+        )
+        self._gemini_thread.response_ready.connect(
+            lambda spoken_text, anim, is_ghost, seen="", u=prompt_label: self._on_tray_gemini_response(u, spoken_text, anim, seen)
+        )
+        self._gemini_thread.error_occurred.connect(
+            lambda err_msg: log.info("Tray screen reading Gemini error: %s", err_msg)
+        )
+        self._gemini_thread.start()
+        log.info("Triggered 5-minute background screen reading while in system tray...")
+
+    def _on_tray_gemini_response(self, user_label: str, spoken_text: str, anim: str, seen: str = "") -> None:
+        """Record tray background screen observation into session history without opening any UI on screen."""
+        if not spoken_text or not spoken_text.strip():
+            return
+
+        self._memory.record_turn(user_label, spoken_text, anim, had_screen=True, seen=seen)
+        self._memory.record_ambient_dialogue(
+            spoken_text,
+            category="tray_screen_observation",
+            context=f"Pink observed screen from tray: {seen}" if seen else "Screen observation while hidden in tray",
+        )
+
+        if not hasattr(self, "_tray_observations"):
+            self._tray_observations = []
+        self._tray_observations.append({
+            "seen": seen,
+            "text": spoken_text,
+            "anim": anim,
+            "timestamp": datetime.datetime.now().isoformat(),
+        })
+        log.info("Recorded background tray observation (seen: '%s'): %s", seen, spoken_text[:60])
 
     # ---------------------------------------------------- hide sequence (outro)
     def _start_hide_sequence(self) -> None:
@@ -8526,7 +8979,8 @@ class YellowsPixelBuddies(QWidget):
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
             menu.addSeparator()
-        hide_action = menu.addAction("Hide 🐾")
+        hide_tray_action = menu.addAction("Hide to Tray 📥")
+        hide_action = menu.addAction("Hide (Peek Ears) 🐾")
         menu.addSeparator()
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
@@ -8537,6 +8991,8 @@ class YellowsPixelBuddies(QWidget):
             self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
+        elif chosen is hide_tray_action:
+            self._hide_to_tray()
         elif chosen is hide_action:
             self._start_hide_sequence()
         elif chosen is talk_action:
@@ -8707,8 +9163,11 @@ class YellowsPixelBuddies(QWidget):
         token_usage_action = memory_menu.addAction("AI Token Usage 📊")
         token_usage_action.triggered.connect(self._show_token_usage_dialogue)
 
-        self._hide_tray_action = tray_menu.addAction("Hide Pink 🐾")
-        self._hide_tray_action.triggered.connect(self._start_hide_sequence)
+        self._hide_tray_action = tray_menu.addAction("Hide to Tray 📥")
+        self._hide_tray_action.triggered.connect(self._toggle_hide_to_tray)
+
+        hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
+        hide_peek_action.triggered.connect(self._start_hide_sequence)
 
         self._bomb_action = tray_menu.addAction("Bomb Attack Mode")
         self._bomb_action.setCheckable(True)
@@ -8838,6 +9297,9 @@ class YellowsPixelBuddies(QWidget):
 
     def _reset_to_taskbar(self) -> None:
         """Emergency reset or manual summon: place the pet safely back on the primary taskbar."""
+        if getattr(self, "_hidden_in_tray", False):
+            self._restore_from_tray()
+            return
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
             self._start_summon_intro()
             return
@@ -8857,7 +9319,9 @@ class YellowsPixelBuddies(QWidget):
         if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
-            if self._phase == Phase.HIDE_PEEK:
+            if getattr(self, "_hidden_in_tray", False):
+                self._restore_from_tray()
+            elif self._phase == Phase.HIDE_PEEK:
                 self._on_peek_ears_clicked()
             elif self._phase == Phase.SUMMON_DIALOGUE:
                 self._start_summon_intro()
@@ -8880,6 +9344,8 @@ class YellowsPixelBuddies(QWidget):
             timers.append(self._window_timer)
         if hasattr(self, "_screen_comment_timer"):
             timers.append(self._screen_comment_timer)
+        if hasattr(self, "_tray_screen_timer"):
+            timers.append(self._tray_screen_timer)
         for timer in timers:
             timer.stop()
         self._stop_overlay()
