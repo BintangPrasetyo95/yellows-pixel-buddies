@@ -522,10 +522,10 @@ DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
 DIALOGUE_QUESTION_HOLD_S = 18.0       # Seconds to wait for player to answer question choices
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
-DIALOGUE_BOX_SCALE = 1.0              # Pixel scale multiplier for the dialogue box (1.0 = native 1:1 crisp pixel art)
-DIALOGUE_FONT_PIXEL_SIZE = 12         # Pixel font size for Determination text
+DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
+DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on commas, periods, question marks, exclamation marks
-DIALOGUE_MAX_WIDTH_PX = 210           # Maximum inner text wrapping width in pixels
+DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
 DIALOGUE_SIDE_OFFSET_PX = 4           # Gap between pet sprite edge and dialogue box
 DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where head is centered (~28px)
 SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
@@ -6614,11 +6614,11 @@ class YellowsPixelBuddies(QWidget):
         self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
         self._shop_window = None
 
-        # --- alarms & focus timers ticker --------------------------------------
+        # --- alarms & focus timers ticker (disabled / COMING SOON) -------------
         self._alarm_ticker: QTimer = QTimer(self)
         self._alarm_ticker.setInterval(1000)
         self._alarm_ticker.timeout.connect(self._check_alarms_and_timers)
-        self._alarm_ticker.start()
+        # Ticker disabled completely: alarms and timers are under construction
         self._is_ringing_alarm: bool = False
         self._alarms_dialog: AlarmsDialog | None = None
 
@@ -6923,11 +6923,6 @@ class YellowsPixelBuddies(QWidget):
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
-
-        if isinstance(category_or_text, str):
-            trimmed = category_or_text.strip()
-            if not trimmed.startswith("*"):
-                category_or_text = f"* {trimmed}"
 
         if isinstance(category_or_text, DialogueStep):
             if step_anim is None:
@@ -8465,11 +8460,8 @@ class YellowsPixelBuddies(QWidget):
         self._alarms_dialog.activateWindow()
 
     def _check_alarms_and_timers(self) -> None:
-        """Periodic 1-second check for timers and alarms that reached zero."""
-        if not hasattr(self, "_memory"):
-            return
-        if getattr(self, "_is_ringing_alarm", False):
-            return
+        """Periodic check disabled - alarms and timers are under construction."""
+        return
 
         now = time.time()
         active = self._memory.get_active_alarms()
@@ -10603,7 +10595,7 @@ class YellowsPixelBuddies(QWidget):
         talk_action = menu.addAction("Talk to Pink 💬")
         ask_action = menu.addAction("Ask me something ❓")
         shop_action = menu.addAction("Visit Shop 🏪")
-        alarms_action = menu.addAction("Alarms & Timers ⏰")
+        alarms_action = menu.addAction("Alarms & Timers (COMING SOON)")
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -10637,7 +10629,7 @@ class YellowsPixelBuddies(QWidget):
         elif chosen is shop_action:
             self._open_shop_window()
         elif chosen is alarms_action:
-            self._open_alarms_dialog()
+            self._say("* Alarms and timers are temporarily offline for maintenance, minion!", force=True)
         elif chosen is update_action:
             self._check_for_updates(manual=True)
         elif jump_action is not None and chosen is jump_action:
