@@ -522,10 +522,10 @@ DIALOGUE_HOLD_MIN_S = 3.0             # Minimum seconds to keep dialogue visible
 DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per character (e.g. 50 chars = +2.0s)
 DIALOGUE_QUESTION_HOLD_S = 18.0       # Seconds to wait for player to answer question choices
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
-DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
-DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
+DIALOGUE_BOX_SCALE = 1.0              # Pixel scale multiplier for the dialogue box (1.0 = native 1:1 crisp pixel art)
+DIALOGUE_FONT_PIXEL_SIZE = 12         # Pixel font size for Determination text
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on commas, periods, question marks, exclamation marks
-DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
+DIALOGUE_MAX_WIDTH_PX = 210           # Maximum inner text wrapping width in pixels
 DIALOGUE_SIDE_OFFSET_PX = 4           # Gap between pet sprite edge and dialogue box
 DIALOGUE_HEAD_Y_RATIO = 0.22          # Vertical fraction of sprite height where head is centered (~28px)
 SONG_DETECTION_ENABLED = True         # Detect media playback via Windows GSMTC and announce songs
@@ -2071,7 +2071,8 @@ class DialogueOverlay(QWidget):
         self._on_chosen_callback = None
         self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
 
-        self._font = QFont(self._font_family, 12)
+        self._font = QFont(self._font_family)
+        self._font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
         self._font.setBold(False)
         self._font.setWeight(QFont.Normal)
         self._font.setStyleStrategy(QFont.PreferDefault)
@@ -2512,7 +2513,13 @@ class DialogueOverlay(QWidget):
             try:
                 callback(choice_label, reaction_text, reaction_anim)
             except TypeError:
-                callback(reaction_text, reaction_anim)
+                try:
+                    callback(idx, choice_label, reaction_text, reaction_anim)
+                except TypeError:
+                    try:
+                        callback(reaction_text, reaction_anim)
+                    except Exception as err:
+                        log.warning("Choice callback execution failed: %s", err)
 
     def enterEvent(self, event) -> None:
         """Pause the auto-dismiss countdown while cursor is inside the dialogue box."""
@@ -2853,7 +2860,7 @@ class ChatInputOverlay(QWidget):
         self._text_edit.userTyped.connect(self.reset_timeout)
         layout.addWidget(self._text_edit, stretch=1)
 
-        btn_h = round(16 * self._scale)
+        btn_h = max(20, round(16 * self._scale))
 
         # Screen vision toggle button
         self._vision_btn = QPushButton(self)
@@ -2862,7 +2869,7 @@ class ChatInputOverlay(QWidget):
         self._vision_btn.setCheckable(True)
         self._vision_btn.setChecked(False)
         self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
-        btn_w = round(18 * self._scale)
+        btn_w = max(22, round(18 * self._scale))
         self._vision_btn.setFixedSize(btn_w, btn_h)
         if self._eye_off_icon and not self._eye_off_icon.isNull():
             self._vision_btn.setIcon(self._eye_off_icon)
@@ -8521,19 +8528,19 @@ class YellowsPixelBuddies(QWidget):
                 choices,
                 self._x,
                 self._y,
-                on_chosen=lambda idx, choice_label, reaction_text, reaction_anim: self._on_alarm_choice(
-                    item_id, idx, choice_label, reaction_text, reaction_anim
+                on_chosen=lambda choice_label, reaction_text, reaction_anim=None: self._on_alarm_choice(
+                    item_id, choice_label, reaction_text, reaction_anim
                 ),
             )
 
-    def _on_alarm_choice(self, item_id: str, idx: int, choice_label: str, reaction_text: str, reaction_anim: str | None) -> None:
+    def _on_alarm_choice(self, item_id: str, choice_label: str, reaction_text: str, reaction_anim: str | None = None) -> None:
         """Handle choice selection when an alarm/timer rings."""
         self._is_ringing_alarm = False
-        if idx == 0:
+        if choice_label == "Dismiss":
             self._memory.dismiss_alarm(item_id)
-        elif idx == 1:
+        elif "5m" in choice_label:
             self._memory.snooze_alarm_or_timer(item_id, minutes=5)
-        elif idx == 2:
+        elif "15m" in choice_label:
             self._memory.snooze_alarm_or_timer(item_id, minutes=15)
 
         self._on_question_answered(choice_label, reaction_text, reaction_anim)
@@ -9141,6 +9148,15 @@ class YellowsPixelBuddies(QWidget):
 
     def _finish_one_shot(self) -> None:
         """A special animation ended: resume previous activity or return to idle."""
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            if self._can_play("wistful"):
+                self._play("wistful")
+            elif self._can_play("behind"):
+                self._play("behind")
+            else:
+                self._play("idle")
+            return
+
         # If interrupted by window switch, resume previous state
         if self._interrupted_state:
             saved = self._interrupted_state
@@ -9247,6 +9263,16 @@ class YellowsPixelBuddies(QWidget):
         """
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
+
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            if self._can_play("wistful"):
+                self._play("wistful")
+            elif self._can_play("behind"):
+                self._play("behind")
+            else:
+                self._play("idle")
+            return
+
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
 
         special = forced
@@ -10319,6 +10345,18 @@ class YellowsPixelBuddies(QWidget):
             cooldown = random.uniform(JUMP_COOLDOWN_MIN_S, JUMP_COOLDOWN_MAX_S)
             self._jump_ready_at = time.perf_counter() + cooldown
             log.debug("Touchdown: reaction %s, next jump possible in %.0f s", reaction, cooldown)
+
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self._can_play("wistful"):
+                self._play("wistful")
+            elif self._can_play("behind"):
+                self._play("behind")
+            else:
+                self._play("idle")
+            return
+
         if reaction is not None and not self._can_play(reaction):
             reaction = None
         self._start_pause(roll_special=False, forced=reaction)
@@ -10526,9 +10564,11 @@ class YellowsPixelBuddies(QWidget):
         self._dragging = False
         self.setCursor(Qt.OpenHandCursor)
         reaction = None
-        if (self._jump_enabled and DROP_REACTION
-                and self._bounds()[3] - self._y >= DROP_REACTION_MIN_HEIGHT_PX):
-            reaction = DROP_REACTION
+        is_shop_open = hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible()
+        if not is_shop_open:
+            if (self._jump_enabled and DROP_REACTION
+                    and self._bounds()[3] - self._y >= DROP_REACTION_MIN_HEIGHT_PX):
+                reaction = DROP_REACTION
         self._begin_fall(GRAVITY_PX_S2, reaction)
 
     def contextMenuEvent(self, event) -> None:
@@ -10684,6 +10724,8 @@ class YellowsPixelBuddies(QWidget):
 
     def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):

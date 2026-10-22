@@ -1938,10 +1938,18 @@ class DeltaruneShopWindow(QWidget):
                 self.update()
                 return
 
+            # 5. Non-interactive canvas / backdrop area clicked -> Start dragging the shop window!
+            self._drag_active = True
+            self._drag_start_pos = event.globalPos() - self.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_active:
+            self.setCursor(Qt.ClosedHandCursor)
             self.move(event.globalPos() - self._drag_start_pos)
             return
 
@@ -1970,10 +1978,20 @@ class DeltaruneShopWindow(QWidget):
             self.setCursor(Qt.ArrowCursor)
 
     def leaveEvent(self, event) -> None:
-        self.setCursor(Qt.ArrowCursor)
+        if not self._drag_active:
+            self.setCursor(Qt.ArrowCursor)
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._drag_active:
+            self._drag_active = False
+            pos_canvas = self._screen_to_canvas(event.pos())
+            if pos_canvas.y() < 240 and pos_canvas.x() < 410:
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+            event.accept()
+            return
         self._drag_active = False
 
     def _screen_to_canvas(self, pt: QPoint) -> QPoint:
