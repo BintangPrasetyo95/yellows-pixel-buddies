@@ -83,7 +83,7 @@ GOALS_PATH = _BASE_DIR / "memory" / "goals.json"
 
 # Native canvas dimensions
 CANVAS_W = 640
-CANVAS_H = 460
+CANVAS_H = 480
 SCENE_NATIVE_W = 320
 SCENE_NATIVE_H = 120
 SCENE_RENDER_H = 240
@@ -242,7 +242,7 @@ TALK_TOPICS = [
     ("Other people?", "people"),
     ("Graduating", "graduating"),
     ("The Cat Bite", "egg"),
-    ("Ask Something...", "ai_ask"),
+    ("Ask Pink a Question", "ai_ask"),
     ("Back", "back"),
 ]
 
@@ -462,6 +462,7 @@ class DeltaruneShopWindow(QWidget):
             p = SHOP_HUD_DIR / fname
             huds[key] = QPixmap(str(p)) if p.exists() else QPixmap(CANVAS_W, CANVAS_H)
 
+        HUD_Y_OFFSET = 21
         self._bg_cache = {"root": [], "buy": [], "talk": []}
         for key in ("root", "buy", "talk"):
             hud = huds[key]
@@ -469,8 +470,10 @@ class DeltaruneShopWindow(QWidget):
                 composite = QPixmap(CANVAS_W, CANVAS_H)
                 composite.fill(QColor(0, 0, 0, 255))
                 p = QPainter(composite)
+                # Draw scene scaled 640x240 at (0, 0) - full 240px uncropped
                 p.drawPixmap(0, 0, scene)
-                p.drawPixmap(0, 0, hud)
+                # Draw HUD at y=21 so transparent window fits scene and HUD box begins at y=240
+                p.drawPixmap(0, HUD_Y_OFFSET, hud)
                 p.end()
                 self._bg_cache[key].append(composite)
 
@@ -677,9 +680,9 @@ class DeltaruneShopWindow(QWidget):
 
     def _is_dialogue_rect(self, pt: QPoint) -> bool:
         if self.state in (ShopState.ROOT, ShopState.EXITING):
-            return 12 <= pt.x() <= 403 and 227 <= pt.y() <= 451
+            return 12 <= pt.x() <= 403 and 248 <= pt.y() <= 472
         elif self.state == ShopState.TALK_DIALOGUE:
-            return 12 <= pt.x() <= 628 and 227 <= pt.y() <= 451
+            return 12 <= pt.x() <= 628 and 248 <= pt.y() <= 472
         return False
 
     def _on_scene_tick(self) -> None:
@@ -1580,7 +1583,7 @@ class DeltaruneShopWindow(QWidget):
 
     def _prompt_serious_inquiry(self) -> None:
         self._input_mode = "ai_ask"
-        self._show_input_bar("Ask Pink a serious question about life, work, or the digital world:")
+        self._show_input_bar("Ask Pink a question:")
 
     def _show_input_bar(self, prompt: str) -> None:
         self.set_dialogue(f"* {prompt}")
@@ -1588,7 +1591,7 @@ class DeltaruneShopWindow(QWidget):
         input_w = round(590 * self._scale)
         input_h = round(38 * self._scale)
         input_x = (scaled_w - input_w) // 2
-        input_y = round(380 * self._scale)
+        input_y = round(401 * self._scale)
         self._input_container.setGeometry(input_x, input_y, input_w, input_h)
 
         btn_h = input_h - 8
@@ -1741,8 +1744,8 @@ class DeltaruneShopWindow(QWidget):
                     self._confirm_selection()
                     return
 
-            # 3. Check 4-Tab clicks in TASKS (y: 242..268)
-            if self.state == ShopState.TASKS and 242 <= pos_canvas.y() <= 268:
+            # 3. Check 4-Tab clicks in TASKS (y: 263..289)
+            if self.state == ShopState.TASKS and 263 <= pos_canvas.y() <= 289:
                 if 24 <= pos_canvas.x() <= 112:
                     self._tasks_tab = 0
                     self._selected_index = 0
@@ -1764,8 +1767,8 @@ class DeltaruneShopWindow(QWidget):
                     self.update()
                     return
 
-            # 4. Check Top-Right Inspector Card click (x: 412..628, y: 25..225)
-            if 412 <= pos_canvas.x() <= 628 and 25 <= pos_canvas.y() <= 225:
+            # 4. Check Top-Right Inspector Card click (x: 412..628, y: 46..246)
+            if 412 <= pos_canvas.x() <= 628 and 46 <= pos_canvas.y() <= 246:
                 if self.state == ShopState.TASKS:
                     if self._tasks_tab == 0:
                         goals = self._get_goals()
@@ -1803,10 +1806,10 @@ class DeltaruneShopWindow(QWidget):
             # 5. Check scroll arrow clicks
             if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT):
                 if 370 <= pos_canvas.x() <= 405:
-                    if 265 <= pos_canvas.y() <= 295:
+                    if 286 <= pos_canvas.y() <= 316:
                         self._scroll_up()
                         return
-                    elif 390 <= pos_canvas.y() <= 425:
+                    elif 411 <= pos_canvas.y() <= 446:
                         self._scroll_down()
                         return
 
@@ -1822,7 +1825,7 @@ class DeltaruneShopWindow(QWidget):
                 return
 
             # 7. Draggable upper stage
-            if pos_canvas.y() < 220 and pos_canvas.x() < 410:
+            if pos_canvas.y() < 240 and pos_canvas.x() < 410:
                 self._drag_active = True
                 self._drag_start_pos = event.globalPos() - self.pos()
 
@@ -1836,11 +1839,11 @@ class DeltaruneShopWindow(QWidget):
         is_dialogue = self._is_dialogue_rect(pos_canvas)
 
         is_tab_hover = False
-        if self.state == ShopState.TASKS and 242 <= pos_canvas.y() <= 268 and 24 <= pos_canvas.x() <= 402:
+        if self.state == ShopState.TASKS and 263 <= pos_canvas.y() <= 289 and 24 <= pos_canvas.x() <= 402:
             is_tab_hover = True
 
         is_card_hover = False
-        if 412 <= pos_canvas.x() <= 628 and 25 <= pos_canvas.y() <= 225:
+        if 412 <= pos_canvas.x() <= 628 and 46 <= pos_canvas.y() <= 246:
             if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT):
                 is_card_hover = True
 
@@ -1854,7 +1857,7 @@ class DeltaruneShopWindow(QWidget):
                 self.update()
         elif is_dialogue and (self._is_typing() or self.state in (ShopState.TALK_DIALOGUE, ShopState.EXITING)):
             self.setCursor(Qt.PointingHandCursor)
-        elif pos_canvas.y() < 220 and pos_canvas.x() < 410:
+        elif pos_canvas.y() < 240 and pos_canvas.x() < 410:
             self.setCursor(Qt.OpenHandCursor)
         else:
             self.setCursor(Qt.ArrowCursor)
@@ -1873,22 +1876,22 @@ class DeltaruneShopWindow(QWidget):
 
     def _get_item_at_canvas_pos(self, pt: QPoint) -> int | None:
         if self.state == ShopState.ROOT:
-            if 412 <= pt.x() <= 628 and 245 <= pt.y() <= 430:
-                idx = (pt.y() - 250) // 36
+            if 412 <= pt.x() <= 628 and 266 <= pt.y() <= 451:
+                idx = (pt.y() - 271) // 36
                 if 0 <= idx < 5:
                     return idx
 
         elif self.state == ShopState.CHARACTER:
-            if 20 <= pt.x() <= 403 and 250 <= pt.y() <= 435:
-                idx = (pt.y() - 250) // 42
+            if 20 <= pt.x() <= 403 and 271 <= pt.y() <= 456:
+                idx = (pt.y() - 271) // 42
                 if 0 <= idx < len(CHARACTER_FORMS):
                     return idx
-            if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
+            if 412 <= pt.x() <= 628 and 406 <= pt.y() <= 461:
                 return len(CHARACTER_FORMS)
 
         elif self.state == ShopState.TASKS:
-            if 20 <= pt.x() <= 385 and 272 <= pt.y() <= 420:
-                row = (pt.y() - 272) // 36
+            if 20 <= pt.x() <= 385 and 293 <= pt.y() <= 441:
+                row = (pt.y() - 293) // 36
                 if 0 <= row < 4:
                     if self._tasks_tab == 0:
                         idx = row + self._goals_scroll_offset
@@ -1906,49 +1909,49 @@ class DeltaruneShopWindow(QWidget):
                         idx = row + self._timers_scroll_offset
                         if idx < len(self._get_timers_menu_items()):
                             return idx
-            if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
+            if 412 <= pt.x() <= 628 and 406 <= pt.y() <= 461:
                 return self._get_menu_count() - 1
 
         elif self.state == ShopState.SETTINGS_MENU:
-            if 20 <= pt.x() <= 403 and 255 <= pt.y() <= 430:
-                idx = (pt.y() - 255) // 44
+            if 20 <= pt.x() <= 403 and 276 <= pt.y() <= 451:
+                idx = (pt.y() - 276) // 44
                 if 0 <= idx < 3:
                     return idx
 
         elif self.state == ShopState.FACTS_EDIT:
-            if 20 <= pt.x() <= 385 and 272 <= pt.y() <= 420:
-                row = (pt.y() - 272) // 36
+            if 20 <= pt.x() <= 385 and 293 <= pt.y() <= 441:
+                row = (pt.y() - 293) // 36
                 if 0 <= row < 4:
                     idx = row + self._notes_scroll_offset
                     if idx < len(self._get_facts_menu_items()):
                         return idx
-            if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
+            if 412 <= pt.x() <= 628 and 406 <= pt.y() <= 461:
                 return self._get_menu_count() - 1
 
         elif self.state == ShopState.TOGGLES_MENU:
-            if 20 <= pt.x() <= 385 and 272 <= pt.y() <= 420:
-                row = (pt.y() - 272) // 36
+            if 20 <= pt.x() <= 385 and 293 <= pt.y() <= 441:
+                row = (pt.y() - 293) // 36
                 if 0 <= row < 4:
                     return row
-            if 412 <= pt.x() <= 628 and 385 <= pt.y() <= 440:
+            if 412 <= pt.x() <= 628 and 406 <= pt.y() <= 461:
                 return 4
 
         elif self.state == ShopState.ITEM_ACTION:
-            if 412 <= pt.x() <= 628 and 260 <= pt.y() <= 435:
-                idx = (pt.y() - 260) // 44
+            if 412 <= pt.x() <= 628 and 281 <= pt.y() <= 456:
+                idx = (pt.y() - 281) // 44
                 if 0 <= idx < len(self._inspect_options):
                     return idx
 
         elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
             if 412 <= pt.x() <= 628:
-                if 295 <= pt.y() <= 345:
+                if 316 <= pt.y() <= 366:
                     return 0
-                elif 350 <= pt.y() <= 405:
+                elif 371 <= pt.y() <= 426:
                     return 1
 
         elif self.state == ShopState.TALK_MENU:
-            if 255 <= pt.y() <= 435:
-                row = min(3, max(0, (pt.y() - 255) // 44))
+            if 276 <= pt.y() <= 456:
+                row = min(3, max(0, (pt.y() - 276) // 44))
                 col = 0 if pt.x() < 320 else 1
                 idx = row * 2 + col
                 if 0 <= idx < len(TALK_TOPICS):
@@ -1998,10 +2001,10 @@ class DeltaruneShopWindow(QWidget):
             elif self.state in (ShopState.TALK_MENU, ShopState.TALK_DIALOGUE):
                 self._draw_talk_state(p)
             elif self.state == ShopState.EXITING:
-                self._draw_dialogue_text(p, QRect(32, 248, 355, 185))
+                self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
                 p.setFont(self._font_small)
                 p.setPen(QColor(255, 255, 0))
-                p.drawText(430, 420, "[Click or press Z to Exit]")
+                p.drawText(430, 441, "[Click or press Z to Exit]")
 
         finally:
             p.end()
@@ -2013,12 +2016,12 @@ class DeltaruneShopWindow(QWidget):
         p.drawText(rect, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, visible_text)
 
     def _draw_root_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 248, 355, 185))
+        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
 
         p.setFont(self._font_body)
         options = ["CHARACTER", "TASKS & ALARMS", "TALK", "CONFIG & SETTINGS", "EXIT"]
         start_x = 444
-        start_y = 262
+        start_y = 283
         line_h = 36
 
         for i, opt in enumerate(options):
@@ -2032,28 +2035,28 @@ class DeltaruneShopWindow(QWidget):
 
         p.setFont(self._font_small)
         p.setPen(QColor(255, 180, 220))
-        p.drawText(430, 438, f"P$ {self._wallet.pink_dollars:06d}")
+        p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_character_state(self, p: QPainter) -> None:
         # Top-Right Details Card
         p.setFont(self._font_title)
         p.setPen(QColor(255, 255, 0))
-        p.drawText(426, 38, "Pink's Wardrobe")
+        p.drawText(426, 59, "Pink's Wardrobe")
 
         p.setFont(self._font_small)
         if self._selected_index < len(CHARACTER_FORMS):
             f = CHARACTER_FORMS[self._selected_index]
             status = f.get("status", "LOCKED")
             p.setPen(QColor(170, 255, 230) if status == "EQUIPPED" else QColor(255, 160, 200))
-            p.drawText(426, 60, f"Status: {status}")
+            p.drawText(426, 81, f"Status: {status}")
 
             p.setPen(QColor(255, 255, 255))
-            p.drawText(QRect(426, 75, 188, 140), Qt.AlignLeft | Qt.TextWordWrap, f["desc"])
+            p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, f["desc"])
 
         # Bottom-Left Forms List
         p.setFont(self._font_body)
         start_x = 44
-        start_y = 265
+        start_y = 286
         line_h = 42
 
         for i, f in enumerate(CHARACTER_FORMS):
@@ -2071,16 +2074,16 @@ class DeltaruneShopWindow(QWidget):
         # Bottom-Right Wallet & Back
         p.setFont(self._font_body)
         p.setPen(QColor(255, 180, 220))
-        p.drawText(430, 265, "Pink Dollars:")
+        p.drawText(430, 286, "Pink Dollars:")
         p.setPen(QColor(255, 255, 255))
-        p.drawText(430, 295, f"P$ {self._wallet.pink_dollars:06d}")
+        p.drawText(430, 316, f"P$ {self._wallet.pink_dollars:06d}")
 
         p.setFont(self._font_title)
         is_back = (self._selected_index == len(CHARACTER_FORMS))
         p.setPen(QColor(255, 255, 0) if is_back else QColor(255, 255, 255))
-        p.drawText(450, 415, "Back")
+        p.drawText(450, 436, "Back")
         if is_back and self._soul_heart:
-            p.drawPixmap(424, 401, self._soul_heart)
+            p.drawPixmap(424, 422, self._soul_heart)
 
     def _draw_tasks_and_alarms_state(self, p: QPainter) -> None:
         # 4 Tab Headers: [ GOALS ]  [ TASKS ]  [ ALARMS ]  [ TIMERS ]
@@ -2091,7 +2094,7 @@ class DeltaruneShopWindow(QWidget):
         for i, tname in enumerate(tab_titles):
             is_active = (self._tasks_tab == i)
             p.setPen(QColor(255, 255, 0) if is_active else QColor(150, 150, 180))
-            p.drawText(tab_xs[i], 262, f"[{tname}]" if is_active else tname)
+            p.drawText(tab_xs[i], 283, f"[{tname}]" if is_active else tname)
 
         # Top-Right Details Card
         p.setFont(self._font_title)
@@ -2099,69 +2102,69 @@ class DeltaruneShopWindow(QWidget):
 
         if self._tasks_tab == 0:
             goals = self._get_goals()
-            p.drawText(426, 38, "Goals Board")
+            p.drawText(426, 59, "Goals Board")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
-            p.drawText(426, 58, f"Active Goals: {len(goals)}")
+            p.drawText(426, 79, f"Active Goals: {len(goals)}")
             p.setPen(QColor(255, 255, 255))
             if 1 <= self._selected_index <= len(goals):
-                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, goals[self._selected_index - 1])
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, goals[self._selected_index - 1])
             else:
-                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Set personal milestones! Completing a milestone awards a bonus of +P$ 000005!")
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Set personal milestones! Completing a milestone awards a bonus of +P$ 000005!")
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
-            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+            p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
         elif self._tasks_tab == 1:
             reminders = self._get_active_reminders()
-            p.drawText(426, 38, "Chore Board")
+            p.drawText(426, 59, "Chore Board")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
-            p.drawText(426, 58, f"Active Chores: {len(reminders)}")
+            p.drawText(426, 79, f"Active Chores: {len(reminders)}")
             p.setPen(QColor(255, 255, 255))
             if 1 <= self._selected_index <= len(reminders):
                 t_val = evaluate_task_value(reminders[self._selected_index - 1])
-                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Valuation: +P$ {t_val}\n\"{reminders[self._selected_index - 1]}\"")
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Valuation: +P$ {t_val}\n\"{reminders[self._selected_index - 1]}\"")
             else:
-                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pink awards P$ 1 - P$ 3 per completed chore.\nShe checks screen sights & session memories for proof!")
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pink awards P$ 1 - P$ 3 per completed chore.\nShe checks screen sights & session memories for proof!")
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
-            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+            p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
         elif self._tasks_tab == 2:
             alarms = self._get_scheduled_alarms()
-            p.drawText(426, 38, "Clock Alarms")
+            p.drawText(426, 59, "Clock Alarms")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
-            p.drawText(426, 58, f"Scheduled: {len(alarms)}")
+            p.drawText(426, 79, f"Scheduled: {len(alarms)}")
             p.setPen(QColor(255, 255, 255))
             if 1 <= self._selected_index <= len(alarms):
                 al = alarms[self._selected_index - 1]
-                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Time: {al.get('clock_time')}\nReason: {al.get('label')}")
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Time: {al.get('clock_time')}\nReason: {al.get('label')}")
             else:
-                p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Schedule wall-clock alarms. Pink will pop up choices to Dismiss or Snooze when time hits!")
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Schedule wall-clock alarms. Pink will pop up choices to Dismiss or Snooze when time hits!")
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
-            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+            p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
         elif self._tasks_tab == 3:
-            p.drawText(426, 38, "Focus Timers")
+            p.drawText(426, 59, "Focus Timers")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
             if self._timer_active:
                 m, s = divmod(self._timer_seconds_remaining, 60)
-                p.drawText(426, 58, f"Active: {m:02d}:{s:02d} ({self._timer_label})")
+                p.drawText(426, 79, f"Active: {m:02d}:{s:02d} ({self._timer_label})")
             else:
-                p.drawText(426, 58, "Status: Ready")
+                p.drawText(426, 79, "Status: Ready")
             p.setPen(QColor(255, 255, 255))
-            p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pick a study sprint or break timer.\nPink provides visual alert animations and bonus P$ upon completion!")
+            p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pick a study sprint or break timer.\nPink provides visual alert animations and bonus P$ upon completion!")
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
-            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+            p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
         # Bottom-Left List Area (Scrollable with 4 visible rows)
         start_x = 44
-        start_y = 295
+        start_y = 316
         line_h = 36
 
         if self._tasks_tab == 0:  # GOALS
@@ -2183,9 +2186,9 @@ class DeltaruneShopWindow(QWidget):
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
             if self._goals_scroll_offset > 0:
-                p.drawText(380, 275, "▲")
+                p.drawText(380, 296, "▲")
             if self._goals_scroll_offset + 4 < len(full_list):
-                p.drawText(380, 425, "▼")
+                p.drawText(380, 446, "▼")
 
         elif self._tasks_tab == 1:  # TASKS
             reminders = self._get_active_reminders()
@@ -2215,9 +2218,9 @@ class DeltaruneShopWindow(QWidget):
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
             if self._tasks_scroll_offset > 0:
-                p.drawText(380, 275, "▲")
+                p.drawText(380, 296, "▲")
             if self._tasks_scroll_offset + 4 < len(full_list):
-                p.drawText(380, 425, "▼")
+                p.drawText(380, 446, "▼")
 
         elif self._tasks_tab == 2:  # ALARMS
             alarms = self._get_scheduled_alarms()
@@ -2237,9 +2240,9 @@ class DeltaruneShopWindow(QWidget):
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
             if self._alarms_scroll_offset > 0:
-                p.drawText(380, 275, "▲")
+                p.drawText(380, 296, "▲")
             if self._alarms_scroll_offset + 4 < len(full_list):
-                p.drawText(380, 425, "▼")
+                p.drawText(380, 446, "▼")
 
         elif self._tasks_tab == 3:  # TIMERS
             timers_items = self._get_timers_menu_items()
@@ -2261,38 +2264,38 @@ class DeltaruneShopWindow(QWidget):
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
             if self._timers_scroll_offset > 0:
-                p.drawText(380, 275, "▲")
+                p.drawText(380, 296, "▲")
             if self._timers_scroll_offset + 4 < len(timers_items):
-                p.drawText(380, 425, "▼")
+                p.drawText(380, 446, "▼")
 
         # Bottom-Right Wallet & Back
         p.setFont(self._font_body)
         p.setPen(QColor(255, 180, 220))
-        p.drawText(430, 265, "Pink Dollars:")
+        p.drawText(430, 286, "Pink Dollars:")
         p.setPen(QColor(255, 255, 255))
-        p.drawText(430, 295, f"P$ {self._wallet.pink_dollars:06d}")
+        p.drawText(430, 316, f"P$ {self._wallet.pink_dollars:06d}")
 
         p.setFont(self._font_title)
         back_idx = self._get_menu_count() - 1
         is_back = (self._selected_index == back_idx)
         p.setPen(QColor(255, 255, 0) if is_back else QColor(255, 255, 255))
-        p.drawText(450, 415, "Back")
+        p.drawText(450, 436, "Back")
         if is_back and self._soul_heart:
-            p.drawPixmap(424, 401, self._soul_heart)
+            p.drawPixmap(424, 422, self._soul_heart)
 
     def _draw_settings_menu_state(self, p: QPainter) -> None:
         # Top-Right Overview Card
         p.setFont(self._font_title)
         p.setPen(QColor(255, 255, 0))
-        p.drawText(426, 38, "Settings Menu")
+        p.drawText(426, 59, "Settings Menu")
 
         p.setFont(self._font_small)
         p.setPen(QColor(140, 206, 255))
-        p.drawText(426, 60, "Sanctuary Controls")
+        p.drawText(426, 81, "Sanctuary Controls")
 
         p.setPen(QColor(255, 255, 255))
         p.drawText(
-            QRect(426, 75, 188, 140),
+            QRect(426, 96, 188, 135),
             Qt.AlignLeft | Qt.TextWordWrap,
             "Manage permanent memory notes, edit your primary nickname, or customize companion live behaviors.",
         )
@@ -2301,7 +2304,7 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_title)
         options = ["1. Edit Facts & Nickname", "2. Companion Toggles", "3. Back"]
         start_x = 44
-        start_y = 280
+        start_y = 301
         line_h = 44
 
         for i, opt in enumerate(options):
@@ -2321,35 +2324,35 @@ class DeltaruneShopWindow(QWidget):
         p.setPen(QColor(170, 255, 230))
         if self._selected_index >= 2 and (self._selected_index - 2) < len(notes):
             note_idx = self._selected_index - 2
-            p.drawText(426, 38, f"Fact Note #{note_idx + 1}")
+            p.drawText(426, 59, f"Fact Note #{note_idx + 1}")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
-            p.drawText(426, 58, "Permanent Memory")
+            p.drawText(426, 79, "Permanent Memory")
             p.setPen(QColor(255, 255, 255))
-            p.drawText(QRect(426, 72, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, notes[note_idx])
+            p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, notes[note_idx])
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
-            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+            p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
         else:
-            p.drawText(426, 38, "Fact Sheet")
+            p.drawText(426, 59, "Fact Sheet")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
-            p.drawText(426, 58, f"User: {self._get_user_name()}")
+            p.drawText(426, 79, f"User: {self._get_user_name()}")
             p.setPen(QColor(255, 255, 255))
             p.drawText(
-                QRect(426, 72, 188, 125),
+                QRect(426, 93, 188, 125),
                 Qt.AlignLeft | Qt.TextWordWrap,
                 f"Notes Stored: {len(notes)}\nScroll down to view every note! Pink permanently remembers them across all sessions.",
             )
             p.setFont(self._font_small)
             p.setPen(QColor(255, 255, 0))
-            p.drawText(QRect(426, 206, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
+            p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card for options ]")
 
         # Bottom-Left List
         facts_items = self._get_facts_menu_items()
         visible_items = facts_items[self._notes_scroll_offset : self._notes_scroll_offset + 4]
         start_x = 44
-        start_y = 295
+        start_y = 316
         line_h = 36
 
         p.setFont(self._font_body)
@@ -2367,9 +2370,9 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_small)
         p.setPen(QColor(255, 255, 0))
         if self._notes_scroll_offset > 0:
-            p.drawText(380, 275, "▲")
+            p.drawText(380, 296, "▲")
         if self._notes_scroll_offset + 4 < len(facts_items):
-            p.drawText(380, 425, "▼")
+            p.drawText(380, 446, "▼")
 
         # Back
         p.setFont(self._font_title)
@@ -2383,15 +2386,15 @@ class DeltaruneShopWindow(QWidget):
     def _draw_toggles_menu_state(self, p: QPainter) -> None:
         p.setFont(self._font_title)
         p.setPen(QColor(255, 255, 0))
-        p.drawText(426, 38, "Live Toggles")
+        p.drawText(426, 59, "Live Toggles")
 
         p.setFont(self._font_small)
         p.setPen(QColor(140, 206, 255))
-        p.drawText(426, 60, "Instant Configuration")
+        p.drawText(426, 81, "Instant Configuration")
 
         p.setPen(QColor(255, 255, 255))
         p.drawText(
-            QRect(426, 75, 188, 140),
+            QRect(426, 96, 188, 135),
             Qt.AlignLeft | Qt.TextWordWrap,
             "Toggles update desktop pet behavior immediately and persist permanently across runs.",
         )
@@ -2409,7 +2412,7 @@ class DeltaruneShopWindow(QWidget):
         ]
 
         start_x = 44
-        start_y = 275
+        start_y = 296
         line_h = 36
 
         p.setFont(self._font_body)
@@ -2431,24 +2434,24 @@ class DeltaruneShopWindow(QWidget):
 
     def _draw_item_action_state(self, p: QPainter) -> None:
         # Left Box: Dialogue Text
-        self._draw_dialogue_text(p, QRect(32, 248, 355, 185))
+        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
 
         # Top-Right Details
         p.setFont(self._font_title)
         p.setPen(QColor(170, 255, 230))
-        p.drawText(426, 38, f"Inspect: {self._inspect_item_kind.upper()}")
+        p.drawText(426, 59, f"Inspect: {self._inspect_item_kind.upper()}")
 
         p.setFont(self._font_small)
         p.setPen(QColor(140, 206, 255))
-        p.drawText(426, 60, "Action Selection")
+        p.drawText(426, 81, "Action Selection")
 
         p.setPen(QColor(255, 255, 255))
-        p.drawText(QRect(426, 75, 188, 140), Qt.AlignLeft | Qt.TextWordWrap, self._inspect_item_text)
+        p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, self._inspect_item_text)
 
         # Bottom-Right Choices
         p.setFont(self._font_title)
         start_x = 444
-        start_y = 280
+        start_y = 301
         line_h = 44
 
         for i, opt in enumerate(self._inspect_options):
@@ -2464,45 +2467,45 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_title)
         if self._sell_has_evidence:
             p.setPen(QColor(170, 255, 230))
-            p.drawText(426, 38, "Verified Work! ✨")
+            p.drawText(426, 59, "Verified Work! ✨")
             p.setFont(self._font_small)
             p.setPen(QColor(140, 206, 255))
             proof_type = "Screen Sight" if self._sell_saw_on_screen else "Session Logs"
-            p.drawText(426, 60, f"Proof: {proof_type}")
+            p.drawText(426, 81, f"Proof: {proof_type}")
             p.setPen(QColor(255, 255, 255))
             p.drawText(
-                QRect(426, 75, 188, 140),
+                QRect(426, 96, 188, 135),
                 Qt.AlignLeft | Qt.TextWordWrap,
                 f"Pink confirmed proof of work on '{self._sell_evidence_kw}'!\nOne click to complete and collect your P$!",
             )
         else:
             p.setPen(QColor(255, 200, 80))
-            p.drawText(426, 38, "Unverified Task ❓")
+            p.drawText(426, 59, "Unverified Task ❓")
             p.setFont(self._font_small)
             p.setPen(QColor(255, 160, 100))
-            p.drawText(426, 60, "Proof: Not Found")
+            p.drawText(426, 81, "Proof: Not Found")
             p.setPen(QColor(255, 255, 255))
             p.drawText(
-                QRect(426, 75, 188, 140),
+                QRect(426, 96, 188, 135),
                 Qt.AlignLeft | Qt.TextWordWrap,
                 "Pink hasn't observed any evidence of this on your screen or in recent sessions...\nAre you sure you finished it?",
             )
 
         p.setFont(self._font_body)
         p.setPen(QColor(255, 255, 0))
-        p.drawText(36, 265, "Task to Complete:")
+        p.drawText(36, 286, "Task to Complete:")
 
         p.setPen(QColor(255, 255, 255))
         task_text = self._pending_sell_reminder or ""
-        p.drawText(QRect(36, 290, 350, 140), Qt.AlignLeft | Qt.TextWordWrap, f"\"{task_text}\"")
+        p.drawText(QRect(36, 311, 350, 140), Qt.AlignLeft | Qt.TextWordWrap, f"\"{task_text}\"")
 
         p.setFont(self._font_small)
         p.setPen(QColor(140, 206, 255))
-        p.drawText(430, 265, f"Value: P$ {self._pending_sell_value}")
+        p.drawText(430, 286, f"Value: P$ {self._pending_sell_value}")
 
         options = [f"YES (+P$ {self._pending_sell_value})", "NO (Keep)"]
         start_x = 444
-        start_y = 315
+        start_y = 336
         line_h = 48
 
         p.setFont(self._font_title)
@@ -2518,38 +2521,38 @@ class DeltaruneShopWindow(QWidget):
     def _draw_task_second_confirm_state(self, p: QPainter) -> None:
         p.setFont(self._font_title)
         p.setPen(QColor(255, 64, 64))
-        p.drawText(426, 38, "SUSPICION ALERT!")
+        p.drawText(426, 59, "SUSPICION ALERT!")
 
         p.setFont(self._font_small)
         p.setPen(QColor(255, 140, 140))
-        p.drawText(426, 60, "Proof: NOT FOUND!")
+        p.drawText(426, 81, "Proof: NOT FOUND!")
 
         p.setPen(QColor(255, 255, 255))
         p.drawText(
-            QRect(426, 75, 188, 140),
+            QRect(426, 96, 188, 135),
             Qt.AlignLeft | Qt.TextWordWrap,
             "Pink scanned your screen sight logs & session memories and found NO evidence of this work!\nAre you double-dog sure?!",
         )
 
         p.setFont(self._font_body)
         p.setPen(QColor(255, 64, 64))
-        p.drawText(36, 265, "Unverified Task Claim:")
+        p.drawText(36, 286, "Unverified Task Claim:")
 
         p.setPen(QColor(255, 255, 255))
         task_text = self._pending_sell_reminder or ""
-        p.drawText(QRect(36, 290, 350, 90), Qt.AlignLeft | Qt.TextWordWrap, f"\"{task_text}\"")
+        p.drawText(QRect(36, 311, 350, 90), Qt.AlignLeft | Qt.TextWordWrap, f"\"{task_text}\"")
 
         p.setFont(self._font_small)
         p.setPen(QColor(255, 140, 140))
-        p.drawText(36, 410, "* Pink's Verdict: Highly Suspicious!")
+        p.drawText(36, 431, "* Pink's Verdict: Highly Suspicious!")
 
         p.setFont(self._font_small)
         p.setPen(QColor(255, 64, 64))
-        p.drawText(430, 265, "FINAL CHANCE:")
+        p.drawText(430, 286, "FINAL CHANCE:")
 
         options = ["I REALLY DID!", "...CAUGHT ME"]
         start_x = 444
-        start_y = 315
+        start_y = 336
         line_h = 48
 
         p.setFont(self._font_title)
@@ -2568,7 +2571,7 @@ class DeltaruneShopWindow(QWidget):
 
             start_x1 = 50
             start_x2 = 340
-            start_y = 280
+            start_y = 301
             line_h = 44
 
             for i, (topic_title, _) in enumerate(TALK_TOPICS):
@@ -2584,7 +2587,7 @@ class DeltaruneShopWindow(QWidget):
                     p.drawPixmap(x - 24, y - 13, self._soul_heart)
 
         elif self.state == ShopState.TALK_DIALOGUE:
-            self._draw_dialogue_text(p, QRect(36, 250, 568, 175))
+            self._draw_dialogue_text(p, QRect(36, 271, 568, 175))
             p.setFont(self._font_small)
             p.setPen(QColor(157, 162, 196))
-            p.drawText(530, 435, "[Z / Esc]")
+            p.drawText(530, 456, "[Z / Esc]")

@@ -8513,7 +8513,9 @@ class YellowsPixelBuddies(QWidget):
         # Pause pet movement so taskbar updates don't compete with shop UI
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
-        if self.state in MOVE_VELOCITY_PX_S:
+        if self._can_play("wistful"):
+            self._play("wistful")
+        elif self.state in MOVE_VELOCITY_PX_S:
             self._play("idle")
 
         if not hasattr(self, "_shop_window") or self._shop_window is None:
@@ -8530,15 +8532,21 @@ class YellowsPixelBuddies(QWidget):
                 self._say("* My boutique isn't ready right now, mew! Check logs!", force=True, record_memory=False)
                 return
 
-        if self._can_play("laughing"):
-            self._play("laughing")
+        if self._can_play("wistful"):
+            self._play("wistful")
+        elif self._can_play("behind"):
+            self._play("behind")
+        else:
+            self._play("idle")
         self._shop_window.open_shop()
 
     def _on_shop_window_closed(self) -> None:
         """Called when user exits the shop window."""
-        if self._can_play("peace_sign"):
-            self._play("peace_sign")
-        self._say("* Hope you enjoyed the boutique, darling!", force=True, record_memory=False)
+        if self._can_play("wistful"):
+            self._play("wistful")
+        else:
+            self._play("idle")
+        self._say("* Treasure this world, won't you?", force=True, record_memory=False)
         self._resume_walk_after_menu()
 
     def _cancel_previous_song_loading(self) -> None:
