@@ -33,11 +33,11 @@
 - **True Portable Mode**: If running from a USB drive, place a blank `portable.txt` next to the executable to store all memories directly on the drive.
 
 ### ⏰ Focus Timers & Scheduled Alarms (Full Suite & AI-Driven)
-- **Active Desktop Ringing & Retro Audio**: Unlike passive static to-do notes, Pink's timers and alarms physically ring on your screen when time is up! Plays authentic Undertale audio (`snd_scissorbell_lite.wav`), snaps Pink to startled animations, and displays an interactive speech bubble.
-- **Interactive Choice Buttons**: When an alarm rings, Pink offers Deltarune-styled choice buttons directly in her speech bubble:
+- **Active Desktop Visual Alerts**: Unlike passive static to-do notes, Pink's timers and alarms physically trigger on your screen when time is up! Snaps Pink to startled animations and displays an interactive speech bubble.
+- **Interactive Choice Buttons**: When an alarm or timer completes, Pink offers Deltarune-styled choice buttons directly in her speech bubble:
   - `[ Dismiss ]`: Acknowledges completion and resets Pink.
-  - `[ Snooze 5m ]`: Snoozes the alarm by 5 minutes (`snd_pink_gasp.wav` + sassy reaction).
-  - `[ Snooze 15m ]`: Snoozes by 15 minutes (`snd_angry_train_whistle.wav` + indignant reaction).
+  - `[ Snooze 5m ]`: Snoozes the alarm by 5 minutes with a sassy reaction.
+  - `[ Snooze 15m ]`: Snoozes by 15 minutes with an indignant reaction.
 - **Auto-Summon from Tray / Peeking**: If Pink is hidden in the system tray or peeking behind the taskbar, an expiring timer automatically summons her onto the taskbar to ensure you never miss your alert!
 - **AI-Driven & Natural Language**: Pink parses timer requests directly in regular chat conversations! Tell her *"Pink, set a timer for 15 minutes for my tea"* or *"wake me up at 8:00 AM"*, and Gemini issues structured actions (`[set_timer: 15m, tea]`, `[set_alarm: 08:00 AM, wake up]`). She also maintains live awareness in prompt context, accurately answering *"How much time is left on my timer?"*.
 - **Chat Slash Commands**:

@@ -5,7 +5,7 @@ a = Analysis(
     ['yellows_pixel_buddies.py'],
     pathex=[],
     binaries=[],
-    datas=[('sprites', 'sprites'), ('fonts', 'fonts'), ('sounds', 'sounds'), ('app_icon.ico', '.')],
+    datas=[('sprites', 'sprites'), ('fonts', 'fonts'), ('app_icon.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -134,16 +134,11 @@ if getattr(sys, "frozen", False):
         FONTS_DIR = _exe_dir / "fonts"
     else:
         FONTS_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "fonts"
-    if (_exe_dir / "sounds").exists():
-        SOUNDS_DIR = _exe_dir / "sounds"
-    else:
-        SOUNDS_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "sounds"
     _base_dir = Path(getattr(sys, "_MEIPASS", _exe_dir))
 else:
     _exe_dir = Path(__file__).resolve().parent
     SPRITES_DIR = _exe_dir / "sprites"   # sprites/<state>/N.png
     FONTS_DIR = _exe_dir / "fonts"       # fonts/determination/...
-    SOUNDS_DIR = _exe_dir / "sounds"     # sounds/Sound Effects (Chapter 5)/...
     _base_dir = _exe_dir
 
 ICON_PATH = _base_dir / "app_icon.ico"
@@ -153,25 +148,6 @@ DIALOGUE_BOX_PATH = SPRITES_DIR / "dialogue_box.png"
 DETERMINATION_FONT_PATH = FONTS_DIR / "determination" / "determination.ttf"
 EYE_OFF_PATH = SPRITES_DIR / "eye" / "off.png"
 EYE_ON_PATH = SPRITES_DIR / "eye" / "on.png"
-
-
-def play_sound_effect(sound_name: str = "snd_scissorbell_lite.wav") -> None:
-    """Play a sound effect asynchronously from the sounds directory via winsound."""
-    try:
-        import winsound
-        candidates = [
-            SOUNDS_DIR / "Sound Effects (Chapter 5)" / sound_name,
-            SOUNDS_DIR / sound_name,
-            _exe_dir / "sounds" / "Sound Effects (Chapter 5)" / sound_name,
-            _exe_dir / "sounds" / sound_name,
-        ]
-        target = next((c for c in candidates if c.is_file()), None)
-        if target:
-            winsound.PlaySound(str(target), winsound.SND_FILENAME | winsound.SND_ASYNC)
-        else:
-            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-    except Exception as err:
-        log.warning("Could not play sound effect '%s': %s", sound_name, err)
 
 
 def parse_duration_string(text: str) -> int | None:
@@ -732,7 +708,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
 
 - TIMERS & SCHEDULED ALARMS ([set_timer: <dur>, <label>], [set_alarm: <time>, <label>], [cancel_timer: <target>], [cancel_alarm: <target>]):
-  * You have an ACTIVE ALARM & COUNTDOWN TIMER system that physically rings on the user's desktop, shakes your body, and sounds an authentic bell when time is up!
+  * You have an ACTIVE ALARM & COUNTDOWN TIMER system that physically alerts the user on their desktop, shakes your body with startled animations, and pops up an interactive choice dialogue when time is up!
   * When the user asks you to set a timer or countdown (e.g. "set a timer for 15 minutes", "timer 25m for pomodoro", "count down 5 minutes", "remind me in 10 minutes to stretch"):
     - Append [set_timer: <duration>, <label>] to your response!
     - Duration can be: "15m", "25m", "30s", "1h", "1h30m", or number of minutes.
@@ -4726,7 +4702,7 @@ class AlarmsDialog(QDialog):
         layout.addWidget(title_label)
 
         # Subtitle / Hint
-        hint_label = QLabel("Active countdowns ring automatically on your desktop with retro bells and animations!", self)
+        hint_label = QLabel("Active countdowns trigger automatically on your desktop with animations and choice dialogues!", self)
         hint_font = QFont(self._font_family)
         hint_font.setPixelSize(11)
         hint_label.setFont(hint_font)
@@ -8411,9 +8387,6 @@ class YellowsPixelBuddies(QWidget):
         elif self._phase == Phase.HIDE_PEEK:
             self._on_peek_ears_clicked()
 
-        # Play sound effect
-        play_sound_effect("snd_scissorbell_lite.wav")
-
         # Snap to startled/shocked animation
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
@@ -8423,9 +8396,9 @@ class YellowsPixelBuddies(QWidget):
 
         # Dialogue prompt with choice buttons
         if item_type == "alarm":
-            alarm_text = f"* ⏰ ALARM RINGING, MINION!!\n* It's {clock_str}!\n* Time for: \"{label}\"!"
+            alarm_text = f"* ⏰ ALARM TRIGGERED, MINION!!\n* It's {clock_str}!\n* Time for: \"{label}\"!"
         else:
-            alarm_text = f"* ⏰ BEEP BEEP BEEP!!\n* Timer finished, mew!\n* Task: \"{label}\"!"
+            alarm_text = f"* ⏰ TIME'S UP, MEW!!\n* Timer finished!\n* Task: \"{label}\"!"
 
         choices = [
             ("Dismiss", "* Phew! Good job staying on track, mew!", "peace_sign"),
@@ -8453,10 +8426,8 @@ class YellowsPixelBuddies(QWidget):
             self._memory.dismiss_alarm(item_id)
         elif idx == 1:
             self._memory.snooze_alarm_or_timer(item_id, minutes=5)
-            play_sound_effect("snd_pink_gasp.wav")
         elif idx == 2:
             self._memory.snooze_alarm_or_timer(item_id, minutes=15)
-            play_sound_effect("snd_angry_train_whistle.wav")
 
         self._on_question_answered(choice_label, reaction_text, reaction_anim)
 
