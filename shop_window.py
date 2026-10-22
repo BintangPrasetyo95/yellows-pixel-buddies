@@ -678,7 +678,9 @@ class DeltaruneShopWindow(QWidget):
     def _is_dialogue_rect(self, pt: QPoint) -> bool:
         if self.state == ShopState.TALK_DIALOGUE:
             return 12 <= pt.x() <= 628 and 248 <= pt.y() <= 472
-        return 12 <= pt.x() <= 403 and 248 <= pt.y() <= 472
+        elif self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
+            return 12 <= pt.x() <= 403 and 248 <= pt.y() <= 472
+        return False
 
     def _on_scene_tick(self) -> None:
         cached_count = len(self._bg_cache["root"])
@@ -1871,7 +1873,7 @@ class DeltaruneShopWindow(QWidget):
         if event.button() == Qt.LeftButton:
             pos_canvas = self._screen_to_canvas(event.pos())
 
-            # 1. Dialogue skip loading without dismissing
+            # 1. Dialogue skip typing without dismissing
             if self._is_dialogue_rect(pos_canvas):
                 if self._is_typing():
                     self._finish_typing()
@@ -1880,16 +1882,45 @@ class DeltaruneShopWindow(QWidget):
                     self._confirm_selection()
                     return
 
-            # 2. Check Tasks Category Click (switch to Submenu if clicked)
-            if self.state == ShopState.TASKS and 263 <= pos_canvas.y() <= 289 and 24 <= pos_canvas.x() <= 380:
-                self.state = ShopState.TASKS_SUBMENU
-                self._selected_index = self._tasks_tab
-                self.update()
-                return
+            # 2. Check Top-Right Inspector Card click (x: 412..628, y: 46..246)
+            if 412 <= pos_canvas.x() <= 628 and 46 <= pos_canvas.y() <= 246:
+                if self.state == ShopState.TASKS:
+                    if self._tasks_tab == 0:
+                        goals = self._get_goals()
+                        if goals:
+                            idx = (self._selected_index - 1) if 1 <= self._selected_index <= len(goals) else 0
+                            self._open_item_action("goal", goals[idx])
+                            return
+                    elif self._tasks_tab == 1:
+                        reminders = self._get_active_reminders()
+                        if reminders:
+                            idx = (self._selected_index - 1) if 1 <= self._selected_index <= len(reminders) else 0
+                            self._open_item_action("task", reminders[idx])
+                            return
+                    elif self._tasks_tab == 2:
+                        alarms = self._get_scheduled_alarms()
+                        if alarms:
+                            idx = (self._selected_index - 2) if 2 <= self._selected_index < len(alarms) + 2 else 0
+                            al = alarms[idx]
+                            self._open_item_action("alarm", al.get("label", "Alarm"), al)
+                            return
+                    elif self._tasks_tab == 3:
+                        items = self._get_timers_menu_items()
+                        active_items = [it for it in items if it.get("kind") in ("active_shop", "active_memory")]
+                        if active_items:
+                            it = active_items[0]
+                            self._open_item_action("timer", it.get("label", "Timer"), it.get("data") or it.get("kind"))
+                            return
+                elif self.state == ShopState.FACTS_EDIT:
+                    notes = self._get_fact_notes()
+                    if notes:
+                        idx = (self._selected_index - 2) if 2 <= self._selected_index < len(notes) + 2 else 0
+                        self._open_item_action("fact", notes[idx])
+                        return
 
-            # 3. Check scroll arrow clicks
+            # 3. Check scroll arrow clicks (left side at x: 365..405)
             if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU):
-                if 600 <= pos_canvas.x() <= 635:
+                if 365 <= pos_canvas.x() <= 405:
                     if 265 <= pos_canvas.y() <= 310:
                         self._scroll_up()
                         return
@@ -1918,9 +1949,14 @@ class DeltaruneShopWindow(QWidget):
         hover_idx = self._get_item_at_canvas_pos(pos_canvas)
         is_dialogue = self._is_dialogue_rect(pos_canvas)
 
-        if hover_idx is not None:
+        is_card_hover = False
+        if 412 <= pos_canvas.x() <= 628 and 46 <= pos_canvas.y() <= 246:
+            if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT):
+                is_card_hover = True
+
+        if hover_idx is not None or is_card_hover:
             self.setCursor(Qt.PointingHandCursor)
-            if hover_idx != self._selected_index:
+            if hover_idx is not None and hover_idx != self._selected_index:
                 self._selected_index = hover_idx
                 if self.state == ShopState.ITEM_ACTION:
                     self._inspect_choice_idx = hover_idx
@@ -1949,9 +1985,9 @@ class DeltaruneShopWindow(QWidget):
         if self.state == ShopState.TALK_DIALOGUE:
             return None
 
-        # Check scroll arrows for scrollable states
+        # Check scroll arrows for scrollable states (left side at x: 365..405)
         if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU):
-            if 600 <= pt.x() <= 635:
+            if 365 <= pt.x() <= 405:
                 if 265 <= pt.y() <= 310:
                     self._scroll_up()
                     return None
@@ -1959,37 +1995,49 @@ class DeltaruneShopWindow(QWidget):
                     self._scroll_down()
                     return None
 
-        # Unified options area: start_x = 444, start_y = 283, line_h = 36
-        if 412 <= pt.x() <= 630 and 265 <= pt.y() <= 465:
-            row = (pt.y() - 265) // 36
-            if 0 <= row < 5:
-                if self.state in (ShopState.ROOT, ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TOGGLES_MENU):
-                    return row
-                elif self.state == ShopState.SETTINGS_MENU:
-                    return row if row < 3 else None
-                elif self.state == ShopState.ITEM_ACTION:
-                    return row if row < len(self._inspect_options) else None
-                elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
-                    return row if row < 2 else None
-                elif self.state == ShopState.TASKS:
-                    raw_len = self._get_menu_count() - 1
-                    if row == 4:
-                        return raw_len  # Back
-                    off = [self._goals_scroll_offset, self._tasks_scroll_offset, self._alarms_scroll_offset, self._timers_scroll_offset][self._tasks_tab]
-                    idx = off + row
-                    return idx if idx < raw_len else None
-                elif self.state == ShopState.FACTS_EDIT:
-                    raw_len = len(self._get_facts_menu_items())
-                    if row == 4:
-                        return raw_len  # Back
-                    idx = self._notes_scroll_offset + row
-                    return idx if idx < raw_len else None
-                elif self.state == ShopState.TALK_MENU:
-                    topics_count = len(TALK_TOPICS) - 1
-                    if row == 4:
-                        return topics_count  # Back
-                    idx = self._talk_scroll_offset + row
-                    return idx if idx < topics_count else None
+        # Left-side submenus: start_x = 44, start_y = 283, line_h = 36
+        if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS,
+                          ShopState.SETTINGS_MENU, ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT,
+                          ShopState.TALK_MENU):
+            if 20 <= pt.x() <= 400 and 265 <= pt.y() <= 465:
+                row = (pt.y() - 265) // 36
+                if 0 <= row < 5:
+                    if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TOGGLES_MENU):
+                        return row
+                    elif self.state == ShopState.SETTINGS_MENU:
+                        return row if row < 3 else None
+                    elif self.state == ShopState.TASKS:
+                        raw_len = self._get_menu_count() - 1
+                        if row == 4:
+                            return raw_len  # Back
+                        off = [self._goals_scroll_offset, self._tasks_scroll_offset, self._alarms_scroll_offset, self._timers_scroll_offset][self._tasks_tab]
+                        idx = off + row
+                        return idx if idx < raw_len else None
+                    elif self.state == ShopState.FACTS_EDIT:
+                        raw_len = len(self._get_facts_menu_items())
+                        if row == 4:
+                            return raw_len  # Back
+                        idx = self._notes_scroll_offset + row
+                        return idx if idx < raw_len else None
+                    elif self.state == ShopState.TALK_MENU:
+                        topics_count = len(TALK_TOPICS) - 1
+                        if row == 4:
+                            return topics_count  # Back
+                        idx = self._talk_scroll_offset + row
+                        return idx if idx < topics_count else None
+
+        # Right-side menus: start_x = 444, start_y = 283, line_h = 36
+        if self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
+            if 412 <= pt.x() <= 630 and 265 <= pt.y() <= 465:
+                row = (pt.y() - 265) // 36
+                if 0 <= row < 5:
+                    if self.state == ShopState.ROOT:
+                        return row
+                    elif self.state == ShopState.ITEM_ACTION:
+                        return row if row < len(self._inspect_options) else None
+                    elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
+                        return row if row < 2 else None
+
         return None
 
     # --- Painting & Rendering (Zero Allocations) -------------------------------
@@ -2069,11 +2117,30 @@ class DeltaruneShopWindow(QWidget):
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_character_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+        # Top-Right Details Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(255, 255, 0))
+        p.drawText(426, 59, "Pink's Wardrobe")
 
+        p.setFont(self._font_small)
+        if self._selected_index < len(CHARACTER_FORMS):
+            f = CHARACTER_FORMS[self._selected_index]
+            status = f.get("status", "LOCKED")
+            p.setPen(QColor(170, 255, 230) if status == "EQUIPPED" else QColor(255, 160, 200))
+            p.drawText(426, 81, f"Status: {status}")
+
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, f["desc"])
+        else:
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 81, "Return to Main")
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, "Return to the sanctuary main menu.")
+
+        # Left Submenu Options (Layout, margins, line_h=36, font matching menu)
         p.setFont(self._font_body)
         options = ["Pink", "COMING SOON", "COMING SOON", "COMING SOON", "Back"]
-        start_x = 444
+        start_x = 44
         start_y = 283
         line_h = 36
 
@@ -2091,11 +2158,30 @@ class DeltaruneShopWindow(QWidget):
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_tasks_submenu_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+        # Top-Right Details Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(170, 255, 230))
+        p.drawText(426, 59, "Tasks & Alarms")
 
+        p.setFont(self._font_small)
+        sub_info = [
+            ("Milestones", f"Active: {len(self._get_goals())}", "Target Milestones & Long-term Goals board.\nPink evaluates each goal dynamically between P$ 03 and P$ 08!"),
+            ("Chores", f"Active: {len(self._get_active_reminders())}", "Daily Chores & Reminders board.\nComplete tasks to earn P$ 01 to P$ 03 upon verification!"),
+            ("Clock Alarms", f"Scheduled: {len(self._get_scheduled_alarms())}", "Scheduled Clock Alarms center.\nPink sounds retro chimes and reminds you on taskbar!"),
+            ("Focus Timers", f"Status: {'Active' if self._timer_active else 'Ready'}", "Focus Timers & Pomodoro countdowns.\nSet study sprints and countdowns for deep focus!"),
+            ("Return", "Main Parlour", "Return to the sanctuary main menu."),
+        ]
+        if 0 <= self._selected_index < len(sub_info):
+            stitle, ssub, sdesc = sub_info[self._selected_index]
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 81, f"[{stitle}] - {ssub}")
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, sdesc)
+
+        # Left Submenu Options (Layout, margins, line_h=36, font matching menu)
         p.setFont(self._font_body)
         options = ["Goals", "Tasks", "Alarms", "Timers", "Back"]
-        start_x = 444
+        start_x = 44
         start_y = 283
         line_h = 36
 
@@ -2113,10 +2199,80 @@ class DeltaruneShopWindow(QWidget):
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_tasks_and_alarms_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+        # Top-Right Details Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(170, 255, 230))
 
+        if self._tasks_tab == 0:
+            goals = self._get_goals()
+            p.drawText(426, 59, "Goals Board")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 79, f"Active Goals: {len(goals)}")
+            p.setPen(QColor(255, 255, 255))
+            if 1 <= self._selected_index <= len(goals):
+                g_text = goals[self._selected_index - 1]
+                g_val = self.evaluate_goal_value(g_text)
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Valuation: +P$ {g_val:02d}\n\"{g_text}\"")
+                p.setFont(self._font_small)
+                p.setPen(QColor(255, 255, 0))
+                p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card or Enter for options ]")
+            else:
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Log long-term target milestones! Pink evaluates each goal dynamically between P$ 03 and P$ 08!")
+
+        elif self._tasks_tab == 1:
+            reminders = self._get_active_reminders()
+            p.drawText(426, 59, "Chore Board")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 79, f"Active Chores: {len(reminders)}")
+            p.setPen(QColor(255, 255, 255))
+            if 1 <= self._selected_index <= len(reminders):
+                t_text = reminders[self._selected_index - 1]
+                t_val = evaluate_task_value(t_text)
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Valuation: +P$ {t_val:02d}\n\"{t_text}\"")
+                p.setFont(self._font_small)
+                p.setPen(QColor(255, 255, 0))
+                p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card or Enter for options ]")
+            else:
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pink awards P$ 1 - P$ 3 per completed chore.\nShe checks screen sights & session memories for proof!")
+
+        elif self._tasks_tab == 2:
+            alarms = self._get_scheduled_alarms()
+            p.drawText(426, 59, "Clock Alarms")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            p.drawText(426, 79, f"Scheduled: {len(alarms)}")
+            p.setPen(QColor(255, 255, 255))
+            if 2 <= self._selected_index < len(alarms) + 2:
+                al = alarms[self._selected_index - 2]
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Time: {al.get('clock_time')}\nReason: {al.get('label')}")
+                p.setFont(self._font_small)
+                p.setPen(QColor(255, 255, 0))
+                p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card or Enter for options ]")
+            else:
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Schedule wall-clock alarms. Pink will sound chimes and prompt on taskbar when time hits!")
+
+        elif self._tasks_tab == 3:
+            p.drawText(426, 59, "Focus Timers")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            if self._timer_active:
+                m, s = divmod(self._timer_seconds_remaining, 60)
+                p.drawText(426, 79, f"Active: {m:02d}:{s:02d} ({self._timer_label})")
+            else:
+                p.drawText(426, 79, "Status: Ready")
+            p.setPen(QColor(255, 255, 255))
+            timers_items = self._get_timers_menu_items()
+            if self._selected_index < len(timers_items):
+                it = timers_items[self._selected_index]
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Timer: {it.get('label')}\nPick study sprints or break intervals.")
+            else:
+                p.drawText(QRect(426, 93, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, "Pick a study sprint or break timer.\nPink provides visual alert animations upon completion!")
+
+        # Left Submenu Options (Layout, margins, line_h=36, font matching menu)
         p.setFont(self._font_body)
-        start_x = 444
+        start_x = 44
         start_y = 283
         line_h = 36
 
@@ -2142,11 +2298,11 @@ class DeltaruneShopWindow(QWidget):
         for r_idx, label in enumerate(visible_items):
             actual_idx = scroll_off + r_idx
             is_active = (actual_idx == self._selected_index)
-            color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+            color = QColor(255, 255, 0) if is_active else (QColor(170, 255, 230) if actual_idx == 0 else QColor(255, 255, 255))
             p.setPen(color)
             display_str = label
-            if len(display_str) > 24:
-                display_str = display_str[:23] + "..."
+            if len(display_str) > 26:
+                display_str = display_str[:25] + "..."
             p.drawText(start_x, start_y + r_idx * line_h, display_str)
 
             if is_active and self._soul_heart:
@@ -2160,23 +2316,52 @@ class DeltaruneShopWindow(QWidget):
         if is_back and self._soul_heart:
             p.drawPixmap(start_x - 24, start_y + 4 * line_h - 13, self._soul_heart)
 
+        # Scroll indicators
         p.setFont(self._font_small)
         p.setPen(QColor(255, 255, 0))
         if scroll_off > 0:
-            p.drawText(616, 283, "▲")
+            p.drawText(380, 283, "▲")
         if scroll_off + 4 < len(raw_list):
-            p.drawText(616, 391, "▼")
+            p.drawText(380, 391, "▼")
 
         p.setFont(self._font_small)
         p.setPen(QColor(255, 180, 220))
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_settings_menu_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+        # Top-Right Details Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(255, 255, 0))
+        p.drawText(426, 59, "Settings")
 
+        p.setFont(self._font_small)
+        p.setPen(QColor(140, 206, 255))
+        p.drawText(426, 81, "Companion Sanctuary")
+
+        p.setPen(QColor(255, 255, 255))
+        if self._selected_index == 0:
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                f"Notes Stored: {len(self._get_fact_notes())}\nPink remembers your nickname and personal notes permanently across sessions.",
+            )
+        elif self._selected_index == 1:
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                "Toggle desktop companion speech bubbles, autonomous song commentary, window reactions, and bomb attacks.",
+            )
+        else:
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                "Return to the sanctuary main menu.",
+            )
+
+        # Left Submenu Options (Layout, margins, line_h=36, font matching menu)
         p.setFont(self._font_body)
         options = ["Edit Facts & Nickname", "Companion Toggles", "Back"]
-        start_x = 444
+        start_x = 44
         start_y = 283
         line_h = 36
 
@@ -2194,14 +2379,33 @@ class DeltaruneShopWindow(QWidget):
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_toggles_menu_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+        # Top-Right Details Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(255, 255, 0))
+        p.drawText(426, 59, "Companion Toggles")
 
-        p.setFont(self._font_body)
+        p.setFont(self._font_small)
+        p.setPen(QColor(140, 206, 255))
+        p.drawText(426, 81, "Live Behavior")
+
         dlg_on = getattr(self._pet, "_dialogue_enabled", True) if self._pet else True
         song_on = getattr(self._pet, "_ai_song_comment_enabled", True) if self._pet else True
         win_on = getattr(self._pet, "_react_on_window_switch", True) if self._pet else True
         bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
 
+        descriptions = [
+            "Enable or disable speech bubble thoughts and reactions on your desktop.",
+            "Enable autonomous AI commentary on currently playing music and Spotify songs.",
+            "React when you switch active applications and working windows.",
+            "Toggle feline explosive ordnance and laser defense behavior.",
+            "Return to sanctuary settings.",
+        ]
+        desc = descriptions[self._selected_index] if 0 <= self._selected_index < len(descriptions) else ""
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, desc)
+
+        # Left Submenu Options (Layout, margins, line_h=36, font matching menu)
+        p.setFont(self._font_body)
         options = [
             f"Dialogue: [{'ON' if dlg_on else 'OFF'}]",
             f"Commentary: [{'ON' if song_on else 'OFF'}]",
@@ -2209,7 +2413,7 @@ class DeltaruneShopWindow(QWidget):
             f"Bomb Attack: [{'ON' if bomb_on else 'OFF'}]",
             "Back",
         ]
-        start_x = 444
+        start_x = 44
         start_y = 283
         line_h = 36
 
@@ -2227,10 +2431,45 @@ class DeltaruneShopWindow(QWidget):
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_facts_edit_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+        # Top-Right Details Card
+        p.setFont(self._font_title)
+        p.setPen(QColor(170, 255, 230))
+        p.drawText(426, 59, "Fact Sheet")
 
+        p.setFont(self._font_small)
+        p.setPen(QColor(140, 206, 255))
+        p.drawText(426, 81, f"User: {self._get_user_name()}")
+
+        notes = self._get_fact_notes()
+        p.setPen(QColor(255, 255, 255))
+        if self._selected_index == 0:
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                f"Change the nickname Pink uses when addressing you.\nCurrent: {self._get_user_name()}",
+            )
+        elif self._selected_index == 1:
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                "Inscribe a new permanent fact note into Pink's logs.\nShe will remember this across all sessions.",
+            )
+        elif 2 <= self._selected_index < len(notes) + 2:
+            n_text = notes[self._selected_index - 2]
+            p.drawText(QRect(426, 96, 188, 125), Qt.AlignLeft | Qt.TextWordWrap, f"Note #{self._selected_index - 1}:\n\"{n_text}\"")
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Click card or Enter for options ]")
+        else:
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                "Return to sanctuary settings.",
+            )
+
+        # Left Submenu Options (Layout, margins, line_h=36, font matching menu)
         p.setFont(self._font_body)
-        start_x = 444
+        start_x = 44
         start_y = 283
         line_h = 36
 
@@ -2241,11 +2480,11 @@ class DeltaruneShopWindow(QWidget):
         for r_idx, label in enumerate(visible_items):
             actual_idx = scroll_off + r_idx
             is_active = (actual_idx == self._selected_index)
-            color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+            color = QColor(255, 255, 0) if is_active else (QColor(170, 255, 230) if actual_idx < 2 else QColor(255, 255, 255))
             p.setPen(color)
             display_str = label
-            if len(display_str) > 24:
-                display_str = display_str[:23] + "..."
+            if len(display_str) > 26:
+                display_str = display_str[:25] + "..."
             p.drawText(start_x, start_y + r_idx * line_h, display_str)
 
             if is_active and self._soul_heart:
@@ -2259,20 +2498,110 @@ class DeltaruneShopWindow(QWidget):
         if is_back and self._soul_heart:
             p.drawPixmap(start_x - 24, start_y + 4 * line_h - 13, self._soul_heart)
 
+        # Scroll indicators
         p.setFont(self._font_small)
         p.setPen(QColor(255, 255, 0))
         if scroll_off > 0:
-            p.drawText(616, 283, "▲")
+            p.drawText(380, 283, "▲")
         if scroll_off + 4 < len(raw_list):
-            p.drawText(616, 391, "▼")
+            p.drawText(380, 391, "▼")
 
         p.setFont(self._font_small)
         p.setPen(QColor(255, 180, 220))
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
+    def _draw_talk_state(self, p: QPainter) -> None:
+        if self.state == ShopState.TALK_MENU:
+            # Top-Right Details Card
+            p.setFont(self._font_title)
+            p.setPen(QColor(255, 255, 0))
+            p.drawText(426, 59, "Serious Talk")
+
+            p.setFont(self._font_small)
+            topics_without_back = TALK_TOPICS[:-1]
+            if self._selected_index < len(topics_without_back):
+                t_title, _ = topics_without_back[self._selected_index]
+                p.setPen(QColor(140, 206, 255))
+                p.drawText(426, 81, t_title)
+                p.setPen(QColor(255, 255, 255))
+                p.drawText(
+                    QRect(426, 96, 188, 125),
+                    Qt.AlignLeft | Qt.TextWordWrap,
+                    "Listen to Pink speak about this topic in her serious shopkeeper voice.",
+                )
+                p.setPen(QColor(255, 255, 0))
+                p.drawText(QRect(426, 227, 188, 18), Qt.AlignCenter, "[ Press Enter/Z or Click to listen ]")
+            else:
+                p.setPen(QColor(140, 206, 255))
+                p.drawText(426, 81, "Return to Main")
+                p.setPen(QColor(255, 255, 255))
+                p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, "Return to the sanctuary main menu.")
+
+            # Left Submenu Options (Layout, margins, line_h=36, font matching menu)
+            p.setFont(self._font_body)
+            start_x = 44
+            start_y = 283
+            line_h = 36
+
+            scroll_off = self._talk_scroll_offset
+            visible_topics = topics_without_back[scroll_off : scroll_off + 4]
+
+            for r_idx, (t_title, _) in enumerate(visible_topics):
+                actual_idx = scroll_off + r_idx
+                is_active = (actual_idx == self._selected_index)
+                color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+                p.setPen(color)
+                display_str = t_title
+                if len(display_str) > 26:
+                    display_str = display_str[:25] + "..."
+                p.drawText(start_x, start_y + r_idx * line_h, display_str)
+
+                if is_active and self._soul_heart:
+                    p.drawPixmap(start_x - 24, start_y + r_idx * line_h - 13, self._soul_heart)
+
+            back_idx = len(topics_without_back)
+            is_back = (self._selected_index == back_idx)
+            color = QColor(255, 255, 0) if is_back else QColor(255, 255, 255)
+            p.setPen(color)
+            p.drawText(start_x, start_y + 4 * line_h, "Back")
+            if is_back and self._soul_heart:
+                p.drawPixmap(start_x - 24, start_y + 4 * line_h - 13, self._soul_heart)
+
+            # Scroll indicators
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            if scroll_off > 0:
+                p.drawText(380, 283, "▲")
+            if scroll_off + 4 < len(topics_without_back):
+                p.drawText(380, 391, "▼")
+
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 180, 220))
+            p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
+
+        elif self.state == ShopState.TALK_DIALOGUE:
+            self._draw_dialogue_text(p, QRect(36, 271, 568, 175))
+            p.setFont(self._font_small)
+            p.setPen(QColor(157, 162, 196))
+            p.drawText(530, 456, "[Z / Esc]")
+
     def _draw_item_action_state(self, p: QPainter) -> None:
+        # Left Box: Dialogue Text & Pink's evaluation
         self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
 
+        # Top-Right Details Card: Full inspection details
+        p.setFont(self._font_title)
+        p.setPen(QColor(170, 255, 230))
+        p.drawText(426, 59, f"Inspect: {self._inspect_item_kind.upper()}")
+
+        p.setFont(self._font_small)
+        p.setPen(QColor(140, 206, 255))
+        p.drawText(426, 81, "Action Selection")
+
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(QRect(426, 96, 188, 135), Qt.AlignLeft | Qt.TextWordWrap, self._inspect_item_text)
+
+        # Right-side Choices (Action options at start_x=444, start_y=283, line_h=36)
         p.setFont(self._font_body)
         start_x = 444
         start_y = 283
@@ -2293,6 +2622,33 @@ class DeltaruneShopWindow(QWidget):
 
     def _draw_task_confirm_state(self, p: QPainter) -> None:
         self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+
+        p.setFont(self._font_title)
+        if self._sell_has_evidence:
+            p.setPen(QColor(170, 255, 230))
+            p.drawText(426, 59, "Verified Work!")
+            p.setFont(self._font_small)
+            p.setPen(QColor(140, 206, 255))
+            proof_type = "Screen Sight" if self._sell_saw_on_screen else "Session Logs"
+            p.drawText(426, 81, f"Proof: {proof_type}")
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                f"Pink confirmed proof of work on '{self._sell_evidence_kw}'!\nComplete and collect your P$!",
+            )
+        else:
+            p.setPen(QColor(255, 200, 80))
+            p.drawText(426, 59, "Unverified Task")
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 160, 100))
+            p.drawText(426, 81, "Proof: Not Found")
+            p.setPen(QColor(255, 255, 255))
+            p.drawText(
+                QRect(426, 96, 188, 135),
+                Qt.AlignLeft | Qt.TextWordWrap,
+                "Pink hasn't observed any evidence of this on your screen or in recent sessions...\nAre you sure you finished it?",
+            )
 
         p.setFont(self._font_body)
         options = ["CLAIM REWARD", "CANCEL"]
@@ -2316,6 +2672,21 @@ class DeltaruneShopWindow(QWidget):
     def _draw_task_second_confirm_state(self, p: QPainter) -> None:
         self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
 
+        p.setFont(self._font_title)
+        p.setPen(QColor(255, 64, 64))
+        p.drawText(426, 59, "SUSPICION ALERT!")
+
+        p.setFont(self._font_small)
+        p.setPen(QColor(255, 140, 140))
+        p.drawText(426, 81, "Proof: NOT FOUND!")
+
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(
+            QRect(426, 96, 188, 135),
+            Qt.AlignLeft | Qt.TextWordWrap,
+            "Pink scanned your screen sight logs & session memories and found NO evidence of this work!\nAre you double-dog sure?!",
+        )
+
         p.setFont(self._font_body)
         options = ["I REALLY DID!", "...CAUGHT ME"]
         start_x = 444
@@ -2334,54 +2705,3 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_small)
         p.setPen(QColor(255, 180, 220))
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
-
-    def _draw_talk_state(self, p: QPainter) -> None:
-        if self.state == ShopState.TALK_MENU:
-            self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
-
-            p.setFont(self._font_body)
-            start_x = 444
-            start_y = 283
-            line_h = 36
-
-            topics_without_back = TALK_TOPICS[:-1]
-            scroll_off = self._talk_scroll_offset
-            visible_topics = topics_without_back[scroll_off : scroll_off + 4]
-
-            for r_idx, (t_title, _) in enumerate(visible_topics):
-                actual_idx = scroll_off + r_idx
-                is_active = (actual_idx == self._selected_index)
-                color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
-                p.setPen(color)
-                display_str = t_title
-                if len(display_str) > 24:
-                    display_str = display_str[:23] + "..."
-                p.drawText(start_x, start_y + r_idx * line_h, display_str)
-
-                if is_active and self._soul_heart:
-                    p.drawPixmap(start_x - 24, start_y + r_idx * line_h - 13, self._soul_heart)
-
-            back_idx = len(topics_without_back)
-            is_back = (self._selected_index == back_idx)
-            color = QColor(255, 255, 0) if is_back else QColor(255, 255, 255)
-            p.setPen(color)
-            p.drawText(start_x, start_y + 4 * line_h, "Back")
-            if is_back and self._soul_heart:
-                p.drawPixmap(start_x - 24, start_y + 4 * line_h - 13, self._soul_heart)
-
-            p.setFont(self._font_small)
-            p.setPen(QColor(255, 255, 0))
-            if scroll_off > 0:
-                p.drawText(616, 283, "▲")
-            if scroll_off + 4 < len(topics_without_back):
-                p.drawText(616, 391, "▼")
-
-            p.setFont(self._font_small)
-            p.setPen(QColor(255, 180, 220))
-            p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
-
-        elif self.state == ShopState.TALK_DIALOGUE:
-            self._draw_dialogue_text(p, QRect(36, 271, 568, 175))
-            p.setFont(self._font_small)
-            p.setPen(QColor(157, 162, 196))
-            p.drawText(530, 456, "[Z / Esc]")
