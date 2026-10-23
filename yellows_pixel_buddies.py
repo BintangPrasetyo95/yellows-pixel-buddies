@@ -120,7 +120,7 @@ from PyQt5.QtWidgets import (
 # =============================================================================
 
 # --- Application Metadata & Auto-Update --------------------------------------
-APP_VERSION = "0.9.8"
+APP_VERSION = "0.9.8.3"
 GITHUB_REPO = "BintangPrasetyo95/yellows-pixel-buddies"
 
 # --- Paths & Sprites ---------------------------------------------------------
@@ -6580,8 +6580,18 @@ class UpdateCheckerThread(QThread):
                         else:
                             standalone_asset = a
 
-                # Prefer direct standalone .exe swap for seamless in-place updates without installers
-                target_asset = standalone_asset or installer_asset
+                # Smart asset prioritization based on current installation:
+                # If running an installed version (uninstaller exists), prefer the Setup installer.
+                # If running portable standalone .exe, prefer direct .exe swap.
+                is_installed = False
+                if getattr(sys, "frozen", False):
+                    is_installed = any(_exe_dir.glob("unins*.exe"))
+
+                if is_installed:
+                    target_asset = installer_asset or standalone_asset
+                else:
+                    target_asset = standalone_asset or installer_asset
+
                 if target_asset:
                     dl_url = target_asset.get("browser_download_url", "")
                     asset_name = target_asset.get("name", "update.exe")
@@ -6623,6 +6633,12 @@ class UpdateDownloaderThread(QThread):
                             pct = int((downloaded / total_size) * 100)
                             self.progress.emit(pct)
 
+            # Integrity verification: ensure file is complete and not truncated
+            if total_size > 0 and downloaded < total_size:
+                raise IOError(f"Incomplete download: {downloaded}/{total_size} bytes received.")
+            if not dest_path.exists() or dest_path.stat().st_size < 1024 * 500:
+                raise IOError(f"Downloaded update payload is corrupted or incomplete ({dest_path.stat().st_size} bytes).")
+
             self.completed.emit(str(dest_path))
         except Exception as err:
             self.failed.emit(str(err))
@@ -6634,31 +6650,129 @@ def apply_application_update(update_file_path: str) -> None:
     up_path = Path(update_file_path).resolve()
     current_exe = Path(sys.executable).resolve()
 
+    if not up_path.exists() or up_path.stat().st_size < 1024 * 500:
+        log.error("Update payload is missing or incomplete: %s", up_path)
+        return
+
     if not getattr(sys, "frozen", False):
         log.info("Running in development mode; update saved to: %s", up_path)
         try:
-            os.startfile(str(up_path.parent))
-        except Exception:
-            pass
+            if "setup" in up_path.name.lower() or "installer" in up_path.name.lower():
+                subprocess.Popen([str(up_path)], creationflags=0x00000008 if os.name == "nt" else 0)
+            elif up_path.suffix.lower() == ".exe":
+                os.startfile(str(up_path))
+            else:
+                os.startfile(str(up_path.parent))
+        except Exception as e:
+            log.warning("Could not launch dev update: %s", e)
         return
 
     try:
         if "setup" in up_path.name.lower() or "installer" in up_path.name.lower():
-            # Fallback: Run installer executable directly if only an installer is available
-            subprocess.Popen([str(up_path)], creationflags=0x00000008 if os.name == "nt" else 0)
+            # Inno Setup installer: run with /CLOSEAPPLICATIONS to cleanly close Pink
+            installer_cmd = [str(up_path), "/CLOSEAPPLICATIONS"]
+            log.info("Spawning installer: %s", installer_cmd)
+            subprocess.Popen(installer_cmd, creationflags=0x00000008 if os.name == "nt" else 0)
         else:
-            # Standalone .exe replacement via robust retry loop batch script
+            # Standalone .exe replacement via hardened PowerShell worker with PID wait & UAC elevation
+            ps_path = up_path.parent / "apply_update.ps1"
             bat_path = up_path.parent / "apply_update.bat"
+            log_path = up_path.parent / "update.log"
+
+            ps_content = f"""# Pink Auto-Update Worker
+param(
+    [int]$TargetPid = {os.getpid()},
+    [string]$SourcePath = '{up_path}',
+    [string]$TargetPath = '{current_exe}',
+    [string]$LogPath = '{log_path}'
+)
+
+function Log-Message([string]$msg) {{
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $line = "[$timestamp] $msg"
+    Add-Content -Path $LogPath -Value $line -ErrorAction SilentlyContinue
+}}
+
+Log-Message "=== Pink Updater Worker Started ==="
+Log-Message "Target PID: $TargetPid"
+Log-Message "Source: $SourcePath"
+Log-Message "Target: $TargetPath"
+
+# 1. Wait for parent Pink process to exit and release file handles
+if ($TargetPid -gt 0) {{
+    try {{
+        $proc = Get-Process -Id $TargetPid -ErrorAction SilentlyContinue
+        if ($proc) {{
+            Log-Message "Waiting for Pink process $TargetPid to exit..."
+            $null = $proc.WaitForExit(15000)
+        }}
+    }} catch {{
+        Log-Message "Process wait note: $_"
+    }}
+}}
+
+# Buffer delay for Windows kernel to clear file locks
+Start-Sleep -Milliseconds 600
+
+# 2. Retry file replacement up to 30 times (~15 seconds)
+$copied = $false
+for ($i = 1; $i -le 30; $i++) {{
+    try {{
+        Copy-Item -Path $SourcePath -Destination $TargetPath -Force -ErrorAction Stop
+        $copied = $true
+        Log-Message "Update copy succeeded on attempt $i."
+        break
+    }} catch {{
+        Log-Message "Attempt $i failed: $_. Retrying in 500ms..."
+        Start-Sleep -Milliseconds 500
+    }}
+}}
+
+# 3. If standard copy failed (e.g. Program Files), attempt UAC elevation
+if (-not $copied) {{
+    Log-Message "Standard copy failed. Attempting elevated retry via RunAs..."
+    try {{
+        $elevatedArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -TargetPid 0 -SourcePath `"$SourcePath`" -TargetPath `"$TargetPath`" -LogPath `"$LogPath`""
+        $elevProc = Start-Process powershell -ArgumentList $elevatedArgs -Verb RunAs -PassThru -Wait
+        if ($elevProc.ExitCode -eq 0) {{
+            $copied = $true
+            Log-Message "Elevated copy succeeded."
+        }}
+    }} catch {{
+        Log-Message "Elevation was cancelled or failed: $_"
+    }}
+}}
+
+# 4. Finalize
+if ($copied) {{
+    Log-Message "Launching updated application: $TargetPath"
+    Start-Process -FilePath $TargetPath
+    Log-Message "Removing temporary download: $SourcePath"
+    Remove-Item -Path $SourcePath -Force -ErrorAction SilentlyContinue
+    Log-Message "Update finished successfully."
+}} else {{
+    Log-Message "ERROR: Could not overwrite $TargetPath after retries. Preserving $SourcePath."
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show(
+        "Pink was unable to replace the executable file (it may be locked or write-protected).`n`nThe updated version is saved at:`n$SourcePath",
+        "Update Notification",
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Warning
+    )
+}}
+"""
+            ps_path.write_text(ps_content, encoding="utf-8")
+
+            # Fallback batch script in case PowerShell execution is disabled (using ping for delay)
             bat_content = f"""@echo off
-setlocal enabledelayedexpansion
 set "SOURCE={up_path}"
 set "TARGET={current_exe}"
 
-:: Retry copy up to 30 times (~15 seconds) for old process to fully exit and release file lock
+:: Retry copy using ping for delay (timeout crashes without console stdin)
 for /l %%i in (1, 1, 30) do (
     copy /y "%SOURCE%" "%TARGET%" >nul 2>&1
     if not errorlevel 1 goto :copy_done
-    timeout /t 1 /nobreak >nul
+    ping -n 2 127.0.0.1 >nul
 )
 
 :copy_done
@@ -6667,7 +6781,25 @@ del "%SOURCE%" >nul 2>&1
 (goto) 2>nul & del "%~f0"
 """
             bat_path.write_text(bat_content, encoding="utf-8")
-            subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=0x00000008 if os.name == "nt" else 0)
+
+            # Execute PowerShell worker; fall back to cmd.exe if PowerShell fails to start
+            ps_cmd = [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle", "Hidden",
+                "-ExecutionPolicy", "Bypass",
+                "-File", str(ps_path),
+                "-TargetPid", str(os.getpid()),
+                "-SourcePath", str(up_path),
+                "-TargetPath", str(current_exe),
+                "-LogPath", str(log_path)
+            ]
+            try:
+                subprocess.Popen(ps_cmd, creationflags=0x00000008 if os.name == "nt" else 0)
+            except Exception as ps_err:
+                log.warning("PowerShell launcher failed: %s; falling back to cmd.exe", ps_err)
+                subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=0x00000008 if os.name == "nt" else 0)
     except Exception as err:
         log.error("Failed to execute update helper: %s", err)
 
@@ -6682,16 +6814,17 @@ del "%SOURCE%" >nul 2>&1
 def restart_application() -> None:
     """Cleanly restart the application process in both compiled .exe and dev Python environments."""
     release_single_instance_lock()
+    main_script = str(Path(__file__).resolve())
     if getattr(sys, "frozen", False):
         clean_argv = [a for a in sys.argv[1:] if a != "--restarting"]
         args = [sys.executable] + clean_argv + ["--restarting"]
     else:
-        clean_argv = [a for a in sys.argv if a != "--restarting"]
-        args = [sys.executable] + clean_argv + ["--restarting"]
-    log.info("Restarting application with args: %s", args)
+        clean_argv = [a for a in sys.argv[1:] if a != "--restarting"]
+        args = [sys.executable, main_script] + clean_argv + ["--restarting"]
+    log.info("Restarting application with args: %s (cwd=%s)", args, _exe_dir)
     flags = 0x00000008 if os.name == "nt" else 0
     try:
-        subprocess.Popen(args, creationflags=flags)
+        subprocess.Popen(args, cwd=str(_exe_dir), creationflags=flags)
     except Exception as err:
         log.error("Failed to spawn new application process: %s", err)
     app = QApplication.instance()
@@ -8619,6 +8752,29 @@ RULES:
         if len(notes) > 280:
             notes = notes[:280] + "..."
 
+        is_frozen = getattr(sys, "frozen", False)
+        is_git = (_exe_dir / ".git").is_dir()
+
+        if not is_frozen and is_git:
+            msg = (
+                f"A new version ({version}) of Yellow's Pixel Buddies is available!\n\n"
+                f"Changelog:\n{notes}\n\n"
+                "You are currently running from Python source (Git repository).\n\n"
+                "Would you like Pink to update automatically via 'git pull' and restart?"
+            )
+            reply = QMessageBox.question(
+                None,
+                "Update Available! 🚀",
+                msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                self._apply_git_update(version)
+            else:
+                self._say(f"* Update to {version} postponed, mew!", force=True, record_memory=False)
+            return
+
         msg = (
             f"A new version ({version}) of Yellow's Pixel Buddies is available!\n\n"
             f"Changelog:\n{notes}\n\n"
@@ -8638,6 +8794,28 @@ RULES:
             self._start_update_download(download_url, asset_name)
         else:
             self._say(f"* Update to {version} postponed, mew!", force=True, record_memory=False)
+
+    def _apply_git_update(self, version: str) -> None:
+        """Update the repository via git pull in development/source environments."""
+        self._say("* Running git pull to update Pink... hang tight, mew!", force=True, record_memory=False)
+        try:
+            result = subprocess.run(
+                ["git", "pull"],
+                cwd=str(_exe_dir),
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                self._say(f"* Update to {version} complete! Restarting Pink now, mew!!", force=True, record_memory=False)
+                QTimer.singleShot(1500, restart_application)
+            else:
+                err_msg = (result.stderr or result.stdout or "").strip()
+                log.warning("git pull failed: %s", err_msg)
+                self._say("* Mew... git pull had conflicts or failed. Please check git status!", force=True, record_memory=False)
+        except Exception as err:
+            log.error("Failed to run git pull: %s", err)
+            self._say("* Mew?! Could not execute git pull. Please update manually via git!", force=True, record_memory=False)
 
     def _on_no_update_available(self, manual: bool) -> None:
         if manual:
