@@ -6431,13 +6431,18 @@ class UpdateCheckerThread(QThread):
             curr_ver = self._parse_version(self.current_version)
 
             if remote_ver > curr_ver:
-                target_asset = None
+                standalone_asset = None
+                installer_asset = None
                 for a in assets:
                     name = a.get("name", "").lower()
                     if name.endswith(".exe"):
-                        target_asset = a
                         if "setup" in name or "installer" in name:
-                            break
+                            installer_asset = a
+                        else:
+                            standalone_asset = a
+
+                # Prefer direct standalone .exe swap for seamless in-place updates without installers
+                target_asset = standalone_asset or installer_asset
                 if target_asset:
                     dl_url = target_asset.get("browser_download_url", "")
                     asset_name = target_asset.get("name", "update.exe")
@@ -6500,23 +6505,38 @@ def apply_application_update(update_file_path: str) -> None:
 
     try:
         if "setup" in up_path.name.lower() or "installer" in up_path.name.lower():
-            # Run installer executable directly
+            # Fallback: Run installer executable directly if only an installer is available
             subprocess.Popen([str(up_path)], creationflags=0x00000008 if os.name == "nt" else 0)
         else:
-            # Standalone .exe replacement via lightweight batch updater script
+            # Standalone .exe replacement via robust retry loop batch script
             bat_path = up_path.parent / "apply_update.bat"
             bat_content = f"""@echo off
-timeout /t 2 /nobreak > nul
-copy /y "{up_path}" "{current_exe}"
-start "" "{current_exe}"
-del "%~f0"
+setlocal enabledelayedexpansion
+set "SOURCE={up_path}"
+set "TARGET={current_exe}"
+
+:: Retry copy up to 30 times (~15 seconds) for old process to fully exit and release file lock
+for /l %%i in (1, 1, 30) do (
+    copy /y "%SOURCE%" "%TARGET%" >nul 2>&1
+    if not errorlevel 1 goto :copy_done
+    timeout /t 1 /nobreak >nul
+)
+
+:copy_done
+start "" "%TARGET%"
+del "%SOURCE%" >nul 2>&1
+(goto) 2>nul & del "%~f0"
 """
             bat_path.write_text(bat_content, encoding="utf-8")
             subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=0x00000008 if os.name == "nt" else 0)
     except Exception as err:
         log.error("Failed to execute update helper: %s", err)
 
-    QApplication.quit()
+    # Force process exit so Windows instantly releases the file lock on current_exe
+    app = QApplication.instance()
+    if app:
+        app.quit()
+    os._exit(0)
 
 
 def restart_application() -> None:
@@ -6531,7 +6551,10 @@ def restart_application() -> None:
         subprocess.Popen(args, creationflags=flags)
     except Exception as err:
         log.error("Failed to spawn new application process: %s", err)
-    QApplication.quit()
+    app = QApplication.instance()
+    if app:
+        app.quit()
+    os._exit(0)
 
 
 class YellowsPixelBuddies(QWidget):
