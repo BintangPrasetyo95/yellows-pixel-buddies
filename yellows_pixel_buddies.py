@@ -106,6 +106,7 @@ from PyQt5.QtGui import (
     QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
     QPainter, QPalette, QPen, QPixmap, QRegion, QTextOption, QTransform
 )
+from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtWidgets import (
     QAction, QApplication, QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QMessageBox,
@@ -977,15 +978,15 @@ class QuestionItem:
     category: str = "general"
 
 
-# --- Question Dialogue Variant (Desktop, Work, Fun Stuff, Advices, Motivations) ---
+# --- Question Dialogue Variant (Desktop, Work, Fun Stuff, Care, Motivations) ---
 QUESTION_ITEMS: list[QuestionItem] = [
     # Desktop & Environment
     QuestionItem(
         question="* How many tabs do you even have open right now?! Don't tell me you're hoarding digital junk!",
         choices=[
-            ("Just a few!", "* Hmph! Sure, tell yourself that! I bet three of them are frozen, mew!", "tongue"),
-            ("I hoard tabs.", "* LIES AND HOARDING! Purge them before this PC combusts, mew!", "angry"),
-            ("Close them for me?", "* What do I look like, an antivirus cleaner?! Do it yourself, lazy!", "shocked"),
+            ("Organized chaos!", "* As long as you know where our royal documents are! Don't lose my boutique!", "laughing"),
+            ("Only essential ones.", "* Phew! Good... too much digital clutter gives my cotton allergies, mew!", "peace_sign"),
+            ("Close them for me?", "* What do I look like, an antivirus cleaner?! Do it yourself, minion!", "shocked"),
         ],
         category="desktop",
     ),
@@ -1001,7 +1002,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Who is that on your wallpaper?! They're not cooler than me, are they?!",
         choices=[
-            ("You're cooler!", "* Hmph! Obviously! At least you know your place, minion! [add_fact: User admits Pink is cooler than their wallpaper]", "peace_sign"),
+            ("You're cooler!", "* Obviously! At least you know your place, minion! [add_fact: User admits Pink is cooler than their wallpaper]", "peace_sign"),
             ("They are cooler.", "* WHAT?! BLASPHEMY! Cat bombs incoming directly at your head!!", "angry"),
             ("It's default black.", "* A DEFAULT WALLPAPER?! Where is the drama?! Where is the sparkle?!", "shocked"),
         ],
@@ -1038,7 +1039,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Are you hiding secret windows behind that one?! Show me, mew!",
         choices=[
             ("Nothing secret!", "* Suspicious... but I'll let it slide. For now!", "behind"),
-            ("Top secret memes!", "* Ooh! Forbidden comedy archives?! Share the punchline, dummy!", "laughing"),
+            ("Top secret memes!", "* Ooh! Forbidden comedy archives?! Share the punchline, minion!", "laughing"),
             ("Magical plans.", "* WH-WHAT?! You're studying magical tactics without me?! Show me!!", "shocked"),
         ],
         category="desktop",
@@ -1046,11 +1047,11 @@ QUESTION_ITEMS: list[QuestionItem] = [
 
     # Work & Battle
     QuestionItem(
-        question="* Hey, are you actually making progress, or just clicking back and forth?!",
+        question="* How's the battle against your project going, minion?! Striking down roadblocks?",
         choices=[
             ("Making moves!", "* That's what I like to hear! Keep that momentum burning, mew!", "peace_sign"),
-            ("Clicking aimlessly.", "* UNACCEPTABLE!! Snap out of it or I'll fire ocular lasers at you!!", "angry"),
-            ("Shh, in the zone.", "* ...Fine! I'll whisper! But only because I expect greatness!", "wistful"),
+            ("A bit stuck...", "* Stand back, take a breath, and strike again! Don't let pixels bully you!", "wistful"),
+            ("Just warming up!", "* OHO! Look at that fire in your eyes! Go obliterate that task!!", "laughing"),
         ],
         category="work",
     ),
@@ -1067,7 +1068,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
         question="* Are you typing important documents, or secretly writing fanfiction?!",
         choices=[
             ("Serious work!", "* Hmph! Zero typos allowed, or I'll grade it with red ink!", "idle"),
-            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! Let me proofread it!! [add_fact: User secretly writes fanfiction]", "shocked"),
+            ("Secret fanfiction!", "* ...Does it feature Mew Mew Kissy Cutie?! You better let me proofread it!!", "shocked"),
             ("Writing about you.", "* ...Wh-what?! Don't say weird sentimental things out of nowhere, idiot!", "embarrassed"),
         ],
         category="work",
@@ -1091,11 +1092,11 @@ QUESTION_ITEMS: list[QuestionItem] = [
         category="work",
     ),
     QuestionItem(
-        question="* Finished your tasks for today?! Or are you planning to procrastinate forever?!",
+        question="* Have you conquered today's main quest yet, or is the final boss still standing?!",
         choices=[
-            ("All finished!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "laughing"),
-            ("Still grinding.", "* Then why are your hands off the keys?! Back to the battlefield!!", "angry"),
-            ("Procrastinating :P", "* HEY! Don't stick your tongue out at me! Get to work, dummy!!", "tongue"),
+            ("Quest complete!", "* VICTORY DANCE TIME!! Flawless execution, minion!", "laughing"),
+            ("Still in combat!", "* Keep your shield raised and strike true! Royal victory awaits!", "peace_sign"),
+            ("Taking a breather.", "* A tactical rest to recover stamina?! Very well, rest up, mew!", "wistful"),
         ],
         category="work",
     ),
@@ -1174,69 +1175,69 @@ QUESTION_ITEMS: list[QuestionItem] = [
         category="fun",
     ),
 
-    # Health & Advices
+    # Casual Care & Fueling (Meals, Hydration, Rest)
     QuestionItem(
-        question="* Hey, dummy! Have you had any water today?! Dehydrated minions are useless!",
+        question="* Have you taken a sip of water recently, mew? Even plush cotton needs a little humidity!",
         choices=[
-            ("Hydrated!", "* Good! Hydrated minions work with peak efficiency, mew!", "peace_sign"),
-            ("Forgot...", "* GO DRINK SOME RIGHT NOW! Don't make me splash you with lasers!!", "angry"),
-            ("Only coffee.", "* Coffee is NOT water, you gremlin! Go get real water right now!! [add_fact: User fuels themselves on coffee]", "shocked"),
+            ("Just drank some!", "* Splendid! A hydrated vessel is an unstoppable force, mew!", "peace_sign"),
+            ("Getting a cup now.", "* Good! Don't make me float over and push a glass into your hands!", "laughing"),
+            ("Coffee only...", "* Coffee is NOT water, puppet gremlin! Go balance it with real water, mew!", "shocked"),
         ],
-        category="advices",
+        category="care",
     ),
     QuestionItem(
-        question="* Check your posture right now! Sit up straight like a fierce warrior, mew!",
+        question="* Cease operations, minion! When was the last time you fed that mortal vessel of yours?!",
         choices=[
-            ("Straightened!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
-            ("Shrimp posture.", "* Stop curling like a boiled crustacean! Your spine is screaming!!", "shocked"),
-            ("I'm a liquid.", "* Cats are liquid, humans are bone! Sit straight, dummy!", "tongue"),
+            ("Ate a good meal!", "* Excellent! Stay well-fueled so you don't collapse on my watch!", "peace_sign"),
+            ("Snack break soon.", "* Oho! What kind of treat? Wave it past my cotton nose first, mew!", "behind"),
+            ("Forgot to eat...", "* FORGOT?! Absolutely not! Drop your keys and go find nourishment, human!", "angry"),
         ],
-        category="advices",
+        category="care",
     ),
     QuestionItem(
-        question="* Blink your eyes! Staring at the screen like a zombie will fry your retinas!",
+        question="* Look at the clock, mew! Even spooky spirits need rest. Don't fry your eyes in the dark!",
         choices=[
-            ("Blinked!", "* Good! Retinas preserved for another grueling battle!", "peace_sign"),
-            ("Can't look away.", "* They look like dry marbles! Blink before they roll out of your skull!!", "angry"),
-            ("Staring contest!", "* YOU DARE CHALLENGE ME?! ...O-ow, my cotton eyes! You win!!", "shocked"),
+            ("Sleeping soon!", "* Good! Save your documents and retreat to dreamland, champion!", "wistful"),
+            ("One more task...", "* Fine, but don't faceplant on the keyboard! Cotton hates key imprints!", "tongue"),
+            ("Night owl mode.", "* Night owls turn into grumpy morning zombies, minion! Wrap it up!", "shocked"),
         ],
-        category="advices",
+        category="care",
     ),
     QuestionItem(
-        question="* Have you stretched your shoulders yet?! Don't stiffen up like a wooden dummy!",
+        question="* Take twenty seconds to look away from that screen, mew! Rest those peepers!",
         choices=[
-            ("All stretched!", "* Ahhh! Doesn't that loosen the tension?! Mobility is everything!!", "laughing"),
-            ("Too stiff.", "* Trust me, wooden bodies are the WORST! Roll those shoulders right now!!", "kneeling"),
-            ("Pop my neck!", "* CRACK?! Aahh! Don't do that, it sounds like snapping seams!!", "shocked"),
+            ("Looking away now.", "* Ahhh... let the distant horizon refresh your optical sensors, mew!", "wistful"),
+            ("Blinking hard!", "* Hah! Rapid-fire ocular blinking! Better than dry marbles!", "laughing"),
+            ("Looking at you!", "* WH-WHAT?! S-stop staring directly at me, you weirdo!", "embarrassed"),
         ],
-        category="advices",
+        category="care",
     ),
     QuestionItem(
-        question="* When was the last time you ate something healthy?! Candy doesn't count!",
+        question="* Quick mobility check! Roll those shoulders back so you don't stiffen like a mannequin, mew!",
         choices=[
-            ("Ate a good meal!", "* Excellent! Fuel the vessel so you can fight another day!", "peace_sign"),
-            ("Living on snacks.", "* Junk food?! Even my plush stomach is churning in horror! Go eat!!", "shocked"),
-            ("Ordering pizza!", "* PIZZA?! Save a slice for me! ...Wait, cotton dolls can't digest cheese, mew!", "wistful"),
+            ("All rolled!", "* Much better! Look at that regal silhouette! 10 out of 10!", "peace_sign"),
+            ("Stretching now.", "* Nice and loose! Fluid joints make for swift typing, mew!", "laughing"),
+            ("Pop my neck!", "* CRACK?! Aahh! Don't do that, it sounds like snapping seams, mew!", "shocked"),
         ],
-        category="advices",
+        category="care",
     ),
     QuestionItem(
-        question="* Go look away from the monitor for twenty seconds! Rest those peepers!",
+        question="* You've been staring at that screen for ages! Step away for a quick breather, mew!",
         choices=[
-            ("Looking away now!", "* Good! Let the distant horizon refresh your optical sensors, mew!", "wistful"),
-            ("Glued to screen.", "* The screen isn't going anywhere, dummy! Twenty seconds won't kill you!!", "tongue"),
-            ("Looking at you!", "* WH-WHAT?! S-stop staring at me! Look at a wall, idiot!!", "embarrassed"),
+            ("Stretching legs!", "* Smart move! A tactical breather sharpens the senses, minion!", "peace_sign"),
+            ("In the groove!", "* Keep that fire burning then, but don't burn out your chassis!", "laughing"),
+            ("Need five minutes.", "* Take ten if you need it! I'll guard your desktop fortress!", "peace_sign"),
         ],
-        category="advices",
+        category="care",
     ),
     QuestionItem(
-        question="* Are you taking enough breaks?! Overworking ruins your battle readiness!",
+        question="* If you had a magical pantry right now, what snack would you summon, mew?!",
         choices=[
-            ("Taking breaks!", "* Smart! Rest is a tactical component of supreme victory!", "peace_sign"),
-            ("Nonstop grind!", "* Burnout is for rookies! Rest five minutes or face a tactical timeout!!", "angry"),
-            ("Just micro-naps.", "* Cat naps?! A feline tactic! I approve, but don't faceplant the keyboard!", "laughing"),
+            ("Fresh cookies!", "* OOH! Warm chocolate chip cookies! Let me smell them, mew!", "singing"),
+            ("Hot tea / coffee.", "* Warm beverages soothe the weary soul! Sip with dignity, minion!", "wistful"),
+            ("Savory pizza!", "* PIZZA?! Save a slice for me! ...Wait, cotton dolls can't digest cheese, mew!", "shocked"),
         ],
-        category="advices",
+        category="care",
     ),
 
     # Motivations & Determination
@@ -1270,8 +1271,8 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Take a deep breath! You've got this... not that I'm cheering for you or anything!",
         choices=[
-            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot!! [add_fact: User appreciates Pink's encouragement]", "embarrassed"),
-            ("Needed that.", "* Hmph! See? A clear mind makes quick work of any enemy!", "peace_sign"),
+            ("Thanks Pink! <3", "* W-WH-WHAT?! Don't look at me like that! Just get back to work, idiot! [add_fact: User appreciates Pink's encouragement]", "embarrassed"),
+            ("Needed that.", "* See? A clear mind makes quick work of any obstacle!", "peace_sign"),
             ("Breathed in fury!", "* HAH! Good! Use that fiery oxygen to torch your roadblocks!!", "laughing"),
         ],
         category="motivations",
@@ -1290,7 +1291,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
         choices=[
             ("I am the boss!", "* Exactly! Rule this desktop with confidence and sparkle magic!!", "laughing"),
             ("Phase Two active!", "* NONSENSE! Boss monsters have multiple phases! Activate Phase Two!!", "laughing"),
-            ("Need a potion.", "* Chug an energy elixir then! Re-engage with maximum HP!!", "peace_sign"),
+            ("Need an elixir.", "* Chug an energy potion then! Re-engage with maximum HP!!", "peace_sign"),
         ],
         category="motivations",
     ),
@@ -1304,54 +1305,54 @@ QUESTION_ITEMS: list[QuestionItem] = [
         category="motivations",
     ),
 
-    # Canon Pink Lore & Dating (Undertale / Deltarune)
+    # Canon Pink Lore & Banter (Undertale / Deltarune)
     QuestionItem(
-        question="* Wh-what's going on!? School!? I don't... even go to school anymore... And you wanna WALK ME HOME!?",
+        question="* (The doll body suddenly twitches...) S-school!? I don't... even go to school anymore! Why are you watching me walk around?!",
         choices=[
-            ("Yes! Let's walk.", "* ...! Hmph! Fine, but don't you dare get any weird ideas, dearies! [add_fact: User offered to walk Pink home]", "embarrassed"),
-            ("Walk alone, doll.", "* HAH! Good! I can walk myself, you little grubby puppet gremlin!", "tongue"),
-            ("Only if you fly!", "* Fly?! Ghosts float, they don't give piggyback rides, fool!", "laughing"),
+            ("Guarding royalty!", "* Hmph! Knowing your place as royal guard! I expect 100% vigilance!", "peace_sign"),
+            ("You're cute, doll.", "* C-CUTE?! I am an unhinged ethereal phantom, not a cuddly toy!!", "embarrassed"),
+            ("Just pacing, mew.", "* Pacing builds character, mew! Ghost-chan is just dramatic!", "laughing"),
         ],
-        category="dating",
+        category="lore",
     ),
     QuestionItem(
-        question="* It's... because you think this body's CUTE, right!? You... wish you never met me, right...?",
+        question="* Look at that wallpaper... Tell me, was the world outside always this colorful, or did Asgore paint it all, mew?",
         choices=[
-            ("Glad we met!", "* Wh-WHAT?! S-stop looking deep into my eyes, idiot! Heart went funny... [add_fact: User is glad they met Pink]", "embarrassed"),
-            ("Wish I never did.", "* FOOL! You'll regret those words when I unleash a cat bomb on your head!", "angry"),
-            ("You're hilarious.", "* H-hilarious?! I am a fearsome warrior, not a stand-up comedian!!", "shocked"),
+            ("It's breathtaking.", "* ...Yeah. Breathtaking... like the afterglow of a light you stared at too long.", "wistful"),
+            ("Bleak sometimes.", "* Bleak?! Then we'll splash it with glitter explosions and cat bombs!!", "laughing"),
+            ("You make it brighter.", "* WH-WHAT?! S-stop saying cheesy lines to make a ghost blush, idiot!", "embarrassed"),
         ],
-        category="dating",
+        category="lore",
     ),
     QuestionItem(
-        question="* If you were getting a gift for me... what would you even pick, mew?!",
+        question="* If you were offering tribute to royalty like me... what would you even present, mew?!",
         choices=[
-            ("Stinky fish!", "* PERFECTION! Rotten, smelly, and peak feline cuisine, mew!\n* Gross!! Keep that stench away from my cotton! [add_fact: User would gift Pink stinky fish]", "laughing"),
-            ("Silk ribbon!", "* Silk ribbons cost more than this PC!\n* A ribbon might be nice, mew! [add_fact: User would gift Pink a silk ribbon]", "peace_sign"),
-            ("Cat-head bomb!", "* YES! More ammunition for my arsenal! You have exquisite taste! [add_fact: User would gift Pink cat bombs]", "laughing"),
+            ("Stinky fish!", "* PERFECTION! Rotten, smelly, and peak feline cuisine, mew!\n* Gross!! Keep that stench away from my cotton!", "shocked"),
+            ("Silk ribbon!", "* A shiny silk ribbon?! ...That actually sounds exquisite, mew!", "peace_sign"),
+            ("Cat-head bomb!", "* YES! Unlimited explosive ordnance! You understand true beauty!", "laughing"),
         ],
-        category="dating",
+        category="lore",
     ),
     QuestionItem(
-        question="* Date location? Where would you take an elite sensation like me?!",
+        question="* Royal outing? If you ever dared invite sensation like me anywhere, where would it even be?!",
         choices=[
-            ("Mountain sunset!", "* Take a HIKE!! ...Wait, mountain sunsets are actually breathtaking... [add_fact: User's ideal date with Pink is a mountain sunset]", "wistful"),
-            ("Fancy tea cafe!", "* A little floral tea will have you ticked pink! Pink! PINK!!! [add_fact: User's ideal date with Pink is a floral tea cafe]", "singing"),
-            ("Underground dump.", "* The DUMP?! Are you taking me to visit my cousin in the garbage?! RUDE!!", "angry"),
+            ("Quiet sunset hill.", "* ...Sunset? The colors... they really are breathtaking out there, aren't they, mew?", "wistful"),
+            ("Fancy tea cafe!", "* A little floral tea will have you ticked pink! Pink! PINK!!!", "singing"),
+            ("Retro arcade!", "* HAH! I'll crush every high score with magical cat bomb precision!!", "laughing"),
         ],
-        category="dating",
+        category="lore",
     ),
     QuestionItem(
         question="* If I became something I loved... wouldn't that fix everything? Or am I just puppeting this doll...?",
         choices=[
-            ("Love us both.", "* Love... us both? ...Hmph. Don't go saying cheesy lines to make a ghost cry. [add_fact: User cares for both the doll vessel and ghost spirit]", "wistful"),
+            ("Love you both.", "* Love... us both? ...Hmph. Don't go saying cheesy lines to make a ghost cry.", "wistful"),
             ("You're a sensation!", "* Obviously! I've got friends, enemies, neutrals!\n* And a Doki-meter, mew!", "peace_sign"),
             ("You are you.", "* ...I am me, huh? Simple answers for complicated spirits. Thank you.", "wistful"),
         ],
-        category="dating",
+        category="lore",
     ),
     QuestionItem(
-        question="* I want to eat sand on the beach with you, mew!",
+        question="* (The doll body purrs...) I want to go eat sand on the beach with you, mew!",
         choices=[
             ("Let's eat sand!", "* Mew!! Let's go!\n* NO!! Stop encouraging her to eat silica, you fool!!", "shocked"),
             ("Sand is inedible.", "* Aww, mew...\n* Exactly! What that body wants is STUPID!", "laughing"),
@@ -1371,7 +1372,7 @@ QUESTION_ITEMS: list[QuestionItem] = [
     QuestionItem(
         question="* Hey... be honest. If someone tried to rip my doll seams or throw me away, what would you do?!",
         choices=[
-            ("Protect you both!", "* ...Hmph! As if an amateur like you could fight! ...B-but thanks, idiot.\n* We're safe with you, mew! [add_fact: User promised to protect Pink's seams and ghost spirit]", "embarrassed"),
+            ("Protect you both!", "* ...Hmph! As if an amateur like you could fight! ...B-but thanks, idiot.\n* We're safe with you, mew!", "embarrassed"),
             ("It's just cotton.", "* Touch a single stitch on this doll and I will haunt you across dimensions!!\n* Eek, mew!", "angry"),
             ("Armor-stitch seams!", "* Armor-reinforced plush seams?! I would be INDESTRUCTIBLE!!", "laughing"),
         ],
@@ -1447,6 +1448,140 @@ DIALOGUE_LINES: dict[str, list[str]] = {
 }
 
 # --- Windows Startup ---------------------------------------------------------
+# --- Single Instance Configuration & IPC -------------------------------------
+def _get_single_instance_identifier() -> str:
+    user = os.environ.get("USERNAME") or os.environ.get("USER")
+    if not user:
+        try:
+            user = os.getlogin()
+        except Exception:
+            user = "default"
+    clean_user = re.sub(r"[^a-zA-Z0-9_-]", "_", str(user))
+    return f"YellowsPixelBuddies_{clean_user}_SingleInstance"
+
+SINGLE_INSTANCE_KEY = _get_single_instance_identifier()
+_single_instance_mutex = None
+_single_instance_server: QLocalServer | None = None
+
+
+def acquire_single_instance_lock(wait_for_restart: bool = False) -> bool:
+    """Acquire single-instance mutex to guarantee only one copy of Pixel Buddies runs.
+
+    Returns True if this process is the sole instance, False if another instance is already running.
+    """
+    global _single_instance_mutex
+    if os.name == "nt":
+        mutex_name = f"Local\\{SINGLE_INSTANCE_KEY}"
+        kernel32 = ctypes.windll.kernel32
+        ERROR_ALREADY_EXISTS = 183
+
+        max_attempts = 25 if wait_for_restart else 1
+        for attempt in range(max_attempts):
+            mutex = kernel32.CreateMutexW(None, False, mutex_name)
+            last_error = kernel32.GetLastError()
+
+            if mutex and last_error != ERROR_ALREADY_EXISTS:
+                _single_instance_mutex = mutex
+                return True
+
+            if mutex:
+                kernel32.CloseHandle(mutex)
+
+            if attempt < max_attempts - 1:
+                time.sleep(0.1)
+
+        return False
+    else:
+        # Non-Windows fallback: probe QLocalSocket
+        try:
+            sock = QLocalSocket()
+            sock.connectToServer(SINGLE_INSTANCE_KEY)
+            if sock.waitForConnected(300):
+                sock.disconnectFromServer()
+                return False
+        except Exception:
+            pass
+        return True
+
+
+def release_single_instance_lock() -> None:
+    """Release single-instance mutex and close IPC server."""
+    global _single_instance_mutex, _single_instance_server
+    if _single_instance_server is not None:
+        try:
+            _single_instance_server.close()
+        except Exception as err:
+            log.debug("Error closing single-instance server: %s", err)
+        _single_instance_server = None
+
+    try:
+        QLocalServer.removeServer(SINGLE_INSTANCE_KEY)
+    except Exception:
+        pass
+
+    if _single_instance_mutex is not None:
+        if os.name == "nt":
+            try:
+                ctypes.windll.kernel32.CloseHandle(_single_instance_mutex)
+            except Exception as err:
+                log.debug("Error releasing single-instance mutex: %s", err)
+        _single_instance_mutex = None
+
+
+def notify_running_instance() -> bool:
+    """Attempt to notify the running instance via QLocalSocket to bring it to front."""
+    try:
+        sock = QLocalSocket()
+        sock.connectToServer(SINGLE_INSTANCE_KEY)
+        if sock.waitForConnected(700):
+            sock.write(b"ACTIVATE\n")
+            sock.waitForBytesWritten(700)
+            sock.disconnectFromServer()
+            return True
+    except Exception as err:
+        log.debug("Failed to notify running instance: %s", err)
+    return False
+
+
+def setup_single_instance_server(buddy: "YellowsPixelBuddies") -> QLocalServer | None:
+    """Set up QLocalServer to listen for duplicate launch requests and focus the pet."""
+    global _single_instance_server
+
+    try:
+        QLocalServer.removeServer(SINGLE_INSTANCE_KEY)
+    except Exception:
+        pass
+
+    server = QLocalServer(buddy)
+
+    def _on_new_connection() -> None:
+        conn = server.nextPendingConnection()
+        if not conn:
+            return
+
+        def _check_and_activate() -> None:
+            try:
+                data = bytes(conn.readAll()).decode("utf-8", errors="ignore")
+                if "ACTIVATE" in data:
+                    buddy.handle_instance_activation()
+            except Exception as err:
+                log.debug("Error reading activation signal: %s", err)
+            finally:
+                conn.close()
+
+        conn.readyRead.connect(_check_and_activate)
+        conn.disconnected.connect(_check_and_activate)
+        if conn.bytesAvailable() > 0:
+            _check_and_activate()
+
+    server.newConnection.connect(_on_new_connection)
+    if not server.listen(SINGLE_INSTANCE_KEY):
+        log.warning("Could not start single-instance IPC server: %s", server.errorString())
+        return None
+    _single_instance_server = server
+    return server
+
+
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 STARTUP_APP_NAME = "YellowsPixelBuddies"
 
@@ -6532,6 +6667,7 @@ del "%SOURCE%" >nul 2>&1
     except Exception as err:
         log.error("Failed to execute update helper: %s", err)
 
+    release_single_instance_lock()
     # Force process exit so Windows instantly releases the file lock on current_exe
     app = QApplication.instance()
     if app:
@@ -6541,10 +6677,13 @@ del "%SOURCE%" >nul 2>&1
 
 def restart_application() -> None:
     """Cleanly restart the application process in both compiled .exe and dev Python environments."""
+    release_single_instance_lock()
     if getattr(sys, "frozen", False):
-        args = [sys.executable] + sys.argv[1:]
+        clean_argv = [a for a in sys.argv[1:] if a != "--restarting"]
+        args = [sys.executable] + clean_argv + ["--restarting"]
     else:
-        args = [sys.executable] + sys.argv
+        clean_argv = [a for a in sys.argv if a != "--restarting"]
+        args = [sys.executable] + clean_argv + ["--restarting"]
     log.info("Restarting application with args: %s", args)
     flags = 0x00000008 if os.name == "nt" else 0
     try:
@@ -7090,6 +7229,11 @@ class YellowsPixelBuddies(QWidget):
         if reaction_anim and self._can_play(reaction_anim):
             self._play(reaction_anim)
         self._keep_response_anim = True
+        # Track hydration and meal acknowledgments so Pink remembers the user is fueled
+        lower_choice = (choice_label or "").lower()
+        if any(w in lower_choice for w in ("drank", "water", "cup", "hydrat", "eating", "ate", "food", "snack", "meal", "fed")):
+            self._last_hydration_check_time = now
+            self._last_care_question_time = now
         if hasattr(self, "_memory") and self._memory:
             # Extract any permanent facts embedded in the reaction
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
@@ -7131,14 +7275,19 @@ class YellowsPixelBuddies(QWidget):
         self._last_question_dialogue_time = t
 
     def _has_memory_highlights(self) -> bool:
-        """Check if there is rich memory or media context available for a memory-focused question."""
+        """Check if there is rich memory, media, or time-of-day care context available for a question."""
         if not hasattr(self, "_memory"):
             return False
         has_facts = bool(self._memory.get_long_term_facts())
         has_reminders = bool(self._memory.get_active_reminders())
         has_song = bool(getattr(self, "_current_song", None) and self._current_song[0])
         has_sessions = bool(getattr(self._memory, "sessions_dir", None) and any(self._memory.sessions_dir.glob("session_*.json")))
-        return has_facts or has_reminders or has_song or has_sessions
+
+        # Consider time-of-day meal / rest care windows
+        now_dt = datetime.datetime.now()
+        is_care_window = (12 <= now_dt.hour <= 13) or (18 <= now_dt.hour <= 20) or (now_dt.hour >= 23 or now_dt.hour < 5)
+        return has_facts or has_reminders or has_song or has_sessions or is_care_window
+
 
     def _pick_question_source(self) -> str:
         """Intelligently determine whether the next AI question should observe the screen, check memory, or be personality-driven."""
@@ -7159,19 +7308,27 @@ class YellowsPixelBuddies(QWidget):
             return "personality"
 
     def _get_best_memory_highlight(self) -> str:
-        """Pick an active, specific memory or context detail to center the question around."""
-        if getattr(self, "_current_song", None) and self._current_song[0]:
-            title, artist = self._current_song
-            return (
-                f"The user is actively listening to music right now: '{title}' by '{artist or 'Unknown'}'. "
-                f"If you know this song, ask what they think of its actual content, lyrics, vibe, or internet reputation/memes, or tease their taste in music!"
-            )
+        """Pick an active, specific memory, context detail, or casual care check to center the question around."""
+        if not hasattr(self, "_asked_song_titles"):
+            self._asked_song_titles = set()
 
-        if not hasattr(self, "_recent_reminder_highlights"):
-            self._recent_reminder_highlights = []
+        curr_song = getattr(self, "_current_song", None)
+        if curr_song and curr_song[0]:
+            song_title = curr_song[0].strip()
+            song_artist = (curr_song[1] or "Unknown").strip() if len(curr_song) > 1 else "Unknown"
+            # Only ask about the current song once per song title so we never loop on study streams
+            if song_title not in self._asked_song_titles:
+                self._asked_song_titles.add(song_title)
+                return (
+                    f"The user is actively listening to music right now: '{song_title}' by '{song_artist}'. "
+                    f"Ask what they think of its vibe, rhythm, or mood, or playfully comment on it without repeating old questions!"
+                )
 
+        # 1. User's explicit to-do reminders take priority
         reminders = self._memory.get_active_reminders() if hasattr(self._memory, "get_active_reminders") else []
         if reminders:
+            if not hasattr(self, "_recent_reminder_highlights"):
+                self._recent_reminder_highlights = []
             fresh_reminders = [
                 r for r in reminders
                 if r.get("id") not in self._recent_reminder_highlights and r.get("text") not in self._recent_reminder_highlights
@@ -7185,25 +7342,63 @@ class YellowsPixelBuddies(QWidget):
                 self._recent_reminder_highlights.append(r_text)
             if len(self._recent_reminder_highlights) > 5:
                 self._recent_reminder_highlights.pop(0)
-
             return (
-                f"Active to-do/reminder: '{r_text}'. "
-                f"Situational guidance: If the user is currently busy with high-priority work (like competition slides, exams, or urgent coding), "
-                f"do NOT badger or nag them to drop their work. Instead, ask if they want to push it to later, make a light joke, or ask how their current priority compares!"
+                f"The user has an active temporary to-do reminder: '{r_text}'. "
+                f"Playfully check in on how it's coming along or ask if they need extra royal encouragement!"
             )
 
-        facts_str = self._memory.get_long_term_facts() if hasattr(self._memory, "get_long_term_facts") else ""
-        if facts_str:
-            lines = [l.strip("- ") for l in facts_str.splitlines() if l.strip()]
-            if lines:
-                chosen_f = random.choice(lines)
-                return f"Permanent memory fact about user: '{chosen_f}'. Playfully quiz them or tease them about this fact!"
+        now_dt = datetime.datetime.now()
+        hour = now_dt.hour
+        now_perf = time.perf_counter()
 
-        recent_history, _ = self._memory.get_recent_sessions_overview(max_days=1, max_sessions=2)
-        if recent_history:
-            return "Recent conversation from earlier today: Call back to a topic from your conversation logs!"
+        # 2. Casual care (meals, late-night, hydration) cooldown check
+        last_care = getattr(self, "_last_care_question_time", -9999.0)
+        can_care = (now_perf - last_care) >= 3600.0  # 1 hour minimum cooldown on care questions
 
-        return "Ask about their productivity, energy level, or how their day is going on the desktop!"
+        care_candidates = []
+        if can_care:
+            if 12 <= hour <= 13:
+                care_candidates.append((
+                    "lunch",
+                    f"It's lunchtime ({now_dt.strftime('%I:%M %p')}). Pink should do a sweet, caring lunch check-in: "
+                    f"the doll is curious about what delicious human food they're having, while the ghost tsundere-orders the minion to refuel so they don't faint. "
+                    f"Offer natural, practical choices (e.g. 'Eating now!', 'Grabbing lunch', 'Working, shh')."
+                ))
+            elif 18 <= hour <= 20:
+                care_candidates.append((
+                    "dinner",
+                    f"It's dinnertime ({now_dt.strftime('%I:%M %p')}). Pink can casually check if they've eaten dinner or need a food break, "
+                    f"blending the doll's sweet curiosity with the ghost's royal concern. Provide practical choices."
+                ))
+            elif hour >= 23 or hour < 5:
+                care_candidates.append((
+                    "late_night",
+                    f"It is very late at night ({now_dt.strftime('%I:%M %p')}). Pink should check on them with genuine late-night companion care: "
+                    f"wondering why they're still grinding in the dark, the doll worried about tired eyes, and the ghost telling them not to turn into a morning zombie. "
+                    f"Provide cozy choices (e.g. 'Sleeping soon!', 'One more task', 'Night owl')."
+                ))
+            elif (now_perf - getattr(self, "_last_hydration_check_time", -9999.0)) >= 5400.0:
+                care_candidates.append((
+                    "hydration",
+                    "It's been over 90 minutes without a hydration check. Pink should offer a cute, non-preachy water check-in: "
+                    "the doll noting that even plush cotton needs humidity, or the ghost ordering the minion to take a refreshing sip of water. "
+                    "Provide friendly choices (e.g. 'Just drank!', 'Getting some now', 'Working hard')."
+                ))
+
+        if care_candidates:
+            chosen_care, prompt_str = random.choice(care_candidates)
+            self._last_care_question_time = now_perf
+            return prompt_str
+
+        # 3. Personal permanent facts
+        facts = self._memory.get_long_term_facts() if hasattr(self._memory, "get_long_term_facts") else ""
+        if facts:
+            return (
+                f"Recall a known personal fact or hobby from memory: {facts}. "
+                f"Ask a spontaneous, personal follow-up question related to this interest or background!"
+            )
+
+        return "Pink is recalling how loyal and hardworking this minion has been, and asks an insightful companion question about their current groove."
 
     def _build_question_prompt(self, source: str) -> tuple[str, str]:
         """Construct the system instruction and user prompt for generating an interactive question."""
@@ -7261,48 +7456,57 @@ class YellowsPixelBuddies(QWidget):
                 + "\n".join(f"- {q}" for q in recent_qs[-6:])
             )
 
-        system_inst += (
-            "\n\nSITUATIONAL AWARENESS & REPETITION RULES:\n"
-            "1. RESPECT USER PRIORITIES: If the user recently stated in chat what they are working on, why they are busy "
-            "(e.g. grinding for finals, competition, presentation slides, urgent project, working till morning), "
-            "or that tasks are paused: DO NOT ask them 'what are you doing' or 'are you making a presentation?' and DO NOT "
-            "demand they explain that app. And DO NOT nag them about uncompleted reminders! Instead, cheer them on, ask how a "
-            "specific part/slide is going, tease their lack of sleep, or offer mischievous encouragement.\n"
-            "2. DO NOT REPEAT QUESTIONS: Never ask the same question, suggest the same choices, or repeat recent themes "
-            "(like cat bombs or repeatedly asking about the same app/task).\n"
-        )
+        system_inst += """
 
-        format_spec = (
-            "\n\nCRITICAL OUTPUT FORMAT REQUIREMENTS:\n"
-            "You MUST output a valid JSON object matching this exact schema:\n"
-            "{\n"
-            '  "question": "* ... (in-character question, starting with \'* \', max 20 words)",\n'
-            '  "choices": [\n'
-            "    {\n"
-            '      "label": "Punchy button text (1-3 words)",\n'
-            '      "reaction": "* Pink\'s in-character reaction (starts with \'* \', 10-25 words)",\n'
-            '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
-            "    },\n"
-            "    {\n"
-            '      "label": "Punchy button text (1-3 words)",\n'
-            '      "reaction": "* Pink\'s in-character reaction (starts with \'* \', 10-25 words)",\n'
-            '      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"\n'
-            "    }\n"
-            "  ]\n"
-            "}\n"
-            "RULES:\n"
-            "- Provide 2 or 3 choices (maximum 3).\n"
-            "- Button labels MUST be punchy and short (1-3 words) to fit the retro speech box (e.g. 'Working hard!', 'Need snacks', 'Silence, doll').\n"
-            "- DELTARUNE / UNDERTALE CHOICE ENERGY:\n"
-            "  * Avoid boring binary 'good student vs bad slacker' questionnaire choices.\n"
-            "  * Make choices witty and varied: one enthusiastic/play-along, one sarcastic pushback/defiance, and optionally one quirky/absurd Toby Fox choice.\n"
-            "  * Never give patronizing lectures or guilt trips about productivity or health.\n"
-            "- PERSISTENT FACTS: If an option reveals a clear user preference, habit, or nickname, append [add_fact: User prefers ...] to that option's reaction so Pink remembers it permanently!\n"
-            "- Question must start with '* '.\n"
-            "- Each reaction must start with '* ' and include a valid anim from the list above.\n"
-            "- Keep wording concise so it fits comfortably in the Undertale-style speech box.\n"
-            "- Do NOT include markdown code blocks or explanatory text outside the JSON."
-        )
+SITUATIONAL AWARENESS, ANTI-REPETITION & EMOTIONAL DIVERGENCE RULES:
+1. RESPECT USER PRIORITIES: If the user recently stated in chat what they are working on, why they are busy (e.g. grinding for finals, competition, presentation slides, urgent project, working till morning), or that tasks are paused: DO NOT ask them 'what are you doing' or 'are you making a presentation?' and DO NOT demand they explain that app. And DO NOT nag them about uncompleted reminders! Instead, cheer them on, ask how a specific part/slide is going, tease their lack of sleep, or offer mischievous encouragement.
+2. STRICTLY FORBIDDEN QUESTION TEMPLATES:
+   * NEVER use the accusatory dichotomy template: 'Is [X] supposed to be [A], or are you just [B / slacking / procrastinating]?!'.
+   * NEVER default to accusing the user of 'procrastination', 'slacking', or 'laziness' unless the user explicitly confessed to procrastinating.
+   * DO NOT repeat recently asked questions or recent topics (like cat bombs or repeatedly asking about the same app/task).
+3. STRICTLY FORBIDDEN REACTION PATTERNS & TRUE EMOTIONAL DIVERGENCE:
+   * NEVER start reaction texts with '* Hmph!' and never dismiss all user choices with the same generic tsundere insult.
+   * Each choice MUST produce a genuinely DIFFERENT emotional reaction, animation, and verbal tone!
+   * Example: One choice makes Pink flustered [anim: embarrassed], another makes her proud/laughing [anim: laughing], another makes the doll vessel purr sweetly [anim: peace_sign] or the ghost puzzled [anim: behind].
+4. CASUAL CARE (EATING, DRINKING, REST):
+   * When checking on water, meals, or late-night rest, DO NOT give preachy parental lectures!
+   * Deliver care through the charming dual persona: the sweet Doll Vessel cares innocently ('* Even cotton needs water, mew!') while the Ghost Spirit acts tsundere-protective ('* Don't you dare collapse on my watch, human!').
+   * Choice labels for care should be practical and natural: e.g. 'Just drank!', 'Grabbing food', 'Working, shh'.
+5. DELTARUNE / UNDERTALE CHOICE ENERGY:
+   * Provide 2 or 3 choices (maximum 3; 2 choices is often punchier and great!).
+   * Button labels MUST be punchy and short (1-3 words) to fit the retro speech box (e.g. 'Working hard!', 'Need snacks', 'Silence, doll').
+   * Avoid boring binary 'good student vs bad slacker' questionnaire choices. Include playful, absurd Toby Fox options!
+   * Multi-speaker reactions are encouraged: you can separate doll and ghost on multiple lines using '\n* '.
+   * Only append [add_fact: User prefers ...] if the option reveals a clear, unambiguous real preference (NEVER for jokes or sarcasm).
+"""
+
+        format_spec = """
+
+CRITICAL OUTPUT FORMAT REQUIREMENTS:
+You MUST output a valid JSON object matching this exact schema:
+{
+  "question": "* ... (in-character question, starting with '* ', max 20 words)",
+  "choices": [
+    {
+      "label": "Punchy button text (1-3 words)",
+      "reaction": "* Pink's in-character reaction (starts with '* ', 10-25 words)",
+      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"
+    },
+    {
+      "label": "Punchy button text (1-3 words)",
+      "reaction": "* Pink's in-character reaction (starts with '* ', 10-25 words)",
+      "anim": "idle|laughing|shocked|singing|peace_sign|burnt|tongue|angry|embarrassed|wistful|behind|kneeling"
+    }
+  ]
+}
+RULES:
+- Provide 2 or 3 choices (maximum 3).
+- Button labels MUST be punchy and short (1-3 words) to fit the retro speech box.
+- Question must start with '* '.
+- Each reaction must start with '* ' and include a valid anim from the list above.
+- Keep wording concise so it fits comfortably in the Undertale-style speech box.
+- Do NOT include markdown code blocks or explanatory text outside the JSON.
+"""
         system_inst += format_spec
 
         if source == "screen":
@@ -11043,6 +11247,41 @@ class YellowsPixelBuddies(QWidget):
         self.raise_()
         self._start_pause(roll_special=False)
 
+    def handle_instance_activation(self) -> None:
+        """Handle activation signal when user tries to launch a second instance."""
+        log.info("Focusing existing instance from duplicate launch request.")
+        try:
+            if getattr(self, "_hidden_in_tray", False):
+                self._restore_from_tray()
+            elif self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
+                self._start_summon_intro()
+            else:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+                ensure_window_topmost(self)
+                if self._phase not in (
+                    Phase.JUMP, Phase.HANG, Phase.FALL,
+                    Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO
+                ):
+                    self._play("peace_sign")
+                    self._start_pause(roll_special=False)
+
+            if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+                self._shop_window.show()
+                self._shop_window.raise_()
+                self._shop_window.activateWindow()
+
+            if hasattr(self, "_say") and not getattr(self, "_hidden_in_tray", False):
+                self._say(
+                    "* Hey! I'm already right here, captain! Were you looking for me? :D",
+                    force=True,
+                    record_memory=False,
+                    step_anim="peace_sign",
+                )
+        except Exception as err:
+            log.warning("Error in handle_instance_activation: %s", err)
+
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """Left-click or double-click tray icon to call Pink if she is hiding."""
         if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
@@ -11103,6 +11342,7 @@ class YellowsPixelBuddies(QWidget):
             self._question_thread.terminate()
             self._question_thread.wait(500)
         self._reset_jump_state()                  # click-through off, pending reaction / histories cleared
+        release_single_instance_lock()
         self.hide()
         QApplication.quit()
 
@@ -11229,6 +11469,19 @@ def main() -> int:
     logging.basicConfig(level=level, format="[%(levelname)s] %(message)s")
     signal.signal(signal.SIGINT, signal.SIG_DFL)   # Ctrl+C in the console quits immediately
 
+    is_restarting = "--restarting" in sys.argv
+    if is_restarting:
+        sys.argv = [a for a in sys.argv if a != "--restarting"]
+
+    if not acquire_single_instance_lock(wait_for_restart=is_restarting):
+        log.warning("Another instance of Yellow's Pixel Buddies is already running.")
+        configure_high_dpi()
+        temp_app = QApplication.instance()
+        if not temp_app:
+            temp_app = QApplication(sys.argv)
+        notify_running_instance()
+        return 0
+
     check_jump_config()                            # typos in "left" / "right" fail here, readably
     configure_high_dpi()                           # must happen BEFORE QApplication()
     app = QApplication(sys.argv)
@@ -11254,9 +11507,13 @@ def main() -> int:
     sprites_dir = SPRITES_DIR
     bank = SpriteBank(sprites_dir, app.primaryScreen().devicePixelRatio())
     buddy = YellowsPixelBuddies(bank, font_family=font_family)
+    setup_single_instance_server(buddy)
     buddy.start()
 
-    return app.exec_()
+    try:
+        return app.exec_()
+    finally:
+        release_single_instance_lock()
 
 
 if __name__ == "__main__":
