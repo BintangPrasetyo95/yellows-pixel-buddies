@@ -1560,6 +1560,8 @@ def setup_single_instance_server(buddy: "YellowsPixelBuddies") -> QLocalServer |
             return
 
         def _check_and_activate() -> None:
+            if not conn.isOpen():
+                return
             try:
                 data = bytes(conn.readAll()).decode("utf-8", errors="ignore")
                 if "ACTIVATE" in data:
@@ -1567,10 +1569,12 @@ def setup_single_instance_server(buddy: "YellowsPixelBuddies") -> QLocalServer |
             except Exception as err:
                 log.debug("Error reading activation signal: %s", err)
             finally:
-                conn.close()
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
         conn.readyRead.connect(_check_and_activate)
-        conn.disconnected.connect(_check_and_activate)
         if conn.bytesAvailable() > 0:
             _check_and_activate()
 
