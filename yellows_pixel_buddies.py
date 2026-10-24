@@ -16,8 +16,9 @@ Sprites (next to this script)
         so the script always runs.
     new states      : run_left, run_right                          (movement, looping)
                       wistful_walk_left, wistful_walk_right        (slow movement, looping)
-                      embarrassed, overjoyed, wistful, sad,
-                      crying, tongue, kneeling, behind             (random specials)
+                      embarrassed, wistful, sad,
+                      tongue, kneeling, behind                     (random specials)
+                      overjoyed, crying                            (exceptional / AI-triggered)
                       angry                                        (triggered reaction)
                       airborne, hanging                            (jump to the cursor, looping)
         A missing / empty folder means the state is never used (no placeholder), so
@@ -371,8 +372,8 @@ LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
 LOOPING_REST_STATES = ()                  # loops for the whole pause; picked like a special
 SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign",
                   "embarrassed", "wistful", "sad",
-                  "crying", "tongue", "kneeling", "behind")           # one-shot -> idle
-EXCEPTIONAL_STATES = ("overjoyed",)       # reserved for rare / exceptional moments; never picked randomly
+                  "tongue", "kneeling", "behind")           # one-shot -> idle
+EXCEPTIONAL_STATES = ("overjoyed", "crying")       # reserved for rare / exceptional moments; never picked randomly
 REACTION_STATES = ("angry",)              # one-shot -> idle; triggered, never random
 BURNT_STATE = "burnt"                                                # one-shot (+hold) -> idle
 AIRBORNE_STATE = "airborne"               # jump to the cursor: the flight and every fall after it
@@ -1593,6 +1594,86 @@ def check_is_return_message(text: str) -> bool:
         r"\b(?:i\s+)?(?:have\s+)?returned\b",
         r"\b(?:i\s+)?came\s+back\b",
         r"\bback\s+now\b",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            return True
+    return False
+
+
+DEFAULT_FOCUS_ANNOYANCE_DURATION_S: float = 8 * 60.0  # 8 minutes
+
+FOCUS_RESPONSES: list[str] = [
+    "* Focusing, are you?! Royal decree grants you 8 minutes of peace and quiet, minion! Make it count, mew! [anim: peace_sign]",
+    "* Trying to focus? Understood! I'll hold back my annoyance for the next 8 minutes so you can lock in! [anim: wistful]",
+    "* 8 minutes of focus mode engaged! I won't pester you or get mad while you're in the zone, dummy! [anim: peace_sign]",
+    "* Hmph! Deep work mode acknowledged! You have 8 minutes of focus before I demand your attention again, mew! [anim: behind]",
+    "* Focusing on your mortal tasks?! Fine, I'll be nice and give you 8 minutes of uninterrupted focus! [anim: peace_sign]",
+]
+
+UNFOCUS_RESPONSES: list[str] = [
+    "* Focus mode concluded, minion! Welcome back to the mortal realm, mew! [anim: peace_sign]",
+    "* Done focusing already?! Good, now you can pay proper attention to your doll master! [anim: laughing]",
+    "* Focus interval ended! Back to our regular schedule of royal companionship, mew! [anim: idle]",
+]
+
+
+def check_is_focus_message(text: str) -> tuple[bool, float]:
+    """Return (True, duration_seconds) if the text indicates the user is focusing or trying to focus.
+
+    Defaults to 8 minutes (480.0 seconds).
+    """
+    clean = text.strip().lower()
+    if not clean:
+        return False, 0.0
+
+    # Slash commands
+    if clean.startswith(("/focus", "/focusing", "/deepwork", "/lockin")):
+        m_dur = re.search(r"/(?:focus|focusing|deepwork|lockin)\s+(\d+)\s*(m|min|minutes)?\b", clean)
+        if m_dur:
+            mins = float(m_dur.group(1))
+            return True, max(1.0, mins) * 60.0
+        return True, DEFAULT_FOCUS_ANNOYANCE_DURATION_S
+
+    # Negative / question filters: e.g. "what is focus", "can you focus", "how to focus"
+    if re.search(r"^(?:what|how|why|can\s+you|could\s+you|tell\s+me\s+about)\b", clean):
+        return False, 0.0
+
+    patterns = [
+        r"\b(?:i\s*['’]?m|i\s+am)\s+(?:trying\s+to\s+focus|focusing)\b",
+        r"\b(?:try|trying)\s+to\s+focus\b",
+        r"\b(?:need|have|got|gotta)\s+to\s+focus\b",
+        r"\b(?:gonna|going\s+to)\s+focus\b",
+        r"\blet\s+me\s+focus\b",
+        r"\bfocusing\s+(?:on|right\s+now|here|today|now)\b",
+        r"\b(?:in\s+)?focus\s+mode\b",
+        r"\bdeep\s+work\b",
+        r"\blocked\s+in\b",
+        r"^(?:focusing|trying\s+to\s+focus)[.!]?$",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            # Check if custom minutes mentioned, e.g. "trying to focus for 15 minutes"
+            m_dur = re.search(r"\bfor\s+(\d+)\s*(?:m|min|minutes?)\b", clean)
+            if m_dur:
+                mins = float(m_dur.group(1))
+                return True, max(1.0, mins) * 60.0
+            return True, DEFAULT_FOCUS_ANNOYANCE_DURATION_S
+
+    return False, 0.0
+
+
+def check_is_unfocus_message(text: str) -> bool:
+    """Return True if user explicitly announces they are done focusing."""
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    if clean in ("/unfocus", "/stopfocus", "/done_focus", "/end_focus"):
+        return True
+    patterns = [
+        r"\b(?:done|finished|stopped)\s+focusing\b",
+        r"\b(?:stop|end|cancel)\s+focus\b",
+        r"\bout\s+of\s+focus\s+mode\b",
     ]
     for pat in patterns:
         if re.search(pat, clean):
@@ -7281,6 +7362,8 @@ class YellowsPixelBuddies(QWidget):
         self._user_away_notified: bool = False
         self._user_away_time: float = 0.0
         self._user_away_was_idle: bool = False
+        self._user_focus_until: float = 0.0
+        self._user_focus_duration_s: float = DEFAULT_FOCUS_ANNOYANCE_DURATION_S
         self._was_annoyed_when_chat_opened: bool = False
         self._pending_song_announcement: tuple | None = None
         self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
@@ -8325,6 +8408,9 @@ RULES:
         if was_ignored:
             if getattr(self, "_user_away_notified", False):
                 log.info("Dialogue dismissed without interaction, but user notified away; not counting as ignored.")
+            elif getattr(self, "_user_focus_until", 0.0) > now:
+                rem_mins = max(0.1, (self._user_focus_until - now) / 60.0)
+                log.info("Dialogue dismissed without interaction, but user in focus mode (%.1f mins left); annoyance suppressed.", rem_mins)
             elif getattr(self, "_is_annoyed_ignored", False):
                 pass
             else:
@@ -8597,6 +8683,35 @@ RULES:
                 self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
             self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
             return
+
+        # Focus commands & natural intent recognition
+        is_focus, focus_dur_s = check_is_focus_message(clean_input)
+        is_unfocus = check_is_unfocus_message(clean_input)
+
+        if is_unfocus:
+            self._user_focus_until = 0.0
+            self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
+            reply = random.choice(UNFOCUS_RESPONSES)
+            if hasattr(self, "_memory") and self._memory:
+                self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
+            self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
+            return
+
+        if is_focus:
+            self._user_focus_until = now + focus_dur_s
+            self._user_focus_duration_s = focus_dur_s
+            self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
+            self._is_annoyed_ignored = False
+            log.info("User engaged focus mode for %.1f minutes (until %.1f)", focus_dur_s / 60.0, self._user_focus_until)
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            if not api_key:
+                reply = random.choice(FOCUS_RESPONSES)
+                if hasattr(self, "_memory") and self._memory:
+                    self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
+                self._say(reply, force=True, record_memory=True, step_anim="peace_sign", track_ignore=False)
+                return
 
         is_departure = check_is_departure_message(clean_input)
         is_return = check_is_return_message(clean_input)
@@ -8933,7 +9048,17 @@ RULES:
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
 
-        if is_departure:
+        if is_focus:
+            focus_mins = int(round(focus_dur_s / 60.0))
+            system_inst += (
+                f"\n\nCRITICAL CONTEXT - USER IS ENTERING FOCUS MODE ({focus_mins} MINUTES):\n"
+                f"The user just told you they are focusing or trying to focus on their work/study!\n"
+                f"- Acknowledge their focus mode and grant them {focus_mins} minutes of peace where you will hold back your annoyance!\n"
+                "- Tell them to lock in, concentrate, and make their royal doll master proud in your distinct sassy style!\n"
+                f"- Playfully remind them that once the {focus_mins} minutes are up, you'll expect their attention again!\n"
+                "- Tag your reaction with [anim: peace_sign], [anim: wistful], or [anim: behind]."
+            )
+        elif is_departure:
             system_inst += (
                 "\n\nCRITICAL CONTEXT - USER IS LEAVING / GOING AWAY:\n"
                 "The user just told you that they have to go, are stepping away, leaving, going AFK, or saying goodbye.\n"
