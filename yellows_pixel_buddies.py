@@ -558,12 +558,13 @@ CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
-AUTO_SCREEN_COMMENT_INACTIVITY_S = 600.0         # 10 minutes of silence after user chat or inspection
+AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
 TRAY_SCREEN_READ_INTERVAL_MS = 300000            # 5 minutes background screen reading while hidden in tray
 AUTO_SCREEN_MAX_USER_IDLE_S = 900.0              # 15 minutes of system-wide inactivity (keyboard/mouse) -> user away/asleep, pause peeking
 AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to justify commentary; otherwise screen is static
-AUTO_SCREEN_STATIC_BACKOFF_S = 600.0             # If screen hasn't changed, back off 10 minutes before checking again
+AUTO_SCREEN_STATIC_BACKOFF_S = 180.0             # If screen hasn't changed, back off 3 minutes before checking again
+AI_SONG_SCREEN_BUFFER_S = 45.0                   # Courtesy buffer after song comment before screen commentary
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -7269,7 +7270,7 @@ class YellowsPixelBuddies(QWidget):
                                and random.random() < DIALOGUE_QUESTION_CHANCE))
             if is_question:
                 self._last_question_dialogue_time = now
-                self._reset_ambient_ai_cooldowns(now)
+                self._reset_ambient_ai_cooldowns(now, reset_screen=False)
                 # 1. Attempt dynamic AI question generation (from screen, memory, or personality)
                 if self._trigger_ai_question():
                     return
@@ -7442,10 +7443,11 @@ class YellowsPixelBuddies(QWidget):
         else:
             self._say(reaction_text, force=True, record_memory=False)
 
-    def _reset_ambient_ai_cooldowns(self, now: float | None = None) -> None:
-        """Reset all autonomous AI timers (screen peeking, questions) to enforce a unified quiet window."""
+    def _reset_ambient_ai_cooldowns(self, now: float | None = None, reset_screen: bool = True) -> None:
+        """Reset autonomous AI timers to enforce quiet windows."""
         t = now if now is not None else time.perf_counter()
-        self._last_auto_screen_comment_time = t
+        if reset_screen:
+            self._last_auto_screen_comment_time = t
         self._last_question_dialogue_time = t
 
     def _has_memory_highlights(self) -> bool:
@@ -8547,12 +8549,15 @@ RULES:
         now = time.perf_counter()
         time_since_chat = now - getattr(self, "_last_user_chat_time", 0.0)
         time_since_comment = now - getattr(self, "_last_auto_screen_comment_time", 0.0)
+        time_since_song = now - getattr(self, "_last_ai_song_comment_time", 0.0)
 
         # Inspect screen only if 3 minutes have passed since user last talked,
-        # AND at least 3 minutes since the last screen inspection.
+        # AND at least 3 minutes since the last screen inspection,
+        # AND at least AI_SONG_SCREEN_BUFFER_S (45s) since a song comment.
         if (
             time_since_chat < AUTO_SCREEN_COMMENT_INACTIVITY_S
             or time_since_comment < AUTO_SCREEN_COMMENT_INACTIVITY_S
+            or time_since_song < AI_SONG_SCREEN_BUFFER_S
         ):
             return
 
@@ -9212,7 +9217,7 @@ RULES:
 
         now = time.perf_counter()
         self._last_ai_song_comment_time = now
-        self._reset_ambient_ai_cooldowns(now)
+        self._reset_ambient_ai_cooldowns(now, reset_screen=False)
 
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
@@ -9317,7 +9322,7 @@ RULES:
             return
 
         self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
-        self._reset_ambient_ai_cooldowns()
+        self._reset_ambient_ai_cooldowns(reset_screen=False)
         steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=False)
         if not steps:
             return
