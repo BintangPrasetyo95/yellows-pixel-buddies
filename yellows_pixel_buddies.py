@@ -566,6 +566,38 @@ AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to ju
 AUTO_SCREEN_STATIC_BACKOFF_S = 180.0             # If screen hasn't changed, back off 3 minutes before checking again
 AI_SONG_SCREEN_BUFFER_S = 45.0                   # Courtesy buffer after song comment before screen commentary
 
+# --- Game Mode & Backseat Gamer Commentary -------------------------------------
+GAME_SCREEN_COMMENT_INACTIVITY_S = 45.0  # 45 seconds between commentaries while gaming (rapid observation)
+GAME_SCREEN_STATIC_BACKOFF_S = 75.0      # Backoff if game screen is static (pause/loading/menu)
+GAME_DIFF_THRESHOLD = 0.035              # 3.5% visual delta threshold in games
+GAME_DIALOGUE_HOLD_S = 5.0               # Snappy auto-dismiss so speech bubbles don't block gameplay HUD
+
+KNOWN_GAME_PLATFORM_PATHS = (
+    r"\steamapps\common",
+    r"\epic games",
+    r"\riot games",
+    r"\gog galaxy\games",
+    r"\gog games",
+    r"\ubisoft",
+    r"\xboxgames",
+    r"\windowsapps",
+)
+
+KNOWN_GAME_EXE_NAMES = {
+    "minecraft.exe", "javaw.exe", "genshinimpact.exe", "honkaistarrail.exe",
+    "zenlesszonezero.exe", "osu!.exe", "robloxplayerbeta.exe", "league of legends.exe",
+    "valorant.exe", "dota2.exe", "cs2.exe", "csgo.exe", "fortniteclient-win64-shipping.exe",
+    "overwatch.exe", "eldenring.exe", "bg3.exe", "bg3_dx11.exe", "hades.exe", "hades2.exe",
+    "stardew valley.exe", "terraria.exe", "celeste.exe", "hollow_knight.exe",
+    "deltarune.exe", "undertale.exe", "slaythespire.exe", "binding of isaac.exe",
+    "isaac-ng.exe", "deadcells.exe", "monsterhunterrise.exe", "monsterhunterworld.exe",
+    "cyberpunk2077.exe", "witcher3.exe", "apex.exe", "r5apex.exe", "destiny2.exe",
+    "warframe.x64.exe", "gta5.exe", "rdr2.exe", "sekiro.exe", "palworld-win64-shipping.exe",
+    "lethal company.exe", "helldivers2.exe", "fallguys_client.exe", "rocketleague.exe",
+    # Emulators
+    "yuzu.exe", "ryujinx.exe", "retroarch.exe", "rpcs3.exe", "dolphin.exe", "pcsx2.exe", "cemu.exe",
+}
+
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash"]
@@ -2289,6 +2321,7 @@ class DialogueOverlay(QWidget):
         auto_dismiss: bool = True,
         anim: str | None = None,
         is_ghost: bool = False,
+        hold_s: float | None = None,
     ) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
@@ -2304,6 +2337,7 @@ class DialogueOverlay(QWidget):
         self._on_chosen_callback = None
         self._skippable = skippable
         self._auto_dismiss = auto_dismiss
+        self._custom_hold_s = hold_s
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -2576,7 +2610,10 @@ class DialogueOverlay(QWidget):
                     self._start_or_pause_hold_timer(round(DIALOGUE_QUESTION_HOLD_S * 1000))
             else:
                 if self._auto_dismiss:
-                    hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                    if getattr(self, "_custom_hold_s", None) is not None:
+                        hold_s = self._custom_hold_s
+                    else:
+                        hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
                     self._start_or_pause_hold_timer(round(hold_s * 1000))
             self.update()
 
@@ -3305,6 +3342,97 @@ def get_user_idle_seconds() -> float:
     except Exception:
         pass
     return 0.0
+
+
+def is_d3d_fullscreen_active() -> bool:
+    """Return True if Windows reports a full-screen Direct3D / DirectX game is actively rendering."""
+    if sys.platform != "win32":
+        return False
+    try:
+        state = ctypes.c_int()
+        # QUNS_RUNNING_D3D_FULL_SCREEN = 3
+        if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0:
+            return state.value == 3
+    except Exception:
+        pass
+    return False
+
+
+def get_foreground_process_info() -> tuple[int, str, str, str]:
+    """Return (hwnd, exe_name, exe_path, window_title) of current foreground window."""
+    if sys.platform != "win32":
+        return 0, "", "", ""
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return 0, "", "", ""
+
+        txt_buf = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, txt_buf, 512)
+        title = txt_buf.value.strip()
+
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value <= 0:
+            return hwnd, "", "", title
+
+        try:
+            import psutil
+            proc = psutil.Process(pid.value)
+            name = proc.name().lower()
+            try:
+                exe_path = proc.exe().lower()
+            except Exception:
+                exe_path = ""
+            return hwnd, name, exe_path, title
+        except Exception:
+            return hwnd, "", "", title
+    except Exception:
+        return 0, "", "", ""
+
+
+def detect_foreground_game(custom_game_list: list[str] | None = None) -> tuple[bool, str]:
+    """Detect whether a video game is running in the foreground.
+
+    Returns (is_game, display_title).
+    """
+    if sys.platform != "win32":
+        return False, ""
+
+    hwnd, exe_name, exe_path, title = get_foreground_process_info()
+    if not hwnd or not exe_name:
+        return False, ""
+
+    d3d_active = is_d3d_fullscreen_active()
+
+    # 1. Known game distribution platforms (Steam, Epic, Riot, GOG, Ubisoft, Xbox)
+    if exe_path:
+        for platform_p in KNOWN_GAME_PLATFORM_PATHS:
+            if platform_p in exe_path:
+                game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+                return True, game_title
+
+    # 2. Known game executables / emulators
+    if exe_name in KNOWN_GAME_EXE_NAMES:
+        game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+        return True, game_title
+
+    # 3. Custom user whitelist from config
+    if custom_game_list and exe_name in [g.lower() for g in custom_game_list]:
+        game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+        return True, game_title
+
+    # 4. Direct3D fullscreen on non-system, non-browser app
+    non_game_exes = (
+        "explorer.exe", "chrome.exe", "msedge.exe", "firefox.exe", "code.exe",
+        "devenv.exe", "cmd.exe", "powershell.exe", "windowsterminal.exe",
+    )
+    if d3d_active and exe_name not in non_game_exes:
+        game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+        return True, game_title
+
+    return False, ""
 
 
 def compute_screen_fingerprint(pixmap: QPixmap) -> bytes:
@@ -7026,6 +7154,10 @@ class YellowsPixelBuddies(QWidget):
             self._bomb_attack_enabled = bool(saved_settings["bomb_attack_enabled"])
         if "jump_enabled" in saved_settings:
             self._jump_enabled = bool(saved_settings["jump_enabled"]) and getattr(self, "_jump_sprites_ready", True)
+        self._game_mode: str = str(saved_settings.get("game_mode", "AUTO"))
+        self._is_game_active: bool = False
+        self._current_game_name: str = ""
+        self._last_game_check_time: float = 0.0
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -7241,6 +7373,7 @@ class YellowsPixelBuddies(QWidget):
         dialogue_category: str | None = None,
         is_ghost: bool = False,
         step_anim: str | None = None,
+        hold_s: float | None = None,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
@@ -7348,6 +7481,7 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_memory") and record_memory:
             ignored_prefixes = (
                 "* Inspecting your screen...",
+                "* Watching your gameplay",
                 "* Hold your horses, minion!",
                 "* Did a cat step on your keyboard",
             )
@@ -7370,6 +7504,7 @@ class YellowsPixelBuddies(QWidget):
             auto_dismiss=auto_dismiss,
             anim=step_anim,
             is_ghost=is_ghost,
+            hold_s=hold_s,
         )
 
     def _on_question_answered(self, *args, **kwargs) -> None:
@@ -8460,6 +8595,9 @@ RULES:
 
         self._keep_response_anim = True
         self._apply_dialogue_step(first_step.anim, first_step.is_ghost)
+        is_gaming, _ = self._check_is_game_mode()
+        hold_s = GAME_DIALOGUE_HOLD_S if is_gaming else None
+
         self._say(
             first_step.text,
             force=True,
@@ -8468,6 +8606,7 @@ RULES:
             is_ghost=first_step.is_ghost,
             extra_queue=remaining_steps,
             step_anim=first_step.anim,
+            hold_s=hold_s,
         )
 
         # Deliver into shop window typewriter if currently open
@@ -8542,8 +8681,10 @@ RULES:
         if is_workstation_locked():
             return
 
-        # Suppress spontaneous peeking if user is idle/away (no mouse/keyboard input for > 15m)
-        if get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
+        # Suppress spontaneous peeking if user is idle/away (15m for desktop, 30m for gamepad gaming)
+        is_gaming, game_name = self._check_is_game_mode()
+        max_idle = 1800.0 if is_gaming else AUTO_SCREEN_MAX_USER_IDLE_S
+        if get_user_idle_seconds() > max_idle:
             return
 
         now = time.perf_counter()
@@ -8551,12 +8692,11 @@ RULES:
         time_since_comment = now - getattr(self, "_last_auto_screen_comment_time", 0.0)
         time_since_song = now - getattr(self, "_last_ai_song_comment_time", 0.0)
 
-        # Inspect screen only if 3 minutes have passed since user last talked,
-        # AND at least 3 minutes since the last screen inspection,
-        # AND at least AI_SONG_SCREEN_BUFFER_S (45s) since a song comment.
+        inactivity_limit = GAME_SCREEN_COMMENT_INACTIVITY_S if is_gaming else AUTO_SCREEN_COMMENT_INACTIVITY_S
+
         if (
-            time_since_chat < AUTO_SCREEN_COMMENT_INACTIVITY_S
-            or time_since_comment < AUTO_SCREEN_COMMENT_INACTIVITY_S
+            time_since_chat < inactivity_limit
+            or time_since_comment < inactivity_limit
             or time_since_song < AI_SONG_SCREEN_BUFFER_S
         ):
             return
@@ -8597,13 +8737,17 @@ RULES:
         self.show()
         ensure_window_topmost(self)
 
+        is_gaming, game_name = self._check_is_game_mode()
+        diff_threshold = GAME_DIFF_THRESHOLD if is_gaming else AUTO_SCREEN_DIFF_THRESHOLD
+
         # Visual Delta Gate: Skip commentary if the screen hasn't changed since last observation
         if self._last_screen_fingerprint is not None and current_fp:
             diff = compute_fingerprint_diff(self._last_screen_fingerprint, current_fp)
-            if diff < AUTO_SCREEN_DIFF_THRESHOLD:
-                log.info("Auto screen comment skipped: visual delta too small (diff=%.3f < %.3f)", diff, AUTO_SCREEN_DIFF_THRESHOLD)
-                # Back off so we don't spam checks while the screen remains static
-                self._last_auto_screen_comment_time = time.perf_counter() + (AUTO_SCREEN_STATIC_BACKOFF_S - AUTO_SCREEN_COMMENT_INACTIVITY_S)
+            if diff < diff_threshold:
+                log.info("Auto screen comment skipped: visual delta too small (diff=%.3f < %.3f)", diff, diff_threshold)
+                inactivity_limit = GAME_SCREEN_COMMENT_INACTIVITY_S if is_gaming else AUTO_SCREEN_COMMENT_INACTIVITY_S
+                backoff_limit = GAME_SCREEN_STATIC_BACKOFF_S if is_gaming else AUTO_SCREEN_STATIC_BACKOFF_S
+                self._last_auto_screen_comment_time = time.perf_counter() + (backoff_limit - inactivity_limit)
                 return
 
         self._last_screen_fingerprint = current_fp
@@ -8615,7 +8759,11 @@ RULES:
 
         if self._can_play("behind"):
             self._play("behind", loop=True)
-        self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+        if is_gaming:
+            peek_msg = f"* Watching your gameplay ({game_name})..." if game_name else "* Watching your gameplay..."
+        else:
+            peek_msg = "* Inspecting your screen..."
+        self._say(peek_msg, force=True, skippable=False, auto_dismiss=False, record_memory=False)
 
         # Build prompt & system instruction
         now_dt = datetime.datetime.now()
@@ -8667,23 +8815,44 @@ RULES:
             self._memory.recent_ambient_dialogues.clear()
 
         # Step 3 & 4: Make structure a code decision & multi-candidate anti-repetition generation
-        candidate_directive = (
-            "[STRUCTURAL DIRECTIVE: MULTI-CANDIDATE GENERATION (DECIDED BY ENGINE)]\n"
-            "Generate exactly 4 distinct candidate options for your spontaneous reaction, separated by '---' on a line by itself.\n"
-            "Each candidate MUST explore a different angle and use a completely different sentence opener:\n"
-            "- Candidate 1 (Curious Detail): Focus on a specific visible word, icon, code element, avatar, or window. (Ghost or Doll solo, 1 line)\n"
-            "- Candidate 2 (Sassy Tease / Snark): Bratty tsundere tease or roast about what the user is doing. (Ghost solo, 1 line)\n"
-            "- Candidate 3 (Aesthetic / Vibe): Comment on colors, UI layout, dark/light contrast, or desktop clutter. (Ghost or Doll, 1 line)\n"
-            "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)\n\n"
-            "RULES FOR CANDIDATES:\n"
-            "- Concise: 1 to 2 short lines starting with '* ' (under 30 words per candidate).\n"
-            "- Distinct Openers: Each candidate MUST start with different words. Never start multiple candidates with the same phrase!\n"
-            "- Speech Tics: Catchphrases and tics ('minion', ', mew!') are strictly optional flavor, do not force them.\n"
-            "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], [anim: angry]).\n"
-            "- Visual Memory Tag: Append [seen: 3-8 words describing key visible windows/apps or activity on screen] to each candidate.\n"
-            "- Strictly separate candidate options with '---' on a line by itself.\n"
-            "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image."
-        )
+        if is_gaming:
+            game_label = f" ({game_name})" if game_name else ""
+            candidate_directive = (
+                f"[STRUCTURAL DIRECTIVE: GAME MODE ACTIVE - BACKSEAT GAMER CATGIRL{game_label}]\n"
+                "The user is actively playing a video game! You are an invested, playful, tsundere catgirl spectator watching their screen.\n"
+                "Generate exactly 4 distinct candidate options for your spontaneous in-game reaction, separated by '---' on a line by itself.\n"
+                "Each candidate MUST explore a different gameplay angle and use a completely different sentence opener:\n"
+                "- Candidate 1 (Action & Combat): React to combat, boss fights, clutch dodges, health/mana bars, damage, or close calls. (1 line)\n"
+                "- Candidate 2 (Backseat Tease & Banter): Bratty backseat coaching, mocking silly mistakes/deaths, or questioning their tactics. (1 line)\n"
+                "- Candidate 3 (Game World & Loot): Comment on scenery, level design, missed treasure chests, inventory hoarding, or NPCs. (1 line)\n"
+                "- Candidate 4 (Cheering & Excitement): High-energy cheering, dramatic gasps, or Ghost & Doll playful bickering about what just happened. (1-2 lines)\n\n"
+                "RULES FOR CANDIDATES:\n"
+                "- Concise: 1 to 2 short punchy lines starting with '* ' (under 25 words per candidate).\n"
+                "- In-character: Sassy, tsundere catgirl (tease them for mistakes, act amazed/smug at good plays, scream at jumpscares).\n"
+                "- Distinct Openers: Each candidate MUST start with different words.\n"
+                "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: shocked], [anim: laughing], [anim: tongue], [anim: peace_sign], [anim: angry], [anim: wistful]).\n"
+                "- Visual Memory Tag: Append [seen: 3-8 words describing current game activity/scene] to each candidate.\n"
+                "- Strictly separate candidate options with '---' on a line by itself.\n"
+                "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the game screen."
+            )
+        else:
+            candidate_directive = (
+                "[STRUCTURAL DIRECTIVE: MULTI-CANDIDATE GENERATION (DECIDED BY ENGINE)]\n"
+                "Generate exactly 4 distinct candidate options for your spontaneous reaction, separated by '---' on a line by itself.\n"
+                "Each candidate MUST explore a different angle and use a completely different sentence opener:\n"
+                "- Candidate 1 (Curious Detail): Focus on a specific visible word, icon, code element, avatar, or window. (Ghost or Doll solo, 1 line)\n"
+                "- Candidate 2 (Sassy Tease / Snark): Bratty tsundere tease or roast about what the user is doing. (Ghost solo, 1 line)\n"
+                "- Candidate 3 (Aesthetic / Vibe): Comment on colors, UI layout, dark/light contrast, or desktop clutter. (Ghost or Doll, 1 line)\n"
+                "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)\n\n"
+                "RULES FOR CANDIDATES:\n"
+                "- Concise: 1 to 2 short lines starting with '* ' (under 30 words per candidate).\n"
+                "- Distinct Openers: Each candidate MUST start with different words. Never start multiple candidates with the same phrase!\n"
+                "- Speech Tics: Catchphrases and tics ('minion', ', mew!') are strictly optional flavor, do not force them.\n"
+                "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], [anim: angry]).\n"
+                "- Visual Memory Tag: Append [seen: 3-8 words describing key visible windows/apps or activity on screen] to each candidate.\n"
+                "- Strictly separate candidate options with '---' on a line by itself.\n"
+                "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image."
+            )
         system_inst += f"\n\n{candidate_directive}"
 
         facts = self._memory.get_long_term_facts()
@@ -8698,12 +8867,20 @@ RULES:
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
 
-        prompt_label = "[Pink peeks at your screen]"
-        auto_prompt = (
-            "[Spontaneous observation: Pink peeks behind her at your desktop screen.]\n"
-            "Generate exactly 4 distinct candidate reactions separated by '---' following your structural directive. "
-            "React directly to what is clearly visible on screen."
-        )
+        if is_gaming:
+            prompt_label = f"[Pink is watching your gameplay{game_label}]"
+            auto_prompt = (
+                f"[Spontaneous observation: Pink is watching your gameplay{game_label}.]\n"
+                "Generate exactly 4 distinct candidate in-game reactions separated by '---' following your structural directive. "
+                "React directly to what is clearly happening on screen right now."
+            )
+        else:
+            prompt_label = "[Pink peeks at your screen]"
+            auto_prompt = (
+                "[Spontaneous observation: Pink peeks behind her at your desktop screen.]\n"
+                "Generate exactly 4 distinct candidate reactions separated by '---' following your structural directive. "
+                "React directly to what is clearly visible on screen."
+            )
 
         self._gemini_thread = GeminiWorkerThread(
             api_key=api_key,
@@ -9347,6 +9524,9 @@ RULES:
         # Otherwise, speak the comment directly
         self._keep_response_anim = True
         self._apply_dialogue_step(first_step.anim, first_step.is_ghost)
+        is_gaming, _ = self._check_is_game_mode()
+        hold_s = GAME_DIALOGUE_HOLD_S if is_gaming else None
+
         self._say(
             first_step.text,
             force=True,
@@ -9355,6 +9535,7 @@ RULES:
             is_ghost=first_step.is_ghost,
             extra_queue=remaining_steps,
             step_anim=first_step.anim,
+            hold_s=hold_s,
         )
 
     def _toggle_ai_song_comment(self, checked: bool) -> None:
@@ -11397,6 +11578,23 @@ RULES:
         self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
         self._filter_shorts_action.toggled.connect(self._toggle_filter_shorts)
 
+        game_menu = tray_menu.addMenu("Game Mode 🎮")
+        self._game_mode_auto_action = game_menu.addAction("Auto-Detect (Active Gaming)")
+        self._game_mode_auto_action.setCheckable(True)
+        self._game_mode_on_action = game_menu.addAction("Always On (Backseat Spectator)")
+        self._game_mode_on_action.setCheckable(True)
+        self._game_mode_off_action = game_menu.addAction("Disabled (Normal Desktop)")
+        self._game_mode_off_action.setCheckable(True)
+
+        mode = getattr(self, "_game_mode", "AUTO")
+        self._game_mode_auto_action.setChecked(mode == "AUTO")
+        self._game_mode_on_action.setChecked(mode == "ON")
+        self._game_mode_off_action.setChecked(mode == "OFF")
+
+        self._game_mode_auto_action.triggered.connect(lambda: self._set_game_mode("AUTO"))
+        self._game_mode_on_action.triggered.connect(lambda: self._set_game_mode("ON"))
+        self._game_mode_off_action.triggered.connect(lambda: self._set_game_mode("OFF"))
+
         tray_menu.addSeparator()
         restart_action = tray_menu.addAction("Restart Pink 🔄")
         restart_action.triggered.connect(self._handle_restart_command)
@@ -11472,6 +11670,50 @@ RULES:
             self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
             self._filter_shorts_action.blockSignals(False)
 
+    def _check_is_game_mode(self) -> tuple[bool, str]:
+        """Evaluate whether game mode applies right now based on settings and foreground process."""
+        mode = getattr(self, "_game_mode", "AUTO")
+        if mode == "OFF":
+            self._is_game_active = False
+            self._current_game_name = ""
+            return False, ""
+        if mode == "ON":
+            self._is_game_active = True
+            if not self._current_game_name:
+                _, name = detect_foreground_game()
+                self._current_game_name = name or "Game"
+            return True, self._current_game_name
+
+        now = time.perf_counter()
+        if now - getattr(self, "_last_game_check_time", 0.0) < 3.0:
+            return getattr(self, "_is_game_active", False), getattr(self, "_current_game_name", "")
+
+        self._last_game_check_time = now
+        is_game, name = detect_foreground_game()
+        self._is_game_active = is_game
+        self._current_game_name = name if is_game else ""
+        return is_game, self._current_game_name
+
+    def _set_game_mode(self, mode: str) -> None:
+        self._game_mode = mode
+        if hasattr(self, "_game_mode_auto_action") and self._game_mode_auto_action:
+            self._game_mode_auto_action.setChecked(mode == "AUTO")
+        if hasattr(self, "_game_mode_on_action") and self._game_mode_on_action:
+            self._game_mode_on_action.setChecked(mode == "ON")
+        if hasattr(self, "_game_mode_off_action") and self._game_mode_off_action:
+            self._game_mode_off_action.setChecked(mode == "OFF")
+        self._save_live_settings()
+        log.info("Game Mode set to: %s", mode)
+
+    def _cycle_game_mode(self) -> str:
+        """Cycle game mode: AUTO -> ON -> OFF -> AUTO."""
+        modes = ["AUTO", "ON", "OFF"]
+        cur = getattr(self, "_game_mode", "AUTO")
+        idx = (modes.index(cur) + 1) % len(modes) if cur in modes else 0
+        new_mode = modes[idx]
+        self._set_game_mode(new_mode)
+        return new_mode
+
     def _save_live_settings(self) -> None:
         """Persist live toggles to config.json."""
         if hasattr(self, "_memory") and self._memory:
@@ -11480,6 +11722,7 @@ RULES:
                 "ai_song_comment_enabled": getattr(self, "_ai_song_comment_enabled", True),
                 "bomb_attack_enabled": getattr(self, "_bomb_attack_enabled", False),
                 "jump_enabled": getattr(self, "_jump_enabled", True),
+                "game_mode": getattr(self, "_game_mode", "AUTO"),
             }
             self._memory.save_settings(settings)
 

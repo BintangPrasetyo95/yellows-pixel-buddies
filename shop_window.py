@@ -1752,7 +1752,7 @@ class DeltaruneShopWindow(QWidget):
             dialogues = [
                 "* Toggle desktop speech bubble thoughts and reactions.",
                 "* Toggle real-time background song commentary.",
-                "* Toggle reactions when switching between desktop apps.",
+                "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
                 "* Toggle feline explosive ordnance and laser defense.",
                 "* Return to sanctuary settings.",
             ]
@@ -1949,18 +1949,22 @@ class DeltaruneShopWindow(QWidget):
                         self._pet._save_live_settings()
                     state_str = "ENABLED" if new_val else "DISABLED"
                     self.set_dialogue(f"* Autonomous song reactions are now {state_str}, darling!")
-            elif self._selected_index == 2:  # Bomb Mode
+            elif self._selected_index == 2:  # Game Mode
+                if self._pet and hasattr(self._pet, "_cycle_game_mode"):
+                    new_mode = self._pet._cycle_game_mode()
+                    if new_mode == "AUTO":
+                        self.set_dialogue("* Game Mode: AUTO! I'll watch closely whenever you launch a game, mew!")
+                    elif new_mode == "ON":
+                        self.set_dialogue("* Game Mode: ON! Full gaming focus & backseat spectating active, darling!")
+                    else:
+                        self.set_dialogue("* Game Mode: OFF! Reverted to standard desktop pacing.")
+                self.update()
+            elif self._selected_index == 3:  # Bomb Mode
                 if self._pet:
                     new_val = not getattr(self._pet, "_bomb_attack_enabled", False)
                     self._pet._toggle_bomb_attack(new_val)
                     state_str = "ARMED" if new_val else "DISARMED"
                     self.set_dialogue(f"* Cat-head bombs are now {state_str}, mew!")
-            elif self._selected_index == 3:  # Jump Mode
-                if self._pet:
-                    new_val = not getattr(self._pet, "_jump_enabled", True)
-                    self._pet._toggle_jump_mode(new_val)
-                    state_str = "ENABLED" if new_val else "DISABLED"
-                    self.set_dialogue(f"* Jump-to-cursor is now {state_str}, minion!")
             else:  # Back
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 1
@@ -2746,14 +2750,14 @@ class DeltaruneShopWindow(QWidget):
     def _draw_toggles_menu_state(self, p: QPainter) -> None:
         dlg_on = getattr(self._pet, "_dialogue_enabled", True) if self._pet else True
         song_on = getattr(self._pet, "_ai_song_comment_enabled", True) if self._pet else True
-        win_on = getattr(self._pet, "_react_on_window_switch", True) if self._pet else True
+        game_mode = getattr(self._pet, "_game_mode", "AUTO") if self._pet else "AUTO"
         bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
 
         p.setFont(self._font_body)
         options = [
             f"Dialogue: [{'ON' if dlg_on else 'OFF'}]",
-            f"Commentary: [{'ON' if song_on else 'OFF'}]",
-            f"App Reactions: [{'ON' if win_on else 'OFF'}]",
+            f"Song React: [{'ON' if song_on else 'OFF'}]",
+            f"Game Mode: [{game_mode}]",
             f"Bomb Attack: [{'ON' if bomb_on else 'OFF'}]",
             "Back",
         ]
@@ -2774,7 +2778,7 @@ class DeltaruneShopWindow(QWidget):
         descriptions = [
             "* Toggle speech bubbles and reactions on desktop.",
             "* Toggle AI commentary on currently playing music.",
-            "* React when switching active desktop windows.",
+            "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
             "* Toggle feline explosive defense behavior.",
             "* Return to sanctuary settings.",
         ]
