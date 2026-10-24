@@ -362,7 +362,7 @@ LASER_DAMAGE = 4                  # 4 dmg = 5 laser hits to KO
 BOMB_DIRECT_DAMAGE = 8            # Ground-zero direct blast
 BOMB_KICK_DAMAGE = 5              # 4 bombs defused/kicked = 20 dmg to defeat Pink!
 PLAYER_IFRAME_DURATION_S = 0.65   # Invulnerability after hit
-PLAYER_REGEN_INTERVAL_S = 3.0     # Passive heal out of combat (+1 HP / 3s)
+PLAYER_REGEN_INTERVAL_S = 60.0    # Passive heal out of combat (+1 HP every 1 minute)
 PLAYER_KO_COOLDOWN_S = 3.0        # Cooldown before auto-revive
 COMBAT_HUD_FADEOUT_S = 2.5        # Seconds to keep HUD visible after combat/damage
 
@@ -6898,13 +6898,15 @@ class BombLaserOverlay(QWidget):
 
                 if hit_pink or (now - b.kicked_at) >= 0.42:
                     b.exploded = True
-                    self._pink_hp = max(0, self._pink_hp - BOMB_KICK_DAMAGE)
+                    total_b = getattr(self._pet, "bomb_count", BOMB_COUNT) if self._pet else BOMB_COUNT
+                    kick_dmg = max(1, math.ceil(PINK_MAX_HP / float(total_b)))
+                    self._pink_hp = max(0, self._pink_hp - kick_dmg)
                     px = self._pet.x() + self._pet.width() / 2.0 if self._pet else b.x
                     py = self._pet.y() if self._pet else b.y
                     self._damage_popups.append(DamagePopup(
                         x=px,
                         y=py,
-                        text=f"-{BOMB_KICK_DAMAGE}",
+                        text=f"-{kick_dmg}",
                         color=QColor(255, 80, 160),
                         created_at=now,
                         duration=1.2,
@@ -7375,6 +7377,73 @@ class ChanceSliderWidget(QWidget):
 
 BombChanceWidget = ChanceSliderWidget
 JumpChanceWidget = ChanceSliderWidget
+
+
+class CountSliderWidget(QWidget):
+    """Custom tray menu widget: integer count slider (e.g. 1 to 8 bombs) with a reset button."""
+
+    def __init__(self, initial_val: int = 4,
+                 min_val: int = 1,
+                 max_val: int = 8,
+                 default_val: int = 4,
+                 on_change=None, parent=None,
+                 title_prefix: str = "Bombs Thrown") -> None:
+        super().__init__(parent)
+        self._min_val = min_val
+        self._max_val = max_val
+        self._default_val = default_val
+        self._on_change = on_change
+        self._title_prefix = title_prefix
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 2, 16, 6)
+        layout.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
+        self.lbl_title = QLabel(f"{self._title_prefix}: {initial_val}")
+        self.lbl_title.setStyleSheet("font-size: 11px;")
+
+        self.btn_default = QPushButton(f"Default ({default_val})")
+        self.btn_default.setFocusPolicy(Qt.NoFocus)
+        self.btn_default.setCursor(Qt.PointingHandCursor)
+        self.btn_default.setStyleSheet("font-size: 10px; padding: 1px 5px;")
+
+        top_row.addWidget(self.lbl_title)
+        top_row.addStretch()
+        top_row.addWidget(self.btn_default)
+        layout.addLayout(top_row)
+
+        self.slider = ClickableSlider(Qt.Horizontal)
+        self.slider.setRange(min_val, max_val)
+        self.slider.setValue(initial_val)
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(1)
+        self.slider.setTickPosition(QSlider.TicksBelow)
+        self.slider.setTickInterval(1)
+        self.slider.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self.slider)
+
+        self.slider.valueChanged.connect(self._on_slider_changed)
+        self.btn_default.clicked.connect(self._on_default_clicked)
+
+    def _on_slider_changed(self, val: int) -> None:
+        self.lbl_title.setText(f"{self._title_prefix}: {val}")
+        if self._on_change is not None:
+            self._on_change(val)
+
+    def _on_default_clicked(self) -> None:
+        self.slider.setValue(self._default_val)
+
+    def set_value(self, val: int) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(val)
+        self.lbl_title.setText(f"{self._title_prefix}: {val}")
+        self.slider.blockSignals(False)
+
+    def value(self) -> int:
+        return self.slider.value()
 
 
 SHORTS_TAG_REGEX = re.compile(
@@ -8023,6 +8092,7 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_target_plan: list[str] = ["random", "random", "near", "beneath"]
         self._bomb_attack_enabled: bool = HANG_BOMB_ENABLED
         self._bomb_chance_percent: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT
+        self._bomb_count: int = BOMB_COUNT
 
         # Apply persistent settings if saved
         saved_settings = self._memory.load_settings() if hasattr(self, "_memory") and self._memory else {}
@@ -8032,6 +8102,11 @@ class YellowsPixelBuddies(QWidget):
             self._ai_song_comment_enabled = bool(saved_settings["ai_song_comment_enabled"])
         if "bomb_attack_enabled" in saved_settings:
             self._bomb_attack_enabled = bool(saved_settings["bomb_attack_enabled"])
+        if "bomb_count" in saved_settings:
+            try:
+                self._bomb_count = max(1, min(8, int(saved_settings["bomb_count"])))
+            except (ValueError, TypeError):
+                self._bomb_count = BOMB_COUNT
         if "jump_enabled" in saved_settings:
             self._jump_enabled = bool(saved_settings["jump_enabled"]) and getattr(self, "_jump_sprites_ready", True)
         self._game_mode: str = str(saved_settings.get("game_mode", "AUTO"))
@@ -8107,6 +8182,8 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_force_action: QAction | None = None
         self._bomb_chance_action: QWidgetAction | None = None
         self._bomb_chance_widget: ChanceSliderWidget | None = None
+        self._bomb_count_action: QWidgetAction | None = None
+        self._bomb_count_widget: CountSliderWidget | None = None
 
         # --- startup summon intro & hide outro state -------------------------
         self._intro_subphase: str = ""
@@ -8438,8 +8515,6 @@ class YellowsPixelBuddies(QWidget):
         if any(w in lower_choice for w in ("drank", "water", "cup", "hydrat", "eating", "ate", "food", "snack", "meal", "fed")):
             self._last_hydration_check_time = now
             self._last_care_question_time = now
-            if hasattr(self, "_bomb_overlay") and self._bomb_overlay:
-                self._bomb_overlay.restore_player_hp(PLAYER_MAX_HP)
         if hasattr(self, "_memory") and self._memory:
             # Extract any permanent facts embedded in the reaction
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
@@ -9423,6 +9498,18 @@ RULES:
             msg = "* Bomb Attack Mode: ENABLED, minion! Cat ordnance primed!" if new_state else "* Bomb Attack Mode: DISABLED, mew! Explosives safely disarmed!"
             self._say(msg, force=True, record_memory=False)
             return
+        elif lower_input.startswith(("/bomb_count", "/bombs", "/bomb count", "/bombs_count")):
+            parts = lower_input.split()
+            if len(parts) > 1 and parts[-1].isdigit():
+                num = max(1, min(8, int(parts[-1])))
+                self._set_bomb_count(num)
+                msg = f"* Bomb Barrage Count set to {num} bombs (max 8), mew! Explosive intensity adjusted!"
+                self._say(msg, force=True, record_memory=False)
+                return
+            else:
+                msg = f"* Current Bomb Barrage Count: {self.bomb_count} bombs (max 8). Type /bombs <1-8> to adjust!"
+                self._say(msg, force=True, record_memory=False)
+                return
         elif lower_input in ("/shop", "shop", "/store", "store"):
             self._open_shop_window()
             return
@@ -12203,11 +12290,17 @@ RULES:
         self._post_throw_laugh = False
         self._say("throw", force=True)
         self._bomb_overlay.reset_state(start_round=True)
-        pair = ["near", "beneath"]
-        random.shuffle(pair)
-        self._bomb_target_plan = ["random", "random"] + pair
-        self._hang_bomb_count_remaining = BOMB_COUNT
+        total_bombs = getattr(self, "_bomb_count", BOMB_COUNT)
+        self._hang_bomb_count_remaining = total_bombs
         self._hang_bomb_index = 0
+        if total_bombs <= 1:
+            self._bomb_target_plan = ["beneath"]
+        elif total_bombs == 2:
+            self._bomb_target_plan = ["near", "beneath"]
+        else:
+            mid = ["random"] * (total_bombs - 2) + ["near"]
+            random.shuffle(mid)
+            self._bomb_target_plan = mid + ["beneath"]
         self._throw_pause_ticks = THROW_FRAME_11_HOLD_TICKS
         self._bombs_spawned_for_current_throw = False
         self._throw_started_at = now
@@ -12265,7 +12358,7 @@ RULES:
 
         self._bomb_overlay.spawn_single_bomb(origin_x, origin_y, vx, vy, ground_y, screen_rect, target_mode=target_mode)
         log.debug("Spawned serial bomb %d/%d (%s) below pet at (%.1f, %.1f) vx=%.1f vy=%.1f (fall ~%.2fs)",
-                  bomb_idx + 1, BOMB_COUNT, target_mode, origin_x, origin_y, vx, vy, t_fall)
+                  bomb_idx + 1, getattr(self, "_bomb_count", BOMB_COUNT), target_mode, origin_x, origin_y, vx, vy, t_fall)
 
     def _is_shaking(self) -> bool:
         """The raw cursor path of the last SHAKE_WINDOW_S zig-zags on one axis but goes nowhere."""
@@ -12942,6 +13035,19 @@ RULES:
         self._bomb_chance_action.setDefaultWidget(self._bomb_chance_widget)
         tray_menu.addAction(self._bomb_chance_action)
 
+        self._bomb_count_action = QWidgetAction(tray_menu)
+        self._bomb_count_widget = CountSliderWidget(
+            initial_val=self._bomb_count,
+            min_val=1,
+            max_val=8,
+            default_val=BOMB_COUNT,
+            on_change=self._set_bomb_count,
+            title_prefix="Bombs Thrown",
+        )
+        self._bomb_count_widget.setEnabled(self._bomb_attack_enabled)
+        self._bomb_count_action.setDefaultWidget(self._bomb_count_widget)
+        tray_menu.addAction(self._bomb_count_action)
+
         tray_menu.addSeparator()
 
         self._dialogue_action = tray_menu.addAction("Dialogue Bubbles")
@@ -13038,6 +13144,9 @@ RULES:
         if self._bomb_chance_widget is not None:
             self._bomb_chance_widget.set_value(self._bomb_chance_percent)
             self._bomb_chance_widget.setEnabled(self._bomb_attack_enabled)
+        if hasattr(self, "_bomb_count_widget") and self._bomb_count_widget is not None:
+            self._bomb_count_widget.set_value(self._bomb_count)
+            self._bomb_count_widget.setEnabled(self._bomb_attack_enabled)
         if self._dialogue_action is not None:
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(self._dialogue_enabled)
@@ -13111,6 +13220,7 @@ RULES:
                 "dialogue_enabled": getattr(self, "_dialogue_enabled", True),
                 "ai_song_comment_enabled": getattr(self, "_ai_song_comment_enabled", True),
                 "bomb_attack_enabled": getattr(self, "_bomb_attack_enabled", False),
+                "bomb_count": getattr(self, "_bomb_count", BOMB_COUNT),
                 "jump_enabled": getattr(self, "_jump_enabled", True),
                 "game_mode": getattr(self, "_game_mode", "AUTO"),
             }
@@ -13157,8 +13267,22 @@ RULES:
             self._bomb_action.blockSignals(False)
         if self._bomb_chance_widget is not None:
             self._bomb_chance_widget.setEnabled(checked)
+        if hasattr(self, "_bomb_count_widget") and self._bomb_count_widget is not None:
+            self._bomb_count_widget.setEnabled(checked)
         self._save_live_settings()
         log.info("Bomb attack mode: %s", "ENABLED" if checked else "DISABLED")
+
+    @property
+    def bomb_count(self) -> int:
+        return getattr(self, "_bomb_count", BOMB_COUNT)
+
+    def _set_bomb_count(self, count: int) -> None:
+        """Update number of serial bombs thrown (1 to 8)."""
+        self._bomb_count = max(1, min(8, int(count)))
+        if hasattr(self, "_bomb_count_widget") and self._bomb_count_widget is not None:
+            self._bomb_count_widget.set_value(self._bomb_count)
+        self._save_live_settings()
+        log.info("Bomb count set to %d", self._bomb_count)
 
     def _set_bomb_chance_percent(self, pct: int) -> None:
         """Update bomb attack chance percentage (0-100%)."""
