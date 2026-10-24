@@ -1514,6 +1514,83 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     ],
 }
 
+# --- Annoyed / Ignored Dialogue Lines & Departure Helpers --------------------
+ANNOYED_IGNORED_LINES: list[str] = [
+    "* ... Hmph!! Ignored me TWICE in a row?! Look at me talking to the wall! You better have a good excuse when you come back, dummy!",
+    "* TWO times in a row ignored?! What am I, invisible taskbar decoration to you, minion?! HMPH!",
+    "* Did you seriously just leave me on read TWICE?! Cotton dolls have feelings too, you know!!",
+    "* Fine! I see how it is! Two messages into the void! I'm crossing my plush arms until you apologize!",
+    "* Ignored twice in a row... That's it, you're getting the royal cold shoulder until you come back, human!",
+]
+
+ANNOYED_COMEBACK_LINES: list[str] = [
+    "* Hmph! Finally back, are we?! Don't you dare leave me talking to myself again, mew! [anim: tongue]",
+    "* Oh, so you DO know how to click! You're lucky you came back before I readied the cat bombs! [anim: embarrassed]",
+    "* Hmph! I'm still mad, but... fine. Welcome back, minion. Next time tell me if you have to go! [anim: wistful]",
+    "* About time you noticed me! Leaving your doll overlord hanging twice... unforgivable! But I'll let it slide once, mew! [anim: peace_sign]",
+]
+
+DEPARTURE_RESPONSES: list[str] = [
+    "* Leaving already, minion?! Fine, go do your mortal duties! But hurry back, mew! [anim: wistful]",
+    "* Hmph! Royal permission granted to step away! Don't keep your master waiting too long! [anim: tongue]",
+    "* Stepping away, are you? Understood! I'll hold down the taskbar fort while you're gone, mew! [anim: peace_sign]",
+    "* Acknowledged, puppet! Hurry back before I get bored and play with cat bombs! [anim: behind]",
+]
+
+WELCOME_BACK_RESPONSES: list[str] = [
+    "* Ah! Welcome back, minion! Did you finish what you had to do, mew? [anim: peace_sign]",
+    "* You're back! Good, I was starting to think you got lost out there, mew! [anim: peace_sign]",
+    "* Look who returned! The taskbar was far too quiet without my minion, mew! [anim: laughing]",
+]
+
+
+def check_is_departure_message(text: str) -> bool:
+    """Return True if the text indicates the user is leaving / stepping away / going AFK."""
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    if clean in ("/afk", "/away", "/brb", "/bye", "/leave", "/gtg", "/g2g", "/gotta_go"):
+        return True
+    if clean in ("afk", "brb", "bbl", "gtg", "g2g", "bye", "goodbye", "bye bye", "cya", "farewell", "ttyl"):
+        return True
+    if re.search(r"\b(?:you|u|they|we|he|she)\s+(?:have|got|need|must|gotta)", clean):
+        return False
+    patterns = [
+        r"\b(?:i\s+)?(?:have|got|need|must)\s+to\s+(?:go|leave|head\s+out|bounce|run|step\s+out)\b",
+        r"\b(?:i\s+)?gotta\s+(?:go|leave|head\s+out|bounce|run|step\s+out)\b",
+        r"\b(?:i\s*['’]?m|i\s+am)\s+(?:leaving|heading\s+out|going(?:\s+(?:out|away|now|to\s+(?:sleep|bed|work|school)))?)\b",
+        r"\b(?:going\s+)?afk\b",
+        r"\b(?:brb|be\s+right\s+back|bbl)\b",
+        r"\b(?:gtg|g2g)\b",
+        r"\b(?:stepping\s+(?:away|out))\b",
+        r"\b(?:good\s*bye|bye\s*bye|bye\b|farewell|see\s+ya|see\s+you(?:\s+later)?|cya|ttyl|talk\s+to\s+you\s+later)\b",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            return True
+    return False
+
+
+def check_is_return_message(text: str) -> bool:
+    """Return True if the text indicates the user has returned from being away."""
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    if clean in ("/back", "/return", "/here", "/im_back"):
+        return True
+    if clean in ("back", "im back", "i'm back", "i am back", "returned", "i returned", "i have returned"):
+        return True
+    patterns = [
+        r"\b(?:i\s*['’]?m|i\s+am)\s+back\b",
+        r"\b(?:i\s+)?(?:have\s+)?returned\b",
+        r"\b(?:i\s+)?came\s+back\b",
+        r"\bback\s+now\b",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            return True
+    return False
+
 # --- Windows Startup ---------------------------------------------------------
 # --- Single Instance Configuration & IPC -------------------------------------
 def _get_single_instance_identifier() -> str:
@@ -2294,6 +2371,17 @@ class DialogueOverlay(QWidget):
         self._hold_remaining_ms: int = 0
         self._skippable = True
         self._auto_dismiss = True
+        self._track_ignore = False
+        self._user_interacted = False
+        self._last_was_ignored = False
+
+    def mark_user_interacted(self) -> None:
+        """Mark that the user actively interacted with the current dialogue sequence."""
+        self._user_interacted = True
+
+    def was_ignored(self) -> bool:
+        """Return True if the last dialogue closed automatically without user interaction."""
+        return self._last_was_ignored
 
     def _create_soul_heart_pixmap(self) -> QPixmap:
         """Create a crisp pixel-art Deltarune red soul heart pixmap."""
@@ -2330,10 +2418,13 @@ class DialogueOverlay(QWidget):
         return self._skippable
 
     def ask(self, text: str, choices: list[tuple[str, str, str | None]], pet_x: float, pet_y: float,
-            on_chosen) -> None:
+            on_chosen, track_ignore: bool = True) -> None:
         """Start a new question dialogue bubble with interactive choices."""
         self._skippable = True
         self._auto_dismiss = True
+        self._track_ignore = track_ignore
+        self._user_interacted = False
+        self._last_was_ignored = False
         self._queue.clear()
         self._choices = list(choices)
         self._choice_rects.clear()
@@ -2354,6 +2445,7 @@ class DialogueOverlay(QWidget):
         anim: str | None = None,
         is_ghost: bool = False,
         hold_s: float | None = None,
+        track_ignore: bool = True,
     ) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
@@ -2370,6 +2462,9 @@ class DialogueOverlay(QWidget):
         self._skippable = skippable
         self._auto_dismiss = auto_dismiss
         self._custom_hold_s = hold_s
+        self._track_ignore = track_ignore and auto_dismiss
+        self._user_interacted = False
+        self._last_was_ignored = False
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -2683,6 +2778,7 @@ class DialogueOverlay(QWidget):
             self._display_text(next_text, self._last_pet_x, self._last_pet_y)
             return
 
+        self._last_was_ignored = bool(self._track_ignore and not self._user_interacted)
         self._active = False
         self._type_timer.stop()
         self._hold_timer.stop()
@@ -2694,6 +2790,7 @@ class DialogueOverlay(QWidget):
 
     def advance_or_dismiss(self) -> None:
         """Fast-forward typewriter if typing, or dismiss/advance queue if already complete."""
+        self._user_interacted = True
         if not self._active or not self._skippable:
             return
         if self._visible_chars < self._total_chars:
@@ -2711,6 +2808,7 @@ class DialogueOverlay(QWidget):
 
     def _choose_option(self, idx: int) -> None:
         """Player clicked a choice option: invoke callback with reaction text and anim."""
+        self._user_interacted = True
         if not self._choices or idx < 0 or idx >= len(self._choices):
             return
         choice_label, reaction_text, reaction_anim = self._choices[idx]
@@ -2770,6 +2868,7 @@ class DialogueOverlay(QWidget):
 
     def mousePressEvent(self, event) -> None:
         """Left-click fast-forwards typewriter or selects a choice option."""
+        self._user_interacted = True
         if not self._skippable or not self._active:
             event.accept()
             return
@@ -7106,6 +7205,13 @@ class YellowsPixelBuddies(QWidget):
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = time.perf_counter()
         self._keep_response_anim: bool = False
+        # --- Annoyed on ignored dialogues & user away status -------------------
+        self._consecutive_ignored_dialogues: int = 0
+        self._is_annoyed_ignored: bool = False
+        self._user_away_notified: bool = False
+        self._user_away_time: float = 0.0
+        self._user_away_was_idle: bool = False
+        self._was_annoyed_when_chat_opened: bool = False
         self._pending_song_announcement: tuple | None = None
         self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
         self._last_ai_song_comment_time: float = -9999.0
@@ -7428,11 +7534,14 @@ class YellowsPixelBuddies(QWidget):
         is_ghost: bool = False,
         step_anim: str | None = None,
         hold_s: float | None = None,
+        track_ignore: bool = True,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
         if getattr(self, "_hidden_in_tray", False):
+            return
+        if getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved" and not force:
             return
         if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
@@ -7481,6 +7590,7 @@ class YellowsPixelBuddies(QWidget):
                         self._x,
                         self._y,
                         on_chosen=self._on_question_answered,
+                        track_ignore=(track_ignore and not getattr(self, "_user_away_notified", False)),
                     )
                     return
             else:
@@ -7549,6 +7659,15 @@ class YellowsPixelBuddies(QWidget):
                     extra_lines=extra_queue,
                 )
 
+        if (
+            not auto_dismiss
+            or getattr(self, "_user_away_notified", False)
+            or (getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved")
+            or dialogue_category in ("annoyed_ignored", "annoyed_resolved", "welcome_back", "startup_summon", "error")
+            or line.startswith(("* Inspecting", "* Watching", "* Hold your horses", "* Rebooting", "* ...", "* ..?"))
+        ):
+            track_ignore = False
+
         self._dialogue_overlay.say(
             line,
             self._x,
@@ -7559,6 +7678,7 @@ class YellowsPixelBuddies(QWidget):
             anim=step_anim,
             is_ghost=is_ghost,
             hold_s=hold_s,
+            track_ignore=track_ignore,
         )
 
     def _on_question_answered(self, *args, **kwargs) -> None:
@@ -7992,7 +8112,14 @@ RULES:
             return
 
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
 
         self._last_question_item = q_item
         self._last_dialogue = q_item.question
@@ -8020,6 +8147,7 @@ RULES:
             self._x,
             self._y,
             on_chosen=self._on_question_answered,
+            track_ignore=(not getattr(self, "_user_away_notified", False) and not getattr(self, "_is_annoyed_ignored", False)),
         )
 
     def _on_ai_question_error(self, err_msg: str) -> None:
@@ -8054,6 +8182,7 @@ RULES:
                 self._x,
                 self._y,
                 on_chosen=self._on_question_answered,
+                track_ignore=(not getattr(self, "_user_away_notified", False) and not getattr(self, "_is_annoyed_ignored", False)),
             )
         else:
             if getattr(self, "_phase", None) is Phase.PAUSE:
@@ -8107,6 +8236,40 @@ RULES:
         if self._phase is Phase.SUMMON_DIALOGUE:
             self._start_summon_intro()
             return
+
+        # Check if dialogue was ignored by user
+        was_ignored = False
+        if hasattr(self, "_dialogue_overlay") and hasattr(self._dialogue_overlay, "was_ignored"):
+            was_ignored = self._dialogue_overlay.was_ignored()
+
+        if was_ignored:
+            if getattr(self, "_user_away_notified", False):
+                log.info("Dialogue dismissed without interaction, but user notified away; not counting as ignored.")
+            elif getattr(self, "_is_annoyed_ignored", False):
+                pass
+            else:
+                self._consecutive_ignored_dialogues = getattr(self, "_consecutive_ignored_dialogues", 0) + 1
+                log.info("Dialogue ignored! Consecutive ignored count: %d", self._consecutive_ignored_dialogues)
+                if self._consecutive_ignored_dialogues >= 2:
+                    log.info("User ignored dialogue boxes 2 times in a row! Triggering annoyed state.")
+                    self._trigger_annoyed_ignored()
+                    return
+        else:
+            # User interacted with dialogue (clicked, chose option, or dismissed manually)
+            if getattr(self, "_is_annoyed_ignored", False):
+                self._handle_user_returned_after_annoyed()
+                return
+            self._consecutive_ignored_dialogues = 0
+
+        if getattr(self, "_is_annoyed_ignored", False):
+            # If annoyed, stay in angry loop at PAUSE
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            self.update()
+            return
+
         if getattr(self, "_is_ghost_talking", False):
             self._is_ghost_talking = False
             if self._phase is Phase.PAUSE and self.state == "angry":
@@ -8124,6 +8287,48 @@ RULES:
                 self._brain_timer.start(AFTER_SPECIAL_REST_MS)
         self.update()
         self._check_and_play_pending_song()
+
+    def _trigger_annoyed_ignored(self) -> None:
+        """Trigger Pink's annoyed state when user ignores 2 dialogue boxes in a row without notifying away."""
+        if getattr(self, "_is_annoyed_ignored", False):
+            return
+        self._is_annoyed_ignored = True
+        self._consecutive_ignored_dialogues = 2
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        if self._can_play("angry"):
+            self._play("angry", loop=True)
+
+        line = random.choice(ANNOYED_IGNORED_LINES)
+        self._say(
+            line,
+            force=True,
+            skippable=True,
+            auto_dismiss=False,
+            record_memory=True,
+            dialogue_category="annoyed_ignored",
+            step_anim="angry",
+            track_ignore=False,
+        )
+
+    def _handle_user_returned_after_annoyed(self) -> None:
+        """Handle player acknowledging Pink or returning after she got annoyed from being ignored twice."""
+        if not getattr(self, "_is_annoyed_ignored", False):
+            return
+        self._is_annoyed_ignored = False
+        self._consecutive_ignored_dialogues = 0
+
+        line = random.choice(ANNOYED_COMEBACK_LINES)
+        self._say(
+            line,
+            force=True,
+            skippable=True,
+            auto_dismiss=True,
+            record_memory=True,
+            dialogue_category="annoyed_resolved",
+            track_ignore=False,
+        )
 
     def _check_and_play_pending_song(self) -> None:
         """If a song announcement was deferred while dialogue or chat was active, play it now."""
@@ -8171,7 +8376,15 @@ RULES:
         self._pause_elapsed = False
         self._brain_timer.stop()
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._was_annoyed_when_chat_opened = True
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         if self.state in MOVE_VELOCITY_PX_S:
             self._play("idle")
         if hasattr(self, "_chat_input"):
@@ -8213,6 +8426,65 @@ RULES:
 
         clean_input = text.strip()
         lower_input = clean_input.lower()
+
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
+
+        was_annoyed_chat = getattr(self, "_was_annoyed_when_chat_opened", False)
+        self._was_annoyed_when_chat_opened = False
+        was_away_notified = getattr(self, "_user_away_notified", False)
+
+        # Departure slash commands
+        if lower_input in ("/afk", "/away", "/brb", "/bye", "/leave", "/gtg", "/g2g", "/gotta_go"):
+            self._user_away_notified = True
+            self._user_away_time = now
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            reply = random.choice(DEPARTURE_RESPONSES)
+            self._say(reply, force=True, record_memory=True, step_anim="wistful", track_ignore=False)
+            return
+
+        # Return slash commands
+        if lower_input in ("/back", "/return", "/here", "/im_back"):
+            self._user_away_notified = False
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            reply = random.choice(WELCOME_BACK_RESPONSES)
+            self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
+            return
+
+        is_departure = check_is_departure_message(clean_input)
+        is_return = check_is_return_message(clean_input)
+
+        if is_departure:
+            self._user_away_notified = True
+            self._user_away_time = now
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            if not api_key:
+                reply = random.choice(DEPARTURE_RESPONSES)
+                self._say(reply, force=True, record_memory=True, step_anim="wistful", track_ignore=False)
+                return
+
+        elif is_return or was_away_notified:
+            self._user_away_notified = False
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            if not api_key and is_return:
+                reply = random.choice(WELCOME_BACK_RESPONSES)
+                self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
+                return
+
+        if was_annoyed_chat and not (self._memory.get_api_key() if hasattr(self, "_memory") else ""):
+            reply = "* Hmph! You finally talk to me after ignoring two of my dialogue boxes?! You better apologize properly, dummy! [anim: angry]"
+            self._say(reply, force=True, record_memory=True, step_anim="angry", track_ignore=False)
+            return
 
         # Multi-command chaining (e.g. "/timer 10m tea && /remind call mom" or "/alarm 5pm && /remind check oven")
         if "&&" in clean_input or ("\n/" in clean_input) or ("; /" in clean_input):
@@ -8507,6 +8779,31 @@ RULES:
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
 
+        if is_departure:
+            system_inst += (
+                "\n\nCRITICAL CONTEXT - USER IS LEAVING / GOING AWAY:\n"
+                "The user just told you that they have to go, are stepping away, leaving, going AFK, or saying goodbye.\n"
+                "- Acknowledge their departure in your distinct royal/tsundere style!\n"
+                "- Grant them 'permission' to attend to their mortal errands, or tell them to hurry back and not make their doll overlord wait too long.\n"
+                "- Tag your reaction with [anim: wistful], [anim: peace_sign], [anim: behind], or [anim: tongue]."
+            )
+        elif is_return or was_away_notified:
+            system_inst += (
+                "\n\nCRITICAL CONTEXT - USER JUST RETURNED:\n"
+                "The user previously told you they had to go, and has now just returned!\n"
+                "- Welcome them back in your distinct royal/tsundere style (e.g. glad they returned, asking how their task went, or pretending you barely noticed they were gone)!\n"
+                "- Tag your reaction with [anim: peace_sign], [anim: laughing], [anim: tongue], or [anim: idle]."
+            )
+
+        if was_annoyed_chat:
+            system_inst += (
+                "\n\nCRITICAL CONTEXT - USER PREVIOUSLY IGNORED YOU:\n"
+                "You were just standing there fuming because the user ignored your last two dialogue boxes in a row while away without telling you! "
+                "The user has now opened chat to talk to you.\n"
+                "- Act offended, sassy, and tsundere! Demand a proper explanation or apology for leaving you talking to thin air twice!\n"
+                "- Tag your reaction with [anim: angry], [anim: tongue], or [anim: embarrassed]."
+            )
+
         # Add elapsed time since user's previous interaction if available
         last_turn = self._memory.history[-1] if self._memory.history else None
         if last_turn and "timestamp" in last_turn:
@@ -8729,6 +9026,8 @@ RULES:
             return
 
         if getattr(self, "_jump_active", False) or getattr(self, "_dragging", False):
+            return
+        if getattr(self, "_is_annoyed_ignored", False) or getattr(self, "_user_away_notified", False):
             return
 
         # Suppress spontaneous peeking if workstation is locked
@@ -9856,6 +10155,13 @@ RULES:
             self._play(HANGING_STATE, mirrored=self._hang_mirrored())
             return
 
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
+
         if self.state == "angry":
             now = time.perf_counter()
             # If clicks are still coming within the spam window, keep her angry!
@@ -9919,6 +10225,12 @@ RULES:
     # --------------------------------------------------------------- behaviour
     def _start_walk(self) -> None:
         """Walk for 3-8 s in a random direction (run or wistful walk by chance)."""
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
         self._phase = Phase.WALK
         self._pause_elapsed = False
         can_run = self._can_play("run_left") and self._can_play("run_right")
@@ -9949,6 +10261,11 @@ RULES:
         """
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
+
+        if getattr(self, "_is_annoyed_ignored", False):
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
 
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             if self._can_play("wistful"):
@@ -10000,6 +10317,12 @@ RULES:
 
     def _on_brain_timeout(self) -> None:
         """Behaviour timer: the current walk / pause time is up."""
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
@@ -10494,7 +10817,14 @@ RULES:
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         if hasattr(self, "_chat_input"):
             self._chat_input.cancel()
         self._brain_timer.stop()
@@ -10586,7 +10916,14 @@ RULES:
             return
 
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._reset_jump_state()
@@ -10766,7 +11103,14 @@ RULES:
         self._jump_active = True                     # the cooldown starts when this sequence lands
         self._phase = Phase.JUMP
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         self._brain_timer.stop()                     # no walk / pause timeout may fire mid-air
         self._pause_elapsed = False
         self._gravity = JUMP_GRAVITY_PX_S2
@@ -11147,12 +11491,29 @@ RULES:
                 return
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
                 if self._dialogue_overlay.is_skippable():
+                    self._dialogue_overlay.mark_user_interacted()
                     self._dialogue_overlay.advance_or_dismiss()
                     self._dialogue_clicked = True
                     self._press_global = event.globalPos()
                     self._grab_offset = event.globalPos() - self.pos()
                     event.accept()
                     return
+
+            if getattr(self, "_is_annoyed_ignored", False):
+                self._handle_user_returned_after_annoyed()
+                event.accept()
+                return
+
+            if getattr(self, "_user_away_notified", False):
+                self._user_away_notified = False
+                self._consecutive_ignored_dialogues = 0
+                self._say(
+                    "* Ah, you're back! Good, I was starting to think you got lost out there, mew!",
+                    force=True,
+                    step_anim="peace_sign",
+                    dialogue_category="welcome_back",
+                    track_ignore=False,
+                )
             # Track left clicks for rapid spam-click jumping feature
             now = time.perf_counter()
             self._click_times.append(now)
@@ -11281,7 +11642,8 @@ RULES:
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                                    Phase.EXIT_OUTRO, Phase.JUMP, Phase.HANG,
                                    Phase.FALL, Phase.THROW)
-                or self._post_throw_laugh):
+                or self._post_throw_laugh
+                or getattr(self, "_is_annoyed_ignored", False)):
             return
 
         candidates = [s for s in ("peace_sign", "laughing", "shocked") if self._can_play(s)]
@@ -11308,7 +11670,14 @@ RULES:
         self._pause_elapsed = False
         self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         if hasattr(self, "_chat_input"):
             self._chat_input.cancel()
         self._play("shocked", loop=True)          # loop it for as long as it is held
@@ -11421,12 +11790,31 @@ RULES:
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
+        # Check user return if user previously notified away
+        if getattr(self, "_user_away_notified", False):
+            idle_s = get_user_idle_seconds()
+            if idle_s >= 20.0:
+                self._user_away_was_idle = True
+            elif getattr(self, "_user_away_was_idle", False) and idle_s < 2.0:
+                self._user_away_notified = False
+                self._user_away_was_idle = False
+                self._consecutive_ignored_dialogues = 0
+                log.info("User returned after being away (idle -> active input). Welcome back!")
+                self._say(
+                    "* Ah! Welcome back, minion! Did you finish what you had to do, mew?",
+                    force=True,
+                    step_anim="peace_sign",
+                    dialogue_category="welcome_back",
+                    track_ignore=False,
+                )
+
         if (self._dragging or self._menu_open
                 or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                                    Phase.EXIT_OUTRO)
-                or self._post_throw_laugh):
+                or self._post_throw_laugh
+                or getattr(self, "_is_annoyed_ignored", False)):
             return
 
         dll = _user32()
@@ -11454,7 +11842,8 @@ RULES:
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                                    Phase.EXIT_OUTRO)
-                or self._post_throw_laugh):
+                or self._post_throw_laugh
+                or getattr(self, "_is_annoyed_ignored", False)):
             return
         dll = _user32()
         if dll is None:
@@ -11962,7 +12351,14 @@ RULES:
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
             self._dialogue_overlay.close()
         if hasattr(self, "_chat_input"):
             self._chat_input.close()
