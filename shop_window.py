@@ -105,8 +105,10 @@ class ShopState(Enum):
     ITEM_ACTION = auto()          # Interactive inspection dialogue & choices
     TASK_CONFIRM = auto()         # Stage 1 verification
     TASK_SECOND_CONFIRM = auto()  # Stage 2 suspicion confirmation
-    TALK_MENU = auto()            # Serious topics (7 canon topics + Back)
+    TALK_MENU = auto()            # Serious topics (canon topics + Chat History + Back)
     TALK_DIALOGUE = auto()        # Serious typewriter dialogue
+    CHAT_HISTORY_SESSIONS = auto() # Session selection list (Inside TALK menu)
+    CHAT_HISTORY_VIEW = auto()     # Turn-by-turn dialogue inspection
 
 class PinkWallet:
     """Manages Pink Dollars (P$) and unlocked forms persisted in memory/wallet.json."""
@@ -233,6 +235,7 @@ TALK_TOPICS = [
     ("Other people?", "people"),
     ("Graduating", "graduating"),
     ("The Cat Bite", "egg"),
+    ("Chat History 📜", "chat_history"),
     ("Ask Pink a Question", "ai_ask"),
     ("Back", "back"),
 ]
@@ -412,6 +415,10 @@ class DeltaruneShopWindow(QWidget):
         # Serious Talk Dialogue Queue
         self._dialogue_queue: list[str] = []
         self._dialogue_queue_idx: int = 0
+        self._session_summaries: list[dict[str, Any]] = []
+        self._sessions_scroll_offset: int = 0
+        self._history_view_turns: list[list[str]] = []
+        self._history_turn_idx: int = 0
         self._visit_graduating_count: int = 0
 
         # Focus Timer / Alarm State
@@ -755,7 +762,7 @@ class DeltaruneShopWindow(QWidget):
         self.update()
 
     def _is_dialogue_rect(self, pt: QPoint) -> bool:
-        if self.state == ShopState.TALK_DIALOGUE:
+        if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
             return 12 <= pt.x() <= 628 and 248 <= pt.y() <= 472
         elif self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
             return 12 <= pt.x() <= 403 and 248 <= pt.y() <= 472
@@ -765,6 +772,169 @@ class DeltaruneShopWindow(QWidget):
         cached_count = len(self._bg_cache["root"])
         if cached_count > 0:
             self._scene_frame_idx = (self._scene_frame_idx + 1) % cached_count
+            self.update()
+
+    def _clean_history_dialogue(self, text: str) -> list[str]:
+        """Clean AI metadata tags, asterisks, and format into speech lines starting with '* '."""
+        if not text:
+            return ["* ..."]
+        t = re.sub(r"\[(?:anim|mode|ghost|seen|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", text, flags=re.IGNORECASE)
+        t = re.sub(r"\*{2,}", "", t)
+        lines = [l.strip() for l in t.splitlines() if l.strip()]
+        out: list[str] = []
+        for l in lines:
+            clean_l = l.lstrip("* ").strip()
+            if clean_l:
+                out.append(f"* {clean_l}")
+        return out if out else ["* ..."]
+
+    def _load_session_summaries(self) -> list[dict[str, Any]]:
+        """Load and summarize recent chat sessions from memory and disk."""
+        mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
+        if not mem:
+            return []
+
+        summaries: list[dict[str, Any]] = []
+        now = datetime.datetime.now()
+
+        # 1. Current active session
+        active_history = getattr(mem, "history", [])
+        if active_history:
+            sights: list[str] = []
+            for m in active_history:
+                s = m.get("seen", "")
+                if s and s not in sights:
+                    sights.append(s)
+            seen_summary = ", ".join(sights[:2]) if sights else ""
+            last_turn = active_history[-1]
+            last_p = last_turn.get("pink", "")
+            clean_p = self._clean_history_dialogue(last_p)
+            preview = clean_p[0] if clean_p else ""
+
+            summaries.append({
+                "label": "Current Session (Active)",
+                "turn_count": len(active_history),
+                "seen_summary": seen_summary,
+                "preview": preview,
+                "messages": list(active_history),
+                "is_active": True,
+            })
+
+        # 2. Past sessions from sessions_dir
+        sessions_dir = getattr(mem, "sessions_dir", None)
+        if sessions_dir and sessions_dir.is_dir():
+            active_name = mem.session_file.name if hasattr(mem, "session_file") and mem.session_file else ""
+            files = sorted(sessions_dir.glob("session_*.json"), reverse=True)
+            for f in files:
+                if f.name == active_name:
+                    continue
+                try:
+                    if f.stat().st_size <= 120:
+                        continue
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    msgs = data.get("messages", [])
+                    if not msgs:
+                        continue
+
+                    first_ts = msgs[0].get("timestamp", "")
+                    dt = datetime.datetime.fromisoformat(first_ts) if first_ts else now
+                    d_diff = (now.date() - dt.date()).days
+                    t_str = dt.strftime("%I:%M %p")
+                    if d_diff == 0:
+                        date_label = f"Today {t_str}"
+                    elif d_diff == 1:
+                        date_label = f"Yesterday {t_str}"
+                    else:
+                        date_label = f"{dt.strftime('%b %d')} {t_str}"
+
+                    sights = []
+                    for m in msgs:
+                        s = m.get("seen", "")
+                        if s and s not in sights:
+                            sights.append(s)
+                    seen_summary = ", ".join(sights[:2]) if sights else ""
+
+                    last_turn = msgs[-1]
+                    last_p = last_turn.get("pink", "")
+                    clean_p = self._clean_history_dialogue(last_p)
+                    preview = clean_p[0] if clean_p else ""
+
+                    summaries.append({
+                        "label": date_label,
+                        "turn_count": len(msgs),
+                        "seen_summary": seen_summary,
+                        "preview": preview,
+                        "messages": msgs,
+                        "is_active": False,
+                    })
+
+                    if len(summaries) >= 40:
+                        break
+                except Exception as err:
+                    log.debug("Error reading session %s for shop: %s", f, err)
+
+        return summaries
+
+    def _prepare_session_turns(self, session_data: dict[str, Any]) -> list[list[str]]:
+        """Convert a session's messages into formatted multi-line dialogue cards."""
+        msgs = session_data.get("messages", [])
+        if not msgs:
+            return []
+
+        turns: list[list[str]] = []
+        for m in msgs:
+            ts_str = m.get("timestamp", "")
+            t_str = ""
+            if ts_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(ts_str)
+                    t_str = dt.strftime("%I:%M %p")
+                except Exception:
+                    t_str = ""
+            pfx = f"[{t_str}] " if t_str else ""
+
+            u_raw = (m.get("user") or "").strip()
+            p_raw = (m.get("pink") or "").strip()
+            p_lines = self._clean_history_dialogue(p_raw)
+
+            card_lines: list[str] = []
+            if u_raw.startswith("[Pink peeks") and m.get("seen"):
+                card_lines.append(f"* {pfx}(Screen Sight): {m['seen']}")
+            elif u_raw.startswith("[Music played:"):
+                track_info = u_raw[14:].rstrip("]")
+                card_lines.append(f"* {pfx}(Music Played): {track_info}")
+            elif u_raw.startswith("[Pink asked:"):
+                q_info = u_raw[12:].rstrip("]")
+                card_lines.append(f"* {pfx}{q_info}")
+            elif u_raw:
+                clean_u = u_raw.replace("\n", " ").strip()
+                if len(clean_u) > 90:
+                    clean_u = clean_u[:87] + "..."
+                card_lines.append(f"* {pfx}You: \"{clean_u}\"")
+
+            card_lines.extend(p_lines)
+            turns.append(card_lines)
+
+        return turns
+
+    def _prev_history_turn(self) -> None:
+        if not self._history_view_turns:
+            return
+        if self._history_turn_idx > 0:
+            self._history_turn_idx -= 1
+            self.set_dialogue("\n".join(self._history_view_turns[self._history_turn_idx]))
+            self.update()
+
+    def _next_history_turn(self) -> None:
+        if not self._history_view_turns:
+            return
+        if self._history_turn_idx < len(self._history_view_turns) - 1:
+            self._history_turn_idx += 1
+            self.set_dialogue("\n".join(self._history_view_turns[self._history_turn_idx]))
+            self.update()
+        else:
+            self.state = ShopState.CHAT_HISTORY_SESSIONS
+            self.set_dialogue("* End of session turns reached. Returned to archives.")
             self.update()
 
     # --- Focus Timer & Alarm Feature -------------------------------------------
@@ -1269,6 +1439,8 @@ class DeltaruneShopWindow(QWidget):
             self._notes_scroll_offset = max(0, self._notes_scroll_offset - 1)
         elif self.state == ShopState.TALK_MENU:
             self._talk_scroll_offset = max(0, self._talk_scroll_offset - 1)
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            self._sessions_scroll_offset = max(0, self._sessions_scroll_offset - 1)
         elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
             self._note_scroll_offset = max(0, self._note_scroll_offset - 1)
         self.update()
@@ -1293,6 +1465,9 @@ class DeltaruneShopWindow(QWidget):
         elif self.state == ShopState.TALK_MENU:
             max_off = max(0, len(TALK_TOPICS) - 1 - 4)
             self._talk_scroll_offset = min(max_off, self._talk_scroll_offset + 1)
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            max_off = max(0, len(self._session_summaries) - 4)
+            self._sessions_scroll_offset = min(max_off, self._sessions_scroll_offset + 1)
         elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
             self._note_scroll_offset += 1
         self.update()
@@ -1344,6 +1519,18 @@ class DeltaruneShopWindow(QWidget):
                 self._talk_scroll_offset = self._selected_index
             elif self._selected_index < topics_count and self._selected_index >= self._talk_scroll_offset + 4:
                 self._talk_scroll_offset = max(0, self._selected_index - 3)
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            total_items = len(self._session_summaries)
+            if self._selected_index < self._sessions_scroll_offset:
+                self._sessions_scroll_offset = self._selected_index
+            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
+                self._sessions_scroll_offset = max(0, self._selected_index - 3)
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            total_items = len(self._session_summaries)
+            if self._selected_index < self._sessions_scroll_offset:
+                self._sessions_scroll_offset = self._selected_index
+            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
+                self._sessions_scroll_offset = max(0, self._selected_index - 3)
 
         self._on_selection_changed()
         self.update()
@@ -1387,6 +1574,18 @@ class DeltaruneShopWindow(QWidget):
                 self._talk_scroll_offset = self._selected_index
             elif self._selected_index < topics_count and self._selected_index >= self._talk_scroll_offset + 4:
                 self._talk_scroll_offset = max(0, self._selected_index - 3)
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            total_items = len(self._session_summaries)
+            if self._selected_index < self._sessions_scroll_offset:
+                self._sessions_scroll_offset = self._selected_index
+            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
+                self._sessions_scroll_offset = max(0, self._selected_index - 3)
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            total_items = len(self._session_summaries)
+            if self._selected_index < self._sessions_scroll_offset:
+                self._sessions_scroll_offset = self._selected_index
+            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
+                self._sessions_scroll_offset = max(0, self._selected_index - 3)
 
         self._on_selection_changed()
         self.update()
@@ -1418,7 +1617,11 @@ class DeltaruneShopWindow(QWidget):
         elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
             return 2  # YES, NO
         elif self.state == ShopState.TALK_MENU:
-            return len(TALK_TOPICS)  # 7 topics + Back = 8 items
+            return len(TALK_TOPICS)
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            return len(self._session_summaries) + 1  # summaries + Back
+        elif self.state == ShopState.CHAT_HISTORY_VIEW:
+            return max(1, len(self._history_view_turns))
         return 0
 
     def _get_timers_menu_items(self) -> list[dict[str, Any]]:
@@ -1549,7 +1752,7 @@ class DeltaruneShopWindow(QWidget):
             dialogues = [
                 "* Toggle desktop speech bubble thoughts and reactions.",
                 "* Toggle real-time background song commentary.",
-                "* Toggle reactions when switching between desktop apps.",
+                "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
                 "* Toggle feline explosive ordnance and laser defense.",
                 "* Return to sanctuary settings.",
             ]
@@ -1570,10 +1773,20 @@ class DeltaruneShopWindow(QWidget):
 
         elif self.state == ShopState.TALK_MENU:
             if self._selected_index < len(TALK_TOPICS) - 1:
-                title, _ = TALK_TOPICS[self._selected_index]
-                self.set_dialogue(f"* Talk topic: {title}\n* Press Enter or Z to listen.")
+                title, key = TALK_TOPICS[self._selected_index]
+                if key == "chat_history":
+                    self.set_dialogue("* Review conversation archives and sights from past sessions.\n* Press Enter or Z to inspect.")
+                else:
+                    self.set_dialogue(f"* Talk topic: {title}\n* Press Enter or Z to listen.")
             else:
                 self.set_dialogue("* Return to the main parlour.")
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            if self._selected_index < len(self._session_summaries):
+                sess = self._session_summaries[self._selected_index]
+                seen_str = f"\n* Sights: {sess['seen_summary']}" if sess.get('seen_summary') else ""
+                self.set_dialogue(f"* Timeline: {sess['label']}\n* {sess['turn_count']} dialogue turns.{seen_str}")
+            else:
+                self.set_dialogue("* Return to the talk topics menu.")
 
     def _confirm_selection(self) -> None:
         if self.state == ShopState.ROOT:
@@ -1736,18 +1949,22 @@ class DeltaruneShopWindow(QWidget):
                         self._pet._save_live_settings()
                     state_str = "ENABLED" if new_val else "DISABLED"
                     self.set_dialogue(f"* Autonomous song reactions are now {state_str}, darling!")
-            elif self._selected_index == 2:  # Bomb Mode
+            elif self._selected_index == 2:  # Game Mode
+                if self._pet and hasattr(self._pet, "_cycle_game_mode"):
+                    new_mode = self._pet._cycle_game_mode()
+                    if new_mode == "AUTO":
+                        self.set_dialogue("* Game Mode: AUTO! I'll watch closely whenever you launch a game, mew!")
+                    elif new_mode == "ON":
+                        self.set_dialogue("* Game Mode: ON! Full gaming focus & backseat spectating active, darling!")
+                    else:
+                        self.set_dialogue("* Game Mode: OFF! Reverted to standard desktop pacing.")
+                self.update()
+            elif self._selected_index == 3:  # Bomb Mode
                 if self._pet:
                     new_val = not getattr(self._pet, "_bomb_attack_enabled", False)
                     self._pet._toggle_bomb_attack(new_val)
                     state_str = "ARMED" if new_val else "DISARMED"
                     self.set_dialogue(f"* Cat-head bombs are now {state_str}, mew!")
-            elif self._selected_index == 3:  # Jump Mode
-                if self._pet:
-                    new_val = not getattr(self._pet, "_jump_enabled", True)
-                    self._pet._toggle_jump_mode(new_val)
-                    state_str = "ENABLED" if new_val else "DISABLED"
-                    self.set_dialogue(f"* Jump-to-cursor is now {state_str}, minion!")
             else:  # Back
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 1
@@ -1805,6 +2022,15 @@ class DeltaruneShopWindow(QWidget):
                     self.state = ShopState.ROOT
                     self._selected_index = 2
                     self.set_dialogue(self._get_root_greeting())
+                elif topic_key == "chat_history":
+                    self._session_summaries = self._load_session_summaries()
+                    self._sessions_scroll_offset = 0
+                    self._selected_index = 0
+                    self.state = ShopState.CHAT_HISTORY_SESSIONS
+                    if self._session_summaries:
+                        self.set_dialogue("* Desktop session archive. Pick a timeline to inspect!")
+                    else:
+                        self.set_dialogue("* No recorded session logs found yet, mew.")
                 elif topic_key == "ai_ask":
                     self.state = ShopState.TALK_DIALOGUE
                     self._prompt_serious_inquiry()
@@ -1815,6 +2041,26 @@ class DeltaruneShopWindow(QWidget):
                         self._dialogue_queue_idx = 0
                         self.state = ShopState.TALK_DIALOGUE
                         self.set_dialogue(self._dialogue_queue[0])
+
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            if self._selected_index == len(self._session_summaries):
+                self.state = ShopState.TALK_MENU
+                chat_idx = next((i for i, (_, k) in enumerate(TALK_TOPICS) if k == "chat_history"), 0)
+                self._selected_index = chat_idx
+                self.set_dialogue(CANON_TALK_ENTER)
+            elif self._selected_index < len(self._session_summaries):
+                sess = self._session_summaries[self._selected_index]
+                turns = self._prepare_session_turns(sess)
+                if not turns:
+                    self.set_dialogue("* That session was completely silent. Nothing was spoken, mew.")
+                else:
+                    self._history_view_turns = turns
+                    self._history_turn_idx = 0
+                    self.state = ShopState.CHAT_HISTORY_VIEW
+                    self.set_dialogue("\n".join(self._history_view_turns[0]))
+
+        elif self.state == ShopState.CHAT_HISTORY_VIEW:
+            self._next_history_turn()
 
         elif self.state == ShopState.TALK_DIALOGUE:
             if self._is_typing():
@@ -1856,6 +2102,14 @@ class DeltaruneShopWindow(QWidget):
             self._tasks_tab = 1
             self._selected_index = 0
             self.set_dialogue(CANON_SELL_REFUSE)
+        elif self.state == ShopState.CHAT_HISTORY_VIEW:
+            self.state = ShopState.CHAT_HISTORY_SESSIONS
+            self.set_dialogue("* Returned to session archive.")
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            self.state = ShopState.TALK_MENU
+            chat_idx = next((i for i, (_, k) in enumerate(TALK_TOPICS) if k == "chat_history"), 0)
+            self._selected_index = chat_idx
+            self.set_dialogue(CANON_TALK_ENTER)
         elif self.state == ShopState.TALK_DIALOGUE:
             self.state = ShopState.TALK_MENU
             self.set_dialogue(CANON_TALK_ENTER)
@@ -2014,11 +2268,20 @@ class DeltaruneShopWindow(QWidget):
             return
 
         if key in (Qt.Key_Up, Qt.Key_W):
+            if self.state == ShopState.CHAT_HISTORY_VIEW:
+                self._prev_history_turn()
+                return
             self._nav_up()
         elif key in (Qt.Key_Down, Qt.Key_S):
+            if self.state == ShopState.CHAT_HISTORY_VIEW:
+                self._next_history_turn()
+                return
             self._nav_down()
         elif key in (Qt.Key_Left, Qt.Key_A):
-            if self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
+            if self.state == ShopState.CHAT_HISTORY_VIEW:
+                self._prev_history_turn()
+                return
+            elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx - 1) % len(self._inspect_options)
                 self.update()
                 return
@@ -2027,7 +2290,10 @@ class DeltaruneShopWindow(QWidget):
                 self._selected_index = 0
                 self.update()
         elif key in (Qt.Key_Right, Qt.Key_D):
-            if self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
+            if self.state == ShopState.CHAT_HISTORY_VIEW:
+                self._next_history_turn()
+                return
+            elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx + 1) % len(self._inspect_options)
                 self.update()
                 return
@@ -2036,7 +2302,7 @@ class DeltaruneShopWindow(QWidget):
                 self._selected_index = 0
                 self.update()
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Z, Qt.Key_Space):
-            if self.state == ShopState.TALK_DIALOGUE and self._is_typing():
+            if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW) and self._is_typing():
                 self._finish_typing()
                 return
             self._confirm_selection()
@@ -2054,7 +2320,7 @@ class DeltaruneShopWindow(QWidget):
                 if self._is_typing():
                     self._finish_typing()
                     return
-                elif self.state == ShopState.TALK_DIALOGUE:
+                elif self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
                     self._confirm_selection()
                     return
 
@@ -2068,7 +2334,7 @@ class DeltaruneShopWindow(QWidget):
                     return
 
             # 3. Check scroll arrow clicks (left side at x: 365..405)
-            if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU):
+            if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
                 if 365 <= pos_canvas.x() <= 405:
                     if 265 <= pos_canvas.y() <= 310:
                         self._scroll_up()
@@ -2114,7 +2380,7 @@ class DeltaruneShopWindow(QWidget):
                     self._inspect_choice_idx = hover_idx
                 self._on_selection_changed()
                 self.update()
-        elif is_dialogue and (self._is_typing() or self.state == ShopState.TALK_DIALOGUE):
+        elif is_dialogue and (self._is_typing() or self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW)):
             self.setCursor(Qt.PointingHandCursor)
         elif pos_canvas.y() < 240:
             self.setCursor(Qt.OpenHandCursor)
@@ -2144,7 +2410,7 @@ class DeltaruneShopWindow(QWidget):
         return QPoint(x, y)
 
     def _get_item_at_canvas_pos(self, pt: QPoint) -> int | None:
-        if self.state == ShopState.TALK_DIALOGUE:
+        if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
             return None
 
         # Check scroll arrows for note enter in ITEM_ACTION (right side at x: 570..610)
@@ -2166,7 +2432,7 @@ class DeltaruneShopWindow(QWidget):
             return None
 
         # Check scroll arrows for scrollable states (left side at x: 365..405)
-        if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU):
+        if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
             if 365 <= pt.x() <= 405:
                 if 265 <= pt.y() <= 310:
                     self._scroll_up()
@@ -2178,7 +2444,7 @@ class DeltaruneShopWindow(QWidget):
         # Left-side submenus: start_x = 44, start_y = 283, line_h = 36
         if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS,
                           ShopState.SETTINGS_MENU, ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT,
-                          ShopState.TALK_MENU):
+                          ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
             if 20 <= pt.x() <= 400 and 265 <= pt.y() <= 465:
                 row = (pt.y() - 265) // 36
                 if 0 <= row < 5:
@@ -2205,6 +2471,12 @@ class DeltaruneShopWindow(QWidget):
                             return topics_count  # Back
                         idx = self._talk_scroll_offset + row
                         return idx if idx < topics_count else None
+                    elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+                        raw_len = len(self._session_summaries)
+                        if row == 4:
+                            return raw_len  # Back
+                        idx = self._sessions_scroll_offset + row
+                        return idx if idx < raw_len else None
 
         # Right-side menus: start_x = 444, start_y = 283, line_h = 36
         if self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
@@ -2229,7 +2501,7 @@ class DeltaruneShopWindow(QWidget):
             p.scale(self._scale, self._scale)
 
             state_key = "root"
-            if self.state == ShopState.TALK_DIALOGUE:
+            if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
                 state_key = "talk"
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 state_key = "talk" 
@@ -2259,7 +2531,7 @@ class DeltaruneShopWindow(QWidget):
                 self._draw_task_confirm_state(p)
             elif self.state == ShopState.TASK_SECOND_CONFIRM:
                 self._draw_task_second_confirm_state(p)
-            elif self.state in (ShopState.TALK_MENU, ShopState.TALK_DIALOGUE):
+            elif self.state in (ShopState.TALK_MENU, ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_SESSIONS, ShopState.CHAT_HISTORY_VIEW):
                 self._draw_talk_state(p)
 
 
@@ -2478,14 +2750,14 @@ class DeltaruneShopWindow(QWidget):
     def _draw_toggles_menu_state(self, p: QPainter) -> None:
         dlg_on = getattr(self._pet, "_dialogue_enabled", True) if self._pet else True
         song_on = getattr(self._pet, "_ai_song_comment_enabled", True) if self._pet else True
-        win_on = getattr(self._pet, "_react_on_window_switch", True) if self._pet else True
+        game_mode = getattr(self._pet, "_game_mode", "AUTO") if self._pet else "AUTO"
         bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
 
         p.setFont(self._font_body)
         options = [
             f"Dialogue: [{'ON' if dlg_on else 'OFF'}]",
-            f"Commentary: [{'ON' if song_on else 'OFF'}]",
-            f"App Reactions: [{'ON' if win_on else 'OFF'}]",
+            f"Song React: [{'ON' if song_on else 'OFF'}]",
+            f"Game Mode: [{game_mode}]",
             f"Bomb Attack: [{'ON' if bomb_on else 'OFF'}]",
             "Back",
         ]
@@ -2506,7 +2778,7 @@ class DeltaruneShopWindow(QWidget):
         descriptions = [
             "* Toggle speech bubbles and reactions on desktop.",
             "* Toggle AI commentary on currently playing music.",
-            "* React when switching active desktop windows.",
+            "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
             "* Toggle feline explosive defense behavior.",
             "* Return to sanctuary settings.",
         ]
@@ -2631,6 +2903,82 @@ class DeltaruneShopWindow(QWidget):
             p.setFont(self._font_small)
             p.setPen(QColor(255, 180, 220))
             p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
+
+        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
+            # Left Box: Session items list
+            p.setFont(self._font_body)
+            start_x = 44
+            start_y = 283
+            line_h = 36
+
+            total_sessions = len(self._session_summaries)
+            scroll_off = self._sessions_scroll_offset
+            visible_sessions = self._session_summaries[scroll_off : scroll_off + 4]
+
+            for r_idx, sess in enumerate(visible_sessions):
+                actual_idx = scroll_off + r_idx
+                is_active = (actual_idx == self._selected_index)
+                color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+                p.setPen(color)
+
+                title = sess.get("label", "Session")
+                turn_count = sess.get("turn_count", 0)
+                display_str = title
+                if len(display_str) > 20:
+                    display_str = display_str[:19] + ".."
+                p.drawText(start_x, start_y + r_idx * line_h, display_str)
+
+                # Turn count badge
+                p.setFont(self._font_small)
+                p.setPen(QColor(157, 162, 196) if not is_active else QColor(255, 255, 120))
+                p.drawText(start_x + 230, start_y + r_idx * line_h, f"{turn_count}t")
+                p.setFont(self._font_body)
+
+                if is_active and self._soul_heart:
+                    p.drawPixmap(start_x - 24, start_y + r_idx * line_h - 13, self._soul_heart)
+
+            # Row 4: Back
+            back_idx = total_sessions
+            is_back = (self._selected_index == back_idx)
+            color = QColor(255, 255, 0) if is_back else QColor(255, 255, 255)
+            p.setPen(color)
+            p.drawText(start_x, start_y + 4 * line_h, "Back")
+            if is_back and self._soul_heart:
+                p.drawPixmap(start_x - 24, start_y + 4 * line_h - 13, self._soul_heart)
+
+            # Scroll indicators
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 255, 0))
+            if scroll_off > 0:
+                p.drawText(380, 283, "▲")
+            if scroll_off + 4 < total_sessions:
+                p.drawText(380, 391, "▼")
+
+            # Right Box: Session preview inside QRect(430, 269, 185, 175)
+            p.setFont(self._font_body)
+            p.setPen(QColor(255, 255, 255))
+            if self._selected_index < total_sessions:
+                sess = self._session_summaries[self._selected_index]
+                label = sess.get("label", "Session")
+                turn_count = sess.get("turn_count", 0)
+                seen = sess.get("seen_summary", "")
+                seen_line = f"\n* Sights: {seen}" if seen else ""
+                desc = f"* {label}\n* ({turn_count} turns){seen_line}\n* [Enter to read]"
+            else:
+                desc = "* Return to the talk topics menu."
+            p.drawText(QRect(430, 269, 185, 175), Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, desc)
+
+            p.setFont(self._font_small)
+            p.setPen(QColor(255, 180, 220))
+            p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
+
+        elif self.state == ShopState.CHAT_HISTORY_VIEW:
+            self._draw_dialogue_text(p, QRect(36, 271, 568, 175))
+            p.setFont(self._font_small)
+            p.setPen(QColor(157, 162, 196))
+            total_t = len(self._history_view_turns)
+            cur_t = self._history_turn_idx + 1 if total_t > 0 else 0
+            p.drawText(QRect(36, 450, 568, 20), Qt.AlignRight | Qt.AlignVCenter, f"Turn {cur_t}/{total_t}  [◄/► Browse | Esc: Back]")
 
         elif self.state == ShopState.TALK_DIALOGUE:
             self._draw_dialogue_text(p, QRect(36, 271, 568, 175))

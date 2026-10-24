@@ -284,9 +284,10 @@ SPECIAL_CHANCE = 0.5              # chance that a pause contains one special ani
 BURNT_CHANCE = 0.03               # RARE: chance per pause that the pet is "burnt" instead
 SPECIAL_WEIGHTS = {
     # relative odds of each special / looping rest when one is rolled (never the same twice in a row)
+    # Note: "crying" is excluded from random idle rolls; it is reserved strictly for sad AI moments.
     "laughing": 4, "shocked": 2, "singing": 2, "peace_sign": 3,
     "embarrassed": 2, "wistful": 2, "sad": 1,
-    "crying": 1, "tongue": 2, "kneeling": 2, "behind": 2,
+    "tongue": 2, "kneeling": 2, "behind": 2,
 }
 RUN_CHANCE = 0.25                 # chance that a new walk is a run instead
 WISTFUL_WALK_CHANCE = 0.25        # chance that a new walk is a slower wistful walk
@@ -557,12 +558,77 @@ CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
-AUTO_SCREEN_COMMENT_INACTIVITY_S = 600.0         # 10 minutes of silence after user chat or inspection
+AUTO_SCREEN_COMMENT_INACTIVITY_S = 180.0         # 3 minutes of silence after user chat or inspection
 AUTO_SCREEN_COMMENT_POLL_INTERVAL_MS = 5000      # Check conditions every 5 seconds
 TRAY_SCREEN_READ_INTERVAL_MS = 300000            # 5 minutes background screen reading while hidden in tray
 AUTO_SCREEN_MAX_USER_IDLE_S = 900.0              # 15 minutes of system-wide inactivity (keyboard/mouse) -> user away/asleep, pause peeking
 AUTO_SCREEN_DIFF_THRESHOLD = 0.04                # 4% minimum visual delta to justify commentary; otherwise screen is static
-AUTO_SCREEN_STATIC_BACKOFF_S = 600.0             # If screen hasn't changed, back off 10 minutes before checking again
+AUTO_SCREEN_STATIC_BACKOFF_S = 180.0             # If screen hasn't changed, back off 3 minutes before checking again
+AI_SONG_SCREEN_BUFFER_S = 45.0                   # Courtesy buffer after song comment before screen commentary
+
+# --- Game Mode & Backseat Gamer Commentary -------------------------------------
+GAME_SCREEN_COMMENT_INACTIVITY_S = 45.0  # 45 seconds between commentaries while gaming (rapid observation)
+GAME_SCREEN_STATIC_BACKOFF_S = 75.0      # Backoff if game screen is static (pause/loading/menu)
+GAME_DIFF_THRESHOLD = 0.035              # 3.5% visual delta threshold in games
+GAME_DIALOGUE_HOLD_S = 5.0               # Snappy auto-dismiss so speech bubbles don't block gameplay HUD
+
+KNOWN_GAME_PLATFORM_PATHS = (
+    r"\steamapps\common",
+    r"\epic games",
+    r"\riot games",
+    r"\gog galaxy\games",
+    r"\gog games",
+    r"\ubisoft",
+    r"\xboxgames",
+)
+
+EXCLUDED_NON_GAME_TITLES = (
+    "yellow's pixel buddies",
+    "yellows pixel buddies",
+    "pink's dark world sanctuary",
+    "pixel buddies",
+)
+
+EXCLUDED_NON_GAME_EXES = (
+    "yellows_pixel_buddies.exe",
+    "yellow's pixel buddies.exe",
+    "pixel_buddies.exe",
+    "python.exe",
+    "pythonw.exe",
+    "explorer.exe",
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "code.exe",
+    "devenv.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "windowsterminal.exe",
+    "notepad.exe",
+    "taskmgr.exe",
+    "discord.exe",
+    "spotify.exe",
+    "slack.exe",
+    "teams.exe",
+)
+
+KNOWN_GAME_EXE_NAMES = {
+    "minecraft.exe", "javaw.exe", "genshinimpact.exe", "honkaistarrail.exe",
+    "zenlesszonezero.exe", "osu!.exe", "robloxplayerbeta.exe", "league of legends.exe",
+    "valorant.exe", "dota2.exe", "cs2.exe", "csgo.exe", "fortniteclient-win64-shipping.exe",
+    "overwatch.exe", "eldenring.exe", "bg3.exe", "bg3_dx11.exe", "hades.exe", "hades2.exe",
+    "stardew valley.exe", "terraria.exe", "celeste.exe", "hollow_knight.exe",
+    "deltarune.exe", "undertale.exe", "slaythespire.exe", "binding of isaac.exe",
+    "isaac-ng.exe", "deadcells.exe", "monsterhunterrise.exe", "monsterhunterworld.exe",
+    "cyberpunk2077.exe", "witcher3.exe", "apex.exe", "r5apex.exe", "destiny2.exe",
+    "warframe.x64.exe", "gta5.exe", "rdr2.exe", "sekiro.exe", "palworld-win64-shipping.exe",
+    "lethal company.exe", "helldivers2.exe", "fallguys_client.exe", "rocketleague.exe",
+    # Emulators
+    "yuzu.exe", "ryujinx.exe", "retroarch.exe", "rpcs3.exe", "dolphin.exe", "pcsx2.exe", "cemu.exe",
+}
 
 # --- Gemini AI & Memory Configuration ----------------------------------------
 GEMINI_MODEL = "gemini-3.5-flash-lite"
@@ -671,7 +737,8 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 - Emotion & Animation Tags:
   At the very end of your message, include exactly one bracketed emotion tag matching your mood:
   [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
-  Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
+  * Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
+  * STRICT CRYING RESTRICTION: [anim: crying] is STRICTLY RESERVED for genuine heartbreaking sorrow, tragedy, grief, or real tears of loss (e.g. serious loss, terrible tragedy, heartbroken user). NEVER use [anim: crying] for minor complaints, light tsundere pouts, normal bickering, playful defeat, or casual work banter!
 
 - GHOST DOLL DIALOGUE MODE ([mode: ghost]):
   * You have a special Ghost Doll Dialogue Mode!
@@ -1446,6 +1513,83 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* Toby Fox... that guest composer dog strikes again!",
     ],
 }
+
+# --- Annoyed / Ignored Dialogue Lines & Departure Helpers --------------------
+ANNOYED_IGNORED_LINES: list[str] = [
+    "* ... Hmph!! Ignored me TWICE in a row?! Look at me talking to the wall! You better have a good excuse when you come back, dummy!",
+    "* TWO times in a row ignored?! What am I, invisible taskbar decoration to you, minion?! HMPH!",
+    "* Did you seriously just leave me on read TWICE?! Cotton dolls have feelings too, you know!!",
+    "* Fine! I see how it is! Two messages into the void! I'm crossing my plush arms until you apologize!",
+    "* Ignored twice in a row... That's it, you're getting the royal cold shoulder until you come back, human!",
+]
+
+ANNOYED_COMEBACK_LINES: list[str] = [
+    "* Hmph! Finally back, are we?! Don't you dare leave me talking to myself again, mew! [anim: tongue]",
+    "* Oh, so you DO know how to click! You're lucky you came back before I readied the cat bombs! [anim: embarrassed]",
+    "* Hmph! I'm still mad, but... fine. Welcome back, minion. Next time tell me if you have to go! [anim: wistful]",
+    "* About time you noticed me! Leaving your doll overlord hanging twice... unforgivable! But I'll let it slide once, mew! [anim: peace_sign]",
+]
+
+DEPARTURE_RESPONSES: list[str] = [
+    "* Leaving already, minion?! Fine, go do your mortal duties! But hurry back, mew! [anim: wistful]",
+    "* Hmph! Royal permission granted to step away! Don't keep your master waiting too long! [anim: tongue]",
+    "* Stepping away, are you? Understood! I'll hold down the taskbar fort while you're gone, mew! [anim: peace_sign]",
+    "* Acknowledged, puppet! Hurry back before I get bored and play with cat bombs! [anim: behind]",
+]
+
+WELCOME_BACK_RESPONSES: list[str] = [
+    "* Ah! Welcome back, minion! Did you finish what you had to do, mew? [anim: peace_sign]",
+    "* You're back! Good, I was starting to think you got lost out there, mew! [anim: peace_sign]",
+    "* Look who returned! The taskbar was far too quiet without my minion, mew! [anim: laughing]",
+]
+
+
+def check_is_departure_message(text: str) -> bool:
+    """Return True if the text indicates the user is leaving / stepping away / going AFK."""
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    if clean in ("/afk", "/away", "/brb", "/bye", "/leave", "/gtg", "/g2g", "/gotta_go"):
+        return True
+    if clean in ("afk", "brb", "bbl", "gtg", "g2g", "bye", "goodbye", "bye bye", "cya", "farewell", "ttyl"):
+        return True
+    if re.search(r"\b(?:you|u|they|we|he|she)\s+(?:have|got|need|must|gotta)", clean):
+        return False
+    patterns = [
+        r"\b(?:i\s+)?(?:have|got|need|must)\s+to\s+(?:go|leave|head\s+out|bounce|run|step\s+out)\b",
+        r"\b(?:i\s+)?gotta\s+(?:go|leave|head\s+out|bounce|run|step\s+out)\b",
+        r"\b(?:i\s*['’]?m|i\s+am)\s+(?:leaving|heading\s+out|going(?:\s+(?:out|away|now|to\s+(?:sleep|bed|work|school)))?)\b",
+        r"\b(?:going\s+)?afk\b",
+        r"\b(?:brb|be\s+right\s+back|bbl)\b",
+        r"\b(?:gtg|g2g)\b",
+        r"\b(?:stepping\s+(?:away|out))\b",
+        r"\b(?:good\s*bye|bye\s*bye|bye\b|farewell|see\s+ya|see\s+you(?:\s+later)?|cya|ttyl|talk\s+to\s+you\s+later)\b",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            return True
+    return False
+
+
+def check_is_return_message(text: str) -> bool:
+    """Return True if the text indicates the user has returned from being away."""
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    if clean in ("/back", "/return", "/here", "/im_back"):
+        return True
+    if clean in ("back", "im back", "i'm back", "i am back", "returned", "i returned", "i have returned"):
+        return True
+    patterns = [
+        r"\b(?:i\s*['’]?m|i\s+am)\s+back\b",
+        r"\b(?:i\s+)?(?:have\s+)?returned\b",
+        r"\b(?:i\s+)?came\s+back\b",
+        r"\bback\s+now\b",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            return True
+    return False
 
 # --- Windows Startup ---------------------------------------------------------
 # --- Single Instance Configuration & IPC -------------------------------------
@@ -2227,6 +2371,17 @@ class DialogueOverlay(QWidget):
         self._hold_remaining_ms: int = 0
         self._skippable = True
         self._auto_dismiss = True
+        self._track_ignore = False
+        self._user_interacted = False
+        self._last_was_ignored = False
+
+    def mark_user_interacted(self) -> None:
+        """Mark that the user actively interacted with the current dialogue sequence."""
+        self._user_interacted = True
+
+    def was_ignored(self) -> bool:
+        """Return True if the last dialogue closed automatically without user interaction."""
+        return self._last_was_ignored
 
     def _create_soul_heart_pixmap(self) -> QPixmap:
         """Create a crisp pixel-art Deltarune red soul heart pixmap."""
@@ -2263,10 +2418,13 @@ class DialogueOverlay(QWidget):
         return self._skippable
 
     def ask(self, text: str, choices: list[tuple[str, str, str | None]], pet_x: float, pet_y: float,
-            on_chosen) -> None:
+            on_chosen, track_ignore: bool = True) -> None:
         """Start a new question dialogue bubble with interactive choices."""
         self._skippable = True
         self._auto_dismiss = True
+        self._track_ignore = track_ignore
+        self._user_interacted = False
+        self._last_was_ignored = False
         self._queue.clear()
         self._choices = list(choices)
         self._choice_rects.clear()
@@ -2286,6 +2444,8 @@ class DialogueOverlay(QWidget):
         auto_dismiss: bool = True,
         anim: str | None = None,
         is_ghost: bool = False,
+        hold_s: float | None = None,
+        track_ignore: bool = True,
     ) -> None:
         """Start a new speech bubble with typewriter animation beside the pet's head.
 
@@ -2301,6 +2461,10 @@ class DialogueOverlay(QWidget):
         self._on_chosen_callback = None
         self._skippable = skippable
         self._auto_dismiss = auto_dismiss
+        self._custom_hold_s = hold_s
+        self._track_ignore = track_ignore and auto_dismiss
+        self._user_interacted = False
+        self._last_was_ignored = False
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -2573,7 +2737,10 @@ class DialogueOverlay(QWidget):
                     self._start_or_pause_hold_timer(round(DIALOGUE_QUESTION_HOLD_S * 1000))
             else:
                 if self._auto_dismiss:
-                    hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
+                    if getattr(self, "_custom_hold_s", None) is not None:
+                        hold_s = self._custom_hold_s
+                    else:
+                        hold_s = max(DIALOGUE_HOLD_MIN_S, self._total_chars * DIALOGUE_HOLD_PER_CHAR_S)
                     self._start_or_pause_hold_timer(round(hold_s * 1000))
             self.update()
 
@@ -2611,6 +2778,7 @@ class DialogueOverlay(QWidget):
             self._display_text(next_text, self._last_pet_x, self._last_pet_y)
             return
 
+        self._last_was_ignored = bool(self._track_ignore and not self._user_interacted)
         self._active = False
         self._type_timer.stop()
         self._hold_timer.stop()
@@ -2622,6 +2790,7 @@ class DialogueOverlay(QWidget):
 
     def advance_or_dismiss(self) -> None:
         """Fast-forward typewriter if typing, or dismiss/advance queue if already complete."""
+        self._user_interacted = True
         if not self._active or not self._skippable:
             return
         if self._visible_chars < self._total_chars:
@@ -2639,6 +2808,7 @@ class DialogueOverlay(QWidget):
 
     def _choose_option(self, idx: int) -> None:
         """Player clicked a choice option: invoke callback with reaction text and anim."""
+        self._user_interacted = True
         if not self._choices or idx < 0 or idx >= len(self._choices):
             return
         choice_label, reaction_text, reaction_anim = self._choices[idx]
@@ -2698,6 +2868,7 @@ class DialogueOverlay(QWidget):
 
     def mousePressEvent(self, event) -> None:
         """Left-click fast-forwards typewriter or selects a choice option."""
+        self._user_interacted = True
         if not self._skippable or not self._active:
             event.accept()
             return
@@ -2859,8 +3030,18 @@ class ChatInputOverlay(QWidget):
         self._cached_bg: QPixmap | None = None
         self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
 
-        self._base_w = round(320 * self._scale)
-        self._base_h = round(36 * self._scale)
+        # Derive dimensions directly from standard DialogueOverlay metrics (~308px × 76px)
+        base_inner_w = round(84 * self._scale)
+        base_inner_h = round(19 * self._scale)
+        pad_x = round(4 * self._scale)
+        pad_y = round(2 * self._scale)
+        req_inner_w = DIALOGUE_MAX_WIDTH_PX + pad_x * 2
+        extra_w = max(0, req_inner_w - base_inner_w)
+        req_inner_h = 24 * 2 + pad_y * 2
+        extra_h = max(0, req_inner_h - base_inner_h)
+
+        self._base_w = round(108 * self._scale) + extra_w  # ~308px
+        self._base_h = round(33 * self._scale) + extra_h   # ~76px
         self._last_pet_x: float | None = None
         self._last_pet_y: float | None = None
 
@@ -2935,16 +3116,17 @@ class ChatInputOverlay(QWidget):
             self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
 
     def _init_ui(self) -> None:
-        font = QFont(self._font_family, 12)
+        font = QFont(self._font_family)
+        font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
         font.setBold(False)
         font.setWeight(QFont.Normal)
         font.setStyleStrategy(QFont.PreferDefault)
 
         layout = QHBoxLayout(self)
-        pad_h = round(16 * self._scale)
+        pad_h = round(14 * self._scale)
         pad_v = round(10 * self._scale)
         layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
-        layout.setSpacing(6)
+        layout.setSpacing(5)
 
         # Soul heart indicator
         self._heart_label = QLabel(self)
@@ -3102,7 +3284,9 @@ class ChatInputOverlay(QWidget):
         clamped_lines = min(4, max(1, line_count))
         fm = self._text_edit.fontMetrics()
         line_step = fm.lineSpacing()
-        target_h = self._base_h + (clamped_lines - 1) * line_step
+        # _base_h (~76px) comfortably fits up to 2 lines; extra height needed only for 3+ lines
+        extra_lines = max(0, clamped_lines - 2)
+        target_h = self._base_h + extra_lines * line_step
         if line_count > 4:
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         else:
@@ -3289,6 +3473,119 @@ def get_user_idle_seconds() -> float:
     except Exception:
         pass
     return 0.0
+
+
+def is_d3d_fullscreen_active() -> bool:
+    """Return True if Windows reports a full-screen Direct3D / DirectX game is actively rendering."""
+    if sys.platform != "win32":
+        return False
+    try:
+        state = ctypes.c_int()
+        # QUNS_RUNNING_D3D_FULL_SCREEN = 3
+        if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state)) == 0:
+            return state.value == 3
+    except Exception:
+        pass
+    return False
+
+
+def get_foreground_process_info() -> tuple[int, str, str, str, int]:
+    """Return (hwnd, exe_name, exe_path, window_title, pid) of current foreground window."""
+    if sys.platform != "win32":
+        return 0, "", "", "", 0
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return 0, "", "", "", 0
+
+        txt_buf = ctypes.create_unicode_buffer(512)
+        user32.GetWindowTextW(hwnd, txt_buf, 512)
+        title = txt_buf.value.strip()
+
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        pid_val = pid.value
+        if pid_val <= 0:
+            return hwnd, "", "", title, 0
+
+        try:
+            import psutil
+            proc = psutil.Process(pid_val)
+            name = proc.name().lower()
+            try:
+                exe_path = proc.exe().lower()
+            except Exception:
+                exe_path = ""
+            return hwnd, name, exe_path, title, pid_val
+        except Exception:
+            return hwnd, "", "", title, pid_val
+    except Exception:
+        return 0, "", "", "", 0
+
+
+def detect_foreground_game(custom_game_list: list[str] | None = None, excluded_hwnds: set[int] | None = None) -> tuple[bool, str]:
+    """Detect whether a video game is running in the foreground.
+
+    Returns (is_game, display_title).
+    """
+    if sys.platform != "win32":
+        return False, ""
+
+    hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
+    if not hwnd or not exe_name:
+        return False, ""
+
+    if excluded_hwnds and hwnd in excluded_hwnds:
+        return False, ""
+
+    # 0. Exclude Yellow's Pixel Buddies own process and known desktop non-game apps
+    try:
+        if pid and pid == os.getpid():
+            return False, ""
+    except Exception:
+        pass
+
+    title_lower = title.lower()
+    for excl_title in EXCLUDED_NON_GAME_TITLES:
+        if excl_title in title_lower:
+            return False, ""
+
+    if exe_name in EXCLUDED_NON_GAME_EXES:
+        return False, ""
+
+    if "yellow's pixel buddies" in exe_path or "yellows_pixel_buddies" in exe_path:
+        return False, ""
+
+    d3d_active = is_d3d_fullscreen_active()
+
+    # 1. Known game distribution platforms (Steam, Epic, Riot, GOG, Ubisoft, Xbox)
+    if exe_path:
+        for platform_p in KNOWN_GAME_PLATFORM_PATHS:
+            if platform_p in exe_path:
+                game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+                if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+                    return True, game_title
+
+    # 2. Known game executables / emulators
+    if exe_name in KNOWN_GAME_EXE_NAMES:
+        game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+        if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            return True, game_title
+
+    # 3. Custom user whitelist from config
+    if custom_game_list and exe_name in [g.lower() for g in custom_game_list]:
+        game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+        if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            return True, game_title
+
+    # 4. Direct3D fullscreen on non-system, non-browser app
+    if d3d_active and exe_name not in EXCLUDED_NON_GAME_EXES:
+        game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
+        if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            return True, game_title
+
+    return False, ""
 
 
 def compute_screen_fingerprint(pixmap: QPixmap) -> bytes:
@@ -5146,6 +5443,14 @@ def split_dual_dialogue(
     1. Both Ghost spirit and Doll vessel speak in the same response (e.g. Ghost roast + Doll comment/mew).
     2. Multiple lines have distinct [anim: ...] or [mode: ghost] tags.
     """
+    if default_anim == "crying":
+        sad_cues = ("cry", "crying", "tears", "sob", "sobbing", "heartbroken", "heartbreak",
+                    "sad", "sadness", "tragic", "tragedy", "grief", "mourn", "mourning",
+                    "loss", "pain", "hurts", "whimper", "waaa", "depress", "sorrow")
+        raw_clean = re.sub(r"\[anim:\s*[^\\\]]+\]", "", raw_text, flags=re.IGNORECASE).lower()
+        if not any(k in raw_clean for k in sad_cues):
+            default_anim = "wistful"
+
     raw_lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
     if not raw_lines:
         return [DialogueStep(text=raw_text.strip(), anim=default_anim, is_ghost=default_ghost)]
@@ -5166,6 +5471,13 @@ def split_dual_dialogue(
             if line_anim in ("ghost", "spectral"):
                 line_ghost = True
                 line_anim = "angry"
+            elif line_anim == "crying":
+                sad_cues = ("cry", "crying", "tears", "sob", "sobbing", "heartbroken", "heartbreak",
+                            "sad", "sadness", "tragic", "tragedy", "grief", "mourn", "mourning",
+                            "loss", "pain", "hurts", "whimper", "waaa", "depress", "sorrow")
+                l_without_anim = (l[:anim_match.start()] + l[anim_match.end():]).lower()
+                if not any(k in l_without_anim for k in sad_cues):
+                    line_anim = "wistful"
             l = l[:anim_match.start()] + l[anim_match.end():]
 
         # Strip explicit role prefixes like "* Body:" or "* Ghost:" if present
@@ -6893,6 +7205,13 @@ class YellowsPixelBuddies(QWidget):
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = time.perf_counter()
         self._keep_response_anim: bool = False
+        # --- Annoyed on ignored dialogues & user away status -------------------
+        self._consecutive_ignored_dialogues: int = 0
+        self._is_annoyed_ignored: bool = False
+        self._user_away_notified: bool = False
+        self._user_away_time: float = 0.0
+        self._user_away_was_idle: bool = False
+        self._was_annoyed_when_chat_opened: bool = False
         self._pending_song_announcement: tuple | None = None
         self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
         self._last_ai_song_comment_time: float = -9999.0
@@ -6995,6 +7314,10 @@ class YellowsPixelBuddies(QWidget):
             self._bomb_attack_enabled = bool(saved_settings["bomb_attack_enabled"])
         if "jump_enabled" in saved_settings:
             self._jump_enabled = bool(saved_settings["jump_enabled"]) and getattr(self, "_jump_sprites_ready", True)
+        self._game_mode: str = str(saved_settings.get("game_mode", "AUTO"))
+        self._is_game_active: bool = False
+        self._current_game_name: str = ""
+        self._last_game_check_time: float = 0.0
         self._shake_trail: deque[tuple[float, int, int]] = deque()   # raw cursor (time, x, y) while hanging
         self._input_transparent = False      # True while mouse clicks pass through the window
         self._warned_no_click_through = False
@@ -7210,11 +7533,15 @@ class YellowsPixelBuddies(QWidget):
         dialogue_category: str | None = None,
         is_ghost: bool = False,
         step_anim: str | None = None,
+        hold_s: float | None = None,
+        track_ignore: bool = True,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
         if getattr(self, "_hidden_in_tray", False):
+            return
+        if getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved" and not force:
             return
         if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
@@ -7239,7 +7566,7 @@ class YellowsPixelBuddies(QWidget):
                                and random.random() < DIALOGUE_QUESTION_CHANCE))
             if is_question:
                 self._last_question_dialogue_time = now
-                self._reset_ambient_ai_cooldowns(now)
+                self._reset_ambient_ai_cooldowns(now, reset_screen=False)
                 # 1. Attempt dynamic AI question generation (from screen, memory, or personality)
                 if self._trigger_ai_question():
                     return
@@ -7263,6 +7590,7 @@ class YellowsPixelBuddies(QWidget):
                         self._x,
                         self._y,
                         on_chosen=self._on_question_answered,
+                        track_ignore=(track_ignore and not getattr(self, "_user_away_notified", False)),
                     )
                     return
             else:
@@ -7317,6 +7645,7 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_memory") and record_memory:
             ignored_prefixes = (
                 "* Inspecting your screen...",
+                "* Watching your gameplay",
                 "* Hold your horses, minion!",
                 "* Did a cat step on your keyboard",
             )
@@ -7330,6 +7659,15 @@ class YellowsPixelBuddies(QWidget):
                     extra_lines=extra_queue,
                 )
 
+        if (
+            not auto_dismiss
+            or getattr(self, "_user_away_notified", False)
+            or (getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved")
+            or dialogue_category in ("annoyed_ignored", "annoyed_resolved", "welcome_back", "startup_summon", "error")
+            or line.startswith(("* Inspecting", "* Watching", "* Hold your horses", "* Rebooting", "* ...", "* ..?"))
+        ):
+            track_ignore = False
+
         self._dialogue_overlay.say(
             line,
             self._x,
@@ -7339,6 +7677,8 @@ class YellowsPixelBuddies(QWidget):
             auto_dismiss=auto_dismiss,
             anim=step_anim,
             is_ghost=is_ghost,
+            hold_s=hold_s,
+            track_ignore=track_ignore,
         )
 
     def _on_question_answered(self, *args, **kwargs) -> None:
@@ -7363,6 +7703,13 @@ class YellowsPixelBuddies(QWidget):
         self._reset_ambient_ai_cooldowns(now)
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
+        if reaction_anim == "crying":
+            sad_cues = ("cry", "crying", "tears", "sob", "sobbing", "heartbroken", "heartbreak",
+                        "sad", "sadness", "tragic", "tragedy", "grief", "mourn", "mourning",
+                        "loss", "pain", "hurts", "whimper", "waaa", "depress", "sorrow")
+            react_clean = re.sub(r"\[anim:\s*[^\\\]]+\]", "", reaction_text, flags=re.IGNORECASE).lower()
+            if not any(k in react_clean for k in sad_cues):
+                reaction_anim = "wistful"
         if reaction_anim and self._can_play(reaction_anim):
             self._play(reaction_anim)
         self._keep_response_anim = True
@@ -7405,10 +7752,11 @@ class YellowsPixelBuddies(QWidget):
         else:
             self._say(reaction_text, force=True, record_memory=False)
 
-    def _reset_ambient_ai_cooldowns(self, now: float | None = None) -> None:
-        """Reset all autonomous AI timers (screen peeking, questions) to enforce a unified quiet window."""
+    def _reset_ambient_ai_cooldowns(self, now: float | None = None, reset_screen: bool = True) -> None:
+        """Reset autonomous AI timers to enforce quiet windows."""
         t = now if now is not None else time.perf_counter()
-        self._last_auto_screen_comment_time = t
+        if reset_screen:
+            self._last_auto_screen_comment_time = t
         self._last_question_dialogue_time = t
 
     def _has_memory_highlights(self) -> bool:
@@ -7601,10 +7949,16 @@ SITUATIONAL AWARENESS, ANTI-REPETITION & EMOTIONAL DIVERGENCE RULES:
    * NEVER use the accusatory dichotomy template: 'Is [X] supposed to be [A], or are you just [B / slacking / procrastinating]?!'.
    * NEVER default to accusing the user of 'procrastination', 'slacking', or 'laziness' unless the user explicitly confessed to procrastinating.
    * DO NOT repeat recently asked questions or recent topics (like cat bombs or repeatedly asking about the same app/task).
+   * DO NOT turn active reminders into snooze/hibernate questionnaires! NEVER ask 'Should we snooze this reminder?', 'Should we banish it until finals/next week?', or 'Shall we lock it away?'. Pink is a magical desktop companion, NOT an annoying calendar notification!
 3. STRICTLY FORBIDDEN REACTION PATTERNS & TRUE EMOTIONAL DIVERGENCE:
-   * NEVER start reaction texts with '* Hmph!' and never dismiss all user choices with the same generic tsundere insult.
+   * NEVER start reaction texts with formulaic templates: FORBIDDEN: '* Wise choice', '* Good choice', '* Excellent choice', '* Splendid choice', '* As expected', '* Hmph!'.
+   * NEVER repeat the formulaic lecture: 'Let's let [X] hibernate until your [presentation/slides/work] is finished, mew!'. That repetitive loop is COMPLETELY BANNED.
    * Each choice MUST produce a genuinely DIFFERENT emotional reaction, animation, and verbal tone!
-   * Example: One choice makes Pink flustered [anim: embarrassed], another makes her proud/laughing [anim: laughing], another makes the doll vessel purr sweetly [anim: peace_sign] or the ghost puzzled [anim: behind].
+   * High-contrast divergence across choices:
+     - One choice triggers sassy / tsundere / indignant rage [anim: angry] or stunned shock [anim: shocked].
+     - One choice triggers proud / mischievous / celebratory giggles [anim: laughing] or sweet purring [anim: peace_sign].
+     - One choice triggers flustered embarrassment [anim: embarrassed], sarcastic teasing [anim: tongue], or nostalgic wonder [anim: wistful].
+     - NEVER use [anim: crying] in question reactions unless the user picked an option about an actual tragic loss.
 4. CASUAL CARE (EATING, DRINKING, REST):
    * When checking on water, meals, or late-night rest, DO NOT give preachy parental lectures!
    * Deliver care through the charming dual persona: the sweet Doll Vessel cares innocently ('* Even cotton needs water, mew!') while the Ghost Spirit acts tsundere-protective ('* Don't you dare collapse on my watch, human!').
@@ -7758,7 +8112,14 @@ RULES:
             return
 
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
 
         self._last_question_item = q_item
         self._last_dialogue = q_item.question
@@ -7786,6 +8147,7 @@ RULES:
             self._x,
             self._y,
             on_chosen=self._on_question_answered,
+            track_ignore=(not getattr(self, "_user_away_notified", False) and not getattr(self, "_is_annoyed_ignored", False)),
         )
 
     def _on_ai_question_error(self, err_msg: str) -> None:
@@ -7820,6 +8182,7 @@ RULES:
                 self._x,
                 self._y,
                 on_chosen=self._on_question_answered,
+                track_ignore=(not getattr(self, "_user_away_notified", False) and not getattr(self, "_is_annoyed_ignored", False)),
             )
         else:
             if getattr(self, "_phase", None) is Phase.PAUSE:
@@ -7873,6 +8236,40 @@ RULES:
         if self._phase is Phase.SUMMON_DIALOGUE:
             self._start_summon_intro()
             return
+
+        # Check if dialogue was ignored by user
+        was_ignored = False
+        if hasattr(self, "_dialogue_overlay") and hasattr(self._dialogue_overlay, "was_ignored"):
+            was_ignored = self._dialogue_overlay.was_ignored()
+
+        if was_ignored:
+            if getattr(self, "_user_away_notified", False):
+                log.info("Dialogue dismissed without interaction, but user notified away; not counting as ignored.")
+            elif getattr(self, "_is_annoyed_ignored", False):
+                pass
+            else:
+                self._consecutive_ignored_dialogues = getattr(self, "_consecutive_ignored_dialogues", 0) + 1
+                log.info("Dialogue ignored! Consecutive ignored count: %d", self._consecutive_ignored_dialogues)
+                if self._consecutive_ignored_dialogues >= 2:
+                    log.info("User ignored dialogue boxes 2 times in a row! Triggering annoyed state.")
+                    self._trigger_annoyed_ignored()
+                    return
+        else:
+            # User interacted with dialogue (clicked, chose option, or dismissed manually)
+            if getattr(self, "_is_annoyed_ignored", False):
+                self._handle_user_returned_after_annoyed()
+                return
+            self._consecutive_ignored_dialogues = 0
+
+        if getattr(self, "_is_annoyed_ignored", False):
+            # If annoyed, stay in angry loop at PAUSE
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            self.update()
+            return
+
         if getattr(self, "_is_ghost_talking", False):
             self._is_ghost_talking = False
             if self._phase is Phase.PAUSE and self.state == "angry":
@@ -7890,6 +8287,48 @@ RULES:
                 self._brain_timer.start(AFTER_SPECIAL_REST_MS)
         self.update()
         self._check_and_play_pending_song()
+
+    def _trigger_annoyed_ignored(self) -> None:
+        """Trigger Pink's annoyed state when user ignores 2 dialogue boxes in a row without notifying away."""
+        if getattr(self, "_is_annoyed_ignored", False):
+            return
+        self._is_annoyed_ignored = True
+        self._consecutive_ignored_dialogues = 2
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._brain_timer.stop()
+        if self._can_play("angry"):
+            self._play("angry", loop=True)
+
+        line = random.choice(ANNOYED_IGNORED_LINES)
+        self._say(
+            line,
+            force=True,
+            skippable=True,
+            auto_dismiss=False,
+            record_memory=True,
+            dialogue_category="annoyed_ignored",
+            step_anim="angry",
+            track_ignore=False,
+        )
+
+    def _handle_user_returned_after_annoyed(self) -> None:
+        """Handle player acknowledging Pink or returning after she got annoyed from being ignored twice."""
+        if not getattr(self, "_is_annoyed_ignored", False):
+            return
+        self._is_annoyed_ignored = False
+        self._consecutive_ignored_dialogues = 0
+
+        line = random.choice(ANNOYED_COMEBACK_LINES)
+        self._say(
+            line,
+            force=True,
+            skippable=True,
+            auto_dismiss=True,
+            record_memory=True,
+            dialogue_category="annoyed_resolved",
+            track_ignore=False,
+        )
 
     def _check_and_play_pending_song(self) -> None:
         """If a song announcement was deferred while dialogue or chat was active, play it now."""
@@ -7937,7 +8376,15 @@ RULES:
         self._pause_elapsed = False
         self._brain_timer.stop()
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._was_annoyed_when_chat_opened = True
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         if self.state in MOVE_VELOCITY_PX_S:
             self._play("idle")
         if hasattr(self, "_chat_input"):
@@ -7979,6 +8426,65 @@ RULES:
 
         clean_input = text.strip()
         lower_input = clean_input.lower()
+
+        if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
+
+        was_annoyed_chat = getattr(self, "_was_annoyed_when_chat_opened", False)
+        self._was_annoyed_when_chat_opened = False
+        was_away_notified = getattr(self, "_user_away_notified", False)
+
+        # Departure slash commands
+        if lower_input in ("/afk", "/away", "/brb", "/bye", "/leave", "/gtg", "/g2g", "/gotta_go"):
+            self._user_away_notified = True
+            self._user_away_time = now
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            reply = random.choice(DEPARTURE_RESPONSES)
+            self._say(reply, force=True, record_memory=True, step_anim="wistful", track_ignore=False)
+            return
+
+        # Return slash commands
+        if lower_input in ("/back", "/return", "/here", "/im_back"):
+            self._user_away_notified = False
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            reply = random.choice(WELCOME_BACK_RESPONSES)
+            self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
+            return
+
+        is_departure = check_is_departure_message(clean_input)
+        is_return = check_is_return_message(clean_input)
+
+        if is_departure:
+            self._user_away_notified = True
+            self._user_away_time = now
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            if not api_key:
+                reply = random.choice(DEPARTURE_RESPONSES)
+                self._say(reply, force=True, record_memory=True, step_anim="wistful", track_ignore=False)
+                return
+
+        elif is_return or was_away_notified:
+            self._user_away_notified = False
+            self._user_away_was_idle = False
+            self._consecutive_ignored_dialogues = 0
+            self._is_annoyed_ignored = False
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            if not api_key and is_return:
+                reply = random.choice(WELCOME_BACK_RESPONSES)
+                self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
+                return
+
+        if was_annoyed_chat and not (self._memory.get_api_key() if hasattr(self, "_memory") else ""):
+            reply = "* Hmph! You finally talk to me after ignoring two of my dialogue boxes?! You better apologize properly, dummy! [anim: angry]"
+            self._say(reply, force=True, record_memory=True, step_anim="angry", track_ignore=False)
+            return
 
         # Multi-command chaining (e.g. "/timer 10m tea && /remind call mom" or "/alarm 5pm && /remind check oven")
         if "&&" in clean_input or ("\n/" in clean_input) or ("; /" in clean_input):
@@ -8273,6 +8779,31 @@ RULES:
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
 
+        if is_departure:
+            system_inst += (
+                "\n\nCRITICAL CONTEXT - USER IS LEAVING / GOING AWAY:\n"
+                "The user just told you that they have to go, are stepping away, leaving, going AFK, or saying goodbye.\n"
+                "- Acknowledge their departure in your distinct royal/tsundere style!\n"
+                "- Grant them 'permission' to attend to their mortal errands, or tell them to hurry back and not make their doll overlord wait too long.\n"
+                "- Tag your reaction with [anim: wistful], [anim: peace_sign], [anim: behind], or [anim: tongue]."
+            )
+        elif is_return or was_away_notified:
+            system_inst += (
+                "\n\nCRITICAL CONTEXT - USER JUST RETURNED:\n"
+                "The user previously told you they had to go, and has now just returned!\n"
+                "- Welcome them back in your distinct royal/tsundere style (e.g. glad they returned, asking how their task went, or pretending you barely noticed they were gone)!\n"
+                "- Tag your reaction with [anim: peace_sign], [anim: laughing], [anim: tongue], or [anim: idle]."
+            )
+
+        if was_annoyed_chat:
+            system_inst += (
+                "\n\nCRITICAL CONTEXT - USER PREVIOUSLY IGNORED YOU:\n"
+                "You were just standing there fuming because the user ignored your last two dialogue boxes in a row while away without telling you! "
+                "The user has now opened chat to talk to you.\n"
+                "- Act offended, sassy, and tsundere! Demand a proper explanation or apology for leaving you talking to thin air twice!\n"
+                "- Tag your reaction with [anim: angry], [anim: tongue], or [anim: embarrassed]."
+            )
+
         # Add elapsed time since user's previous interaction if available
         last_turn = self._memory.history[-1] if self._memory.history else None
         if last_turn and "timestamp" in last_turn:
@@ -8415,6 +8946,9 @@ RULES:
 
         self._keep_response_anim = True
         self._apply_dialogue_step(first_step.anim, first_step.is_ghost)
+        is_gaming, _ = self._check_is_game_mode()
+        hold_s = GAME_DIALOGUE_HOLD_S if is_gaming else None
+
         self._say(
             first_step.text,
             force=True,
@@ -8423,6 +8957,7 @@ RULES:
             is_ghost=first_step.is_ghost,
             extra_queue=remaining_steps,
             step_anim=first_step.anim,
+            hold_s=hold_s,
         )
 
         # Deliver into shop window typewriter if currently open
@@ -8492,24 +9027,30 @@ RULES:
 
         if getattr(self, "_jump_active", False) or getattr(self, "_dragging", False):
             return
+        if getattr(self, "_is_annoyed_ignored", False) or getattr(self, "_user_away_notified", False):
+            return
 
         # Suppress spontaneous peeking if workstation is locked
         if is_workstation_locked():
             return
 
-        # Suppress spontaneous peeking if user is idle/away (no mouse/keyboard input for > 15m)
-        if get_user_idle_seconds() > AUTO_SCREEN_MAX_USER_IDLE_S:
+        # Suppress spontaneous peeking if user is idle/away (15m for desktop, 30m for gamepad gaming)
+        is_gaming, game_name = self._check_is_game_mode()
+        max_idle = 1800.0 if is_gaming else AUTO_SCREEN_MAX_USER_IDLE_S
+        if get_user_idle_seconds() > max_idle:
             return
 
         now = time.perf_counter()
         time_since_chat = now - getattr(self, "_last_user_chat_time", 0.0)
         time_since_comment = now - getattr(self, "_last_auto_screen_comment_time", 0.0)
+        time_since_song = now - getattr(self, "_last_ai_song_comment_time", 0.0)
 
-        # Inspect screen only if 3 minutes have passed since user last talked,
-        # AND at least 3 minutes since the last screen inspection.
+        inactivity_limit = GAME_SCREEN_COMMENT_INACTIVITY_S if is_gaming else AUTO_SCREEN_COMMENT_INACTIVITY_S
+
         if (
-            time_since_chat < AUTO_SCREEN_COMMENT_INACTIVITY_S
-            or time_since_comment < AUTO_SCREEN_COMMENT_INACTIVITY_S
+            time_since_chat < inactivity_limit
+            or time_since_comment < inactivity_limit
+            or time_since_song < AI_SONG_SCREEN_BUFFER_S
         ):
             return
 
@@ -8549,13 +9090,17 @@ RULES:
         self.show()
         ensure_window_topmost(self)
 
+        is_gaming, game_name = self._check_is_game_mode()
+        diff_threshold = GAME_DIFF_THRESHOLD if is_gaming else AUTO_SCREEN_DIFF_THRESHOLD
+
         # Visual Delta Gate: Skip commentary if the screen hasn't changed since last observation
         if self._last_screen_fingerprint is not None and current_fp:
             diff = compute_fingerprint_diff(self._last_screen_fingerprint, current_fp)
-            if diff < AUTO_SCREEN_DIFF_THRESHOLD:
-                log.info("Auto screen comment skipped: visual delta too small (diff=%.3f < %.3f)", diff, AUTO_SCREEN_DIFF_THRESHOLD)
-                # Back off so we don't spam checks while the screen remains static
-                self._last_auto_screen_comment_time = time.perf_counter() + (AUTO_SCREEN_STATIC_BACKOFF_S - AUTO_SCREEN_COMMENT_INACTIVITY_S)
+            if diff < diff_threshold:
+                log.info("Auto screen comment skipped: visual delta too small (diff=%.3f < %.3f)", diff, diff_threshold)
+                inactivity_limit = GAME_SCREEN_COMMENT_INACTIVITY_S if is_gaming else AUTO_SCREEN_COMMENT_INACTIVITY_S
+                backoff_limit = GAME_SCREEN_STATIC_BACKOFF_S if is_gaming else AUTO_SCREEN_STATIC_BACKOFF_S
+                self._last_auto_screen_comment_time = time.perf_counter() + (backoff_limit - inactivity_limit)
                 return
 
         self._last_screen_fingerprint = current_fp
@@ -8567,7 +9112,11 @@ RULES:
 
         if self._can_play("behind"):
             self._play("behind", loop=True)
-        self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+        if is_gaming:
+            peek_msg = f"* Watching your gameplay ({game_name})..." if game_name else "* Watching your gameplay..."
+        else:
+            peek_msg = "* Inspecting your screen..."
+        self._say(peek_msg, force=True, skippable=False, auto_dismiss=False, record_memory=False)
 
         # Build prompt & system instruction
         now_dt = datetime.datetime.now()
@@ -8619,23 +9168,45 @@ RULES:
             self._memory.recent_ambient_dialogues.clear()
 
         # Step 3 & 4: Make structure a code decision & multi-candidate anti-repetition generation
-        candidate_directive = (
-            "[STRUCTURAL DIRECTIVE: MULTI-CANDIDATE GENERATION (DECIDED BY ENGINE)]\n"
-            "Generate exactly 4 distinct candidate options for your spontaneous reaction, separated by '---' on a line by itself.\n"
-            "Each candidate MUST explore a different angle and use a completely different sentence opener:\n"
-            "- Candidate 1 (Curious Detail): Focus on a specific visible word, icon, code element, avatar, or window. (Ghost or Doll solo, 1 line)\n"
-            "- Candidate 2 (Sassy Tease / Snark): Bratty tsundere tease or roast about what the user is doing. (Ghost solo, 1 line)\n"
-            "- Candidate 3 (Aesthetic / Vibe): Comment on colors, UI layout, dark/light contrast, or desktop clutter. (Ghost or Doll, 1 line)\n"
-            "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)\n\n"
-            "RULES FOR CANDIDATES:\n"
-            "- Concise: 1 to 2 short lines starting with '* ' (under 30 words per candidate).\n"
-            "- Distinct Openers: Each candidate MUST start with different words. Never start multiple candidates with the same phrase!\n"
-            "- Speech Tics: Catchphrases and tics ('minion', ', mew!') are strictly optional flavor, do not force them.\n"
-            "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], [anim: angry]).\n"
-            "- Visual Memory Tag: Append [seen: 3-8 words describing key visible windows/apps or activity on screen] to each candidate.\n"
-            "- Strictly separate candidate options with '---' on a line by itself.\n"
-            "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image."
-        )
+        if is_gaming:
+            game_label = f" ({game_name})" if game_name else ""
+            candidate_directive = (
+                f"[STRUCTURAL DIRECTIVE: GAME MODE ACTIVE - BACKSEAT GAMER CATGIRL{game_label}]\n"
+                "The user is actively playing a video game! You are an invested, playful, tsundere catgirl spectator watching their screen.\n"
+                "- CRITICAL IDENTITY RULE: You, Pink, and Yellow's Pixel Buddies DO NOT COUNT AS A GAME. Never refer to Yellow's Pixel Buddies as the game being played!\n"
+                "Generate exactly 4 distinct candidate options for your spontaneous in-game reaction, separated by '---' on a line by itself.\n"
+                "Each candidate MUST explore a different gameplay angle and use a completely different sentence opener:\n"
+                "- Candidate 1 (Action & Combat): React to combat, boss fights, clutch dodges, health/mana bars, damage, or close calls. (1 line)\n"
+                "- Candidate 2 (Backseat Tease & Banter): Bratty backseat coaching, mocking silly mistakes/deaths, or questioning their tactics. (1 line)\n"
+                "- Candidate 3 (Game World & Loot): Comment on scenery, level design, missed treasure chests, inventory hoarding, or NPCs. (1 line)\n"
+                "- Candidate 4 (Cheering & Excitement): High-energy cheering, dramatic gasps, or Ghost & Doll playful bickering about what just happened. (1-2 lines)\n\n"
+                "RULES FOR CANDIDATES:\n"
+                "- Concise: 1 to 2 short punchy lines starting with '* ' (under 25 words per candidate).\n"
+                "- In-character: Sassy, tsundere catgirl (tease them for mistakes, act amazed/smug at good plays, scream at jumpscares).\n"
+                "- Distinct Openers: Each candidate MUST start with different words.\n"
+                "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: shocked], [anim: laughing], [anim: tongue], [anim: peace_sign], [anim: angry], [anim: wistful]).\n"
+                "- Visual Memory Tag: Append [seen: 3-8 words describing current game activity/scene] to each candidate.\n"
+                "- Strictly separate candidate options with '---' on a line by itself.\n"
+                "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the game screen."
+            )
+        else:
+            candidate_directive = (
+                "[STRUCTURAL DIRECTIVE: MULTI-CANDIDATE GENERATION (DECIDED BY ENGINE)]\n"
+                "Generate exactly 4 distinct candidate options for your spontaneous reaction, separated by '---' on a line by itself.\n"
+                "Each candidate MUST explore a different angle and use a completely different sentence opener:\n"
+                "- Candidate 1 (Curious Detail): Focus on a specific visible word, icon, code element, avatar, or window. (Ghost or Doll solo, 1 line)\n"
+                "- Candidate 2 (Sassy Tease / Snark): Bratty tsundere tease or roast about what the user is doing. (Ghost solo, 1 line)\n"
+                "- Candidate 3 (Aesthetic / Vibe): Comment on colors, UI layout, dark/light contrast, or desktop clutter. (Ghost or Doll, 1 line)\n"
+                "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)\n\n"
+                "RULES FOR CANDIDATES:\n"
+                "- Concise: 1 to 2 short lines starting with '* ' (under 30 words per candidate).\n"
+                "- Distinct Openers: Each candidate MUST start with different words. Never start multiple candidates with the same phrase!\n"
+                "- Speech Tics: Catchphrases and tics ('minion', ', mew!') are strictly optional flavor, do not force them.\n"
+                "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], [anim: angry]).\n"
+                "- Visual Memory Tag: Append [seen: 3-8 words describing key visible windows/apps or activity on screen] to each candidate.\n"
+                "- Strictly separate candidate options with '---' on a line by itself.\n"
+                "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image."
+            )
         system_inst += f"\n\n{candidate_directive}"
 
         facts = self._memory.get_long_term_facts()
@@ -8650,12 +9221,20 @@ RULES:
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
 
-        prompt_label = "[Pink peeks at your screen]"
-        auto_prompt = (
-            "[Spontaneous observation: Pink peeks behind her at your desktop screen.]\n"
-            "Generate exactly 4 distinct candidate reactions separated by '---' following your structural directive. "
-            "React directly to what is clearly visible on screen."
-        )
+        if is_gaming:
+            prompt_label = f"[Pink is watching your gameplay{game_label}]"
+            auto_prompt = (
+                f"[Spontaneous observation: Pink is watching your gameplay{game_label}.]\n"
+                "Generate exactly 4 distinct candidate in-game reactions separated by '---' following your structural directive. "
+                "React directly to what is clearly happening on screen right now."
+            )
+        else:
+            prompt_label = "[Pink peeks at your screen]"
+            auto_prompt = (
+                "[Spontaneous observation: Pink peeks behind her at your desktop screen.]\n"
+                "Generate exactly 4 distinct candidate reactions separated by '---' following your structural directive. "
+                "React directly to what is clearly visible on screen."
+            )
 
         self._gemini_thread = GeminiWorkerThread(
             api_key=api_key,
@@ -9169,7 +9748,7 @@ RULES:
 
         now = time.perf_counter()
         self._last_ai_song_comment_time = now
-        self._reset_ambient_ai_cooldowns(now)
+        self._reset_ambient_ai_cooldowns(now, reset_screen=False)
 
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
@@ -9274,7 +9853,7 @@ RULES:
             return
 
         self._memory.record_turn(user_label, spoken_text, anim, had_screen=False)
-        self._reset_ambient_ai_cooldowns()
+        self._reset_ambient_ai_cooldowns(reset_screen=False)
         steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=False)
         if not steps:
             return
@@ -9299,6 +9878,9 @@ RULES:
         # Otherwise, speak the comment directly
         self._keep_response_anim = True
         self._apply_dialogue_step(first_step.anim, first_step.is_ghost)
+        is_gaming, _ = self._check_is_game_mode()
+        hold_s = GAME_DIALOGUE_HOLD_S if is_gaming else None
+
         self._say(
             first_step.text,
             force=True,
@@ -9307,6 +9889,7 @@ RULES:
             is_ghost=first_step.is_ghost,
             extra_queue=remaining_steps,
             step_anim=first_step.anim,
+            hold_s=hold_s,
         )
 
     def _toggle_ai_song_comment(self, checked: bool) -> None:
@@ -9572,6 +10155,13 @@ RULES:
             self._play(HANGING_STATE, mirrored=self._hang_mirrored())
             return
 
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
+
         if self.state == "angry":
             now = time.perf_counter()
             # If clicks are still coming within the spam window, keep her angry!
@@ -9635,6 +10225,12 @@ RULES:
     # --------------------------------------------------------------- behaviour
     def _start_walk(self) -> None:
         """Walk for 3-8 s in a random direction (run or wistful walk by chance)."""
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
         self._phase = Phase.WALK
         self._pause_elapsed = False
         can_run = self._can_play("run_left") and self._can_play("run_right")
@@ -9665,6 +10261,11 @@ RULES:
         """
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
+
+        if getattr(self, "_is_annoyed_ignored", False):
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
 
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             if self._can_play("wistful"):
@@ -9716,6 +10317,12 @@ RULES:
 
     def _on_brain_timeout(self) -> None:
         """Behaviour timer: the current walk / pause time is up."""
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            if self.state != "angry" and self._can_play("angry"):
+                self._play("angry", loop=True)
+            return
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
@@ -10006,11 +10613,14 @@ RULES:
         self._tray_observations = []
         self.hide()
 
-        # Update tray actions
+        # Update tray actions (only one restore action to avoid duplicate 'shows shows')
         if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
-            self._hide_tray_action.setText("Restore Pink from Tray \U0001f4e4")
+            self._hide_tray_action.setVisible(False)
         if hasattr(self, "_bring_action") and self._bring_action is not None:
             self._bring_action.setText("Restore Pink from Tray \U0001f4e4")
+            self._bring_action.setVisible(True)
+        if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+            self._hide_peek_action.setVisible(False)
 
         # Show brief balloon message from tray
         if hasattr(self, "_tray_icon") and self._tray_icon is not None and self._tray_icon.isVisible():
@@ -10056,8 +10666,12 @@ RULES:
 
         if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
             self._hide_tray_action.setText("Hide to Tray \U0001f4e5")
+            self._hide_tray_action.setVisible(True)
         if hasattr(self, "_bring_action") and self._bring_action is not None:
             self._bring_action.setText("Bring to Taskbar")
+            self._bring_action.setVisible(True)
+        if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+            self._hide_peek_action.setVisible(True)
 
         # Contextual return line acknowledging what Pink saw while in tray
         obs = getattr(self, "_tray_observations", [])
@@ -10203,7 +10817,14 @@ RULES:
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         if hasattr(self, "_chat_input"):
             self._chat_input.cancel()
         self._brain_timer.stop()
@@ -10295,7 +10916,14 @@ RULES:
             return
 
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._reset_jump_state()
@@ -10475,7 +11103,14 @@ RULES:
         self._jump_active = True                     # the cooldown starts when this sequence lands
         self._phase = Phase.JUMP
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         self._brain_timer.stop()                     # no walk / pause timeout may fire mid-air
         self._pause_elapsed = False
         self._gravity = JUMP_GRAVITY_PX_S2
@@ -10856,12 +11491,39 @@ RULES:
                 return
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
                 if self._dialogue_overlay.is_skippable():
+                    self._dialogue_overlay.mark_user_interacted()
                     self._dialogue_overlay.advance_or_dismiss()
                     self._dialogue_clicked = True
                     self._press_global = event.globalPos()
                     self._grab_offset = event.globalPos() - self.pos()
                     event.accept()
                     return
+
+            if getattr(self, "_is_annoyed_ignored", False):
+                self._handle_user_returned_after_annoyed()
+                event.accept()
+                return
+
+            if getattr(self, "_user_away_notified", False):
+                self._user_away_notified = False
+                self._consecutive_ignored_dialogues = 0
+                self._say(
+                    "* Ah, you're back! Good, I was starting to think you got lost out there, mew!",
+                    force=True,
+                    step_anim="peace_sign",
+                    dialogue_category="welcome_back",
+                    track_ignore=False,
+                )
+            # Track left clicks for rapid spam-click jumping feature
+            now = time.perf_counter()
+            self._click_times.append(now)
+            self._click_times = [t for t in self._click_times if now - t <= 0.8]
+            if len(self._click_times) >= 3:
+                self._click_times.clear()
+                if self._trigger_spam_click_jump():
+                    event.accept()
+                    return
+
             if hasattr(self, "_single_click_timer") and self._single_click_timer.isActive():
                 self._single_click_timer.stop()
             self._dialogue_clicked = False
@@ -10928,11 +11590,48 @@ RULES:
             self._single_click_timer.stop()
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW):
+            return
         if event.button() == Qt.LeftButton:
             self._open_chat_input()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def _trigger_spam_click_jump(self) -> bool:
+        """Trigger a playful upward hop/jump when the user spams clicks on Pink."""
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.DRAG):
+            return False
+
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.cancel()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+
+        is_already_jumping = (self._phase is Phase.JUMP)
+        self._jump_active = False
+        self._brain_timer.stop()
+        self._pause_elapsed = False
+        self._phase = Phase.JUMP
+        self._gravity = JUMP_GRAVITY_PX_S2
+
+        if is_already_jumping:
+            # Mid-air juggling boost!
+            self._vy = -480.0
+            self._vx = random.choice([-50.0, 50.0, 0.0])
+        else:
+            self._vy = -520.0
+            self._vx = random.choice([-60.0, 60.0, 0.0])
+
+        self._pending_reaction = random.choice(["laughing", "shocked", "peace_sign"])
+        self._wall_bounced = False
+        self._can_catch_cursor = False
+        self._shake_trail.clear()
+        self._play(AIRBORNE_STATE, mirrored=(self._vx < 0))
+        log.debug("Spam click jump triggered (vy=%.1f, vx=%.1f)", self._vy, self._vx)
+        return True
 
     def _on_single_click(self) -> None:
         """Handle single left-click on Pink: randomly play peace_sign, laughing, or shocked without dialogue."""
@@ -10943,7 +11642,8 @@ RULES:
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                                    Phase.EXIT_OUTRO, Phase.JUMP, Phase.HANG,
                                    Phase.FALL, Phase.THROW)
-                or self._post_throw_laugh):
+                or self._post_throw_laugh
+                or getattr(self, "_is_annoyed_ignored", False)):
             return
 
         candidates = [s for s in ("peace_sign", "laughing", "shocked") if self._can_play(s)]
@@ -10970,7 +11670,14 @@ RULES:
         self._pause_elapsed = False
         self._reset_jump_state()                  # mid-jump / mid-hang grab: cancel everything
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
         if hasattr(self, "_chat_input"):
             self._chat_input.cancel()
         self._play("shocked", loop=True)          # loop it for as long as it is held
@@ -10995,8 +11702,30 @@ RULES:
         self._post_throw_laugh = False
         self._in_angry_spam = False
         self._click_times.clear()
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
+            # Right-clicking while Pink is hiding displays minimal contextual actions
+            hide_menu = QMenu(self)
+            show_up_action = hide_menu.addAction("Show Up 🐾")
+            hide_tray_action = hide_menu.addAction("Hide in Tray 📥")
+            hide_menu.addSeparator()
+            exit_action = hide_menu.addAction("Exit")
+
+            self._menu_open = True
+            try:
+                chosen = hide_menu.exec_(event.globalPos())
+            finally:
+                self._menu_open = False
+
+            if chosen is show_up_action:
+                self._on_peek_ears_clicked()
+            elif chosen is hide_tray_action:
+                self._hide_to_tray()
+            elif chosen is exit_action:
+                self._quit()
+            return
+
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
@@ -11061,12 +11790,31 @@ RULES:
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
+        # Check user return if user previously notified away
+        if getattr(self, "_user_away_notified", False):
+            idle_s = get_user_idle_seconds()
+            if idle_s >= 20.0:
+                self._user_away_was_idle = True
+            elif getattr(self, "_user_away_was_idle", False) and idle_s < 2.0:
+                self._user_away_notified = False
+                self._user_away_was_idle = False
+                self._consecutive_ignored_dialogues = 0
+                log.info("User returned after being away (idle -> active input). Welcome back!")
+                self._say(
+                    "* Ah! Welcome back, minion! Did you finish what you had to do, mew?",
+                    force=True,
+                    step_anim="peace_sign",
+                    dialogue_category="welcome_back",
+                    track_ignore=False,
+                )
+
         if (self._dragging or self._menu_open
                 or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                                    Phase.EXIT_OUTRO)
-                or self._post_throw_laugh):
+                or self._post_throw_laugh
+                or getattr(self, "_is_annoyed_ignored", False)):
             return
 
         dll = _user32()
@@ -11094,7 +11842,8 @@ RULES:
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                                    Phase.EXIT_OUTRO)
-                or self._post_throw_laugh):
+                or self._post_throw_laugh
+                or getattr(self, "_is_annoyed_ignored", False)):
             return
         dll = _user32()
         if dll is None:
@@ -11188,7 +11937,7 @@ RULES:
 
         tray_menu.addSeparator()
 
-        self._bring_action = tray_menu.addAction("Call Pink 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
+        self._bring_action = tray_menu.addAction("Show Up 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
         self._bring_action.triggered.connect(self._reset_to_taskbar)
 
         self._talk_tray_action = tray_menu.addAction("Talk to Pink 💬")
@@ -11222,8 +11971,8 @@ RULES:
         self._hide_tray_action = tray_menu.addAction("Hide to Tray 📥")
         self._hide_tray_action.triggered.connect(self._toggle_hide_to_tray)
 
-        hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
-        hide_peek_action.triggered.connect(self._start_hide_sequence)
+        self._hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
+        self._hide_peek_action.triggered.connect(self._start_hide_sequence)
 
         self._jump_action = tray_menu.addAction("Jump to Cursor Mode")
         self._jump_action.setCheckable(True)
@@ -11273,6 +12022,23 @@ RULES:
         self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
         self._filter_shorts_action.toggled.connect(self._toggle_filter_shorts)
 
+        game_menu = tray_menu.addMenu("Game Mode 🎮")
+        self._game_mode_auto_action = game_menu.addAction("Auto-Detect (Active Gaming)")
+        self._game_mode_auto_action.setCheckable(True)
+        self._game_mode_on_action = game_menu.addAction("Always On (Backseat Spectator)")
+        self._game_mode_on_action.setCheckable(True)
+        self._game_mode_off_action = game_menu.addAction("Disabled (Normal Desktop)")
+        self._game_mode_off_action.setCheckable(True)
+
+        mode = getattr(self, "_game_mode", "AUTO")
+        self._game_mode_auto_action.setChecked(mode == "AUTO")
+        self._game_mode_on_action.setChecked(mode == "ON")
+        self._game_mode_off_action.setChecked(mode == "OFF")
+
+        self._game_mode_auto_action.triggered.connect(lambda: self._set_game_mode("AUTO"))
+        self._game_mode_on_action.triggered.connect(lambda: self._set_game_mode("ON"))
+        self._game_mode_off_action.triggered.connect(lambda: self._set_game_mode("OFF"))
+
         tray_menu.addSeparator()
         restart_action = tray_menu.addAction("Restart Pink 🔄")
         restart_action.triggered.connect(self._handle_restart_command)
@@ -11287,15 +12053,35 @@ RULES:
 
     def _sync_startup_action_state(self) -> None:
         """Sync checkmark and controls with actual state right before displaying the menu."""
-        if self._bring_action is not None:
-            if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
-                self._bring_action.setText("Call Pink 🐾")
-            else:
+        is_hidden_tray = getattr(self, "_hidden_in_tray", False)
+        if is_hidden_tray:
+            if self._bring_action is not None:
+                self._bring_action.setText("Restore Pink from Tray 📤")
+                self._bring_action.setVisible(True)
+            if self._hide_tray_action is not None:
+                self._hide_tray_action.setVisible(False)
+            if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+                self._hide_peek_action.setVisible(False)
+        elif self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
+            if self._bring_action is not None:
+                self._bring_action.setText("Show Up 🐾")
+                self._bring_action.setVisible(True)
+            if self._hide_tray_action is not None:
+                self._hide_tray_action.setText("Hide to Tray 📥")
+                self._hide_tray_action.setVisible(True)
+            if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+                self._hide_peek_action.setVisible(False)
+        else:
+            if self._bring_action is not None:
                 self._bring_action.setText("Bring to Taskbar")
-        if self._hide_tray_action is not None:
-            self._hide_tray_action.setVisible(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
+                self._bring_action.setVisible(True)
+            if self._hide_tray_action is not None:
+                self._hide_tray_action.setText("Hide to Tray 📥")
+                self._hide_tray_action.setVisible(True)
+            if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+                self._hide_peek_action.setVisible(True)
         if hasattr(self, "_talk_tray_action") and self._talk_tray_action is not None:
-            self._talk_tray_action.setEnabled(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
+            self._talk_tray_action.setEnabled(not is_hidden_tray and self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -11328,6 +12114,59 @@ RULES:
             self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
             self._filter_shorts_action.blockSignals(False)
 
+    def _check_is_game_mode(self) -> tuple[bool, str]:
+        """Evaluate whether game mode applies right now based on settings and foreground process."""
+        mode = getattr(self, "_game_mode", "AUTO")
+        if mode == "OFF":
+            self._is_game_active = False
+            self._current_game_name = ""
+            return False, ""
+        if mode == "ON":
+            self._is_game_active = True
+            if not self._current_game_name:
+                _, name = detect_foreground_game()
+                self._current_game_name = name or "Game"
+            return True, self._current_game_name
+
+        now = time.perf_counter()
+        if now - getattr(self, "_last_game_check_time", 0.0) < 3.0:
+            return getattr(self, "_is_game_active", False), getattr(self, "_current_game_name", "")
+
+        self._last_game_check_time = now
+        excluded_hwnds = {int(self.winId())}
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            try:
+                excluded_hwnds.add(int(self._shop_window.winId()))
+            except Exception:
+                pass
+        is_game, name = detect_foreground_game(excluded_hwnds=excluded_hwnds)
+        if any(excl in name.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            is_game = False
+            name = ""
+        self._is_game_active = is_game
+        self._current_game_name = name if is_game else ""
+        return is_game, self._current_game_name
+
+    def _set_game_mode(self, mode: str) -> None:
+        self._game_mode = mode
+        if hasattr(self, "_game_mode_auto_action") and self._game_mode_auto_action:
+            self._game_mode_auto_action.setChecked(mode == "AUTO")
+        if hasattr(self, "_game_mode_on_action") and self._game_mode_on_action:
+            self._game_mode_on_action.setChecked(mode == "ON")
+        if hasattr(self, "_game_mode_off_action") and self._game_mode_off_action:
+            self._game_mode_off_action.setChecked(mode == "OFF")
+        self._save_live_settings()
+        log.info("Game Mode set to: %s", mode)
+
+    def _cycle_game_mode(self) -> str:
+        """Cycle game mode: AUTO -> ON -> OFF -> AUTO."""
+        modes = ["AUTO", "ON", "OFF"]
+        cur = getattr(self, "_game_mode", "AUTO")
+        idx = (modes.index(cur) + 1) % len(modes) if cur in modes else 0
+        new_mode = modes[idx]
+        self._set_game_mode(new_mode)
+        return new_mode
+
     def _save_live_settings(self) -> None:
         """Persist live toggles to config.json."""
         if hasattr(self, "_memory") and self._memory:
@@ -11336,6 +12175,7 @@ RULES:
                 "ai_song_comment_enabled": getattr(self, "_ai_song_comment_enabled", True),
                 "bomb_attack_enabled": getattr(self, "_bomb_attack_enabled", False),
                 "jump_enabled": getattr(self, "_jump_enabled", True),
+                "game_mode": getattr(self, "_game_mode", "AUTO"),
             }
             self._memory.save_settings(settings)
 
@@ -11511,7 +12351,14 @@ RULES:
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
         if hasattr(self, "_dialogue_overlay"):
+            self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
+        if getattr(self, "_is_annoyed_ignored", False):
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+        if getattr(self, "_user_away_notified", False):
+            self._user_away_notified = False
+            self._consecutive_ignored_dialogues = 0
             self._dialogue_overlay.close()
         if hasattr(self, "_chat_input"):
             self._chat_input.close()
