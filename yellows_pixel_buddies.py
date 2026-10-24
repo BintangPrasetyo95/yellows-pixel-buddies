@@ -284,9 +284,10 @@ SPECIAL_CHANCE = 0.5              # chance that a pause contains one special ani
 BURNT_CHANCE = 0.03               # RARE: chance per pause that the pet is "burnt" instead
 SPECIAL_WEIGHTS = {
     # relative odds of each special / looping rest when one is rolled (never the same twice in a row)
+    # Note: "crying" is excluded from random idle rolls; it is reserved strictly for sad AI moments.
     "laughing": 4, "shocked": 2, "singing": 2, "peace_sign": 3,
     "embarrassed": 2, "wistful": 2, "sad": 1,
-    "crying": 1, "tongue": 2, "kneeling": 2, "behind": 2,
+    "tongue": 2, "kneeling": 2, "behind": 2,
 }
 RUN_CHANCE = 0.25                 # chance that a new walk is a run instead
 WISTFUL_WALK_CHANCE = 0.25        # chance that a new walk is a slower wistful walk
@@ -671,7 +672,8 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 - Emotion & Animation Tags:
   At the very end of your message, include exactly one bracketed emotion tag matching your mood:
   [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
-  Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
+  * Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
+  * STRICT CRYING RESTRICTION: [anim: crying] is STRICTLY RESERVED for genuine heartbreaking sorrow, tragedy, grief, or real tears of loss (e.g. serious loss, terrible tragedy, heartbroken user). NEVER use [anim: crying] for minor complaints, light tsundere pouts, normal bickering, playful defeat, or casual work banter!
 
 - GHOST DOLL DIALOGUE MODE ([mode: ghost]):
   * You have a special Ghost Doll Dialogue Mode!
@@ -2859,8 +2861,18 @@ class ChatInputOverlay(QWidget):
         self._cached_bg: QPixmap | None = None
         self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
 
-        self._base_w = round(320 * self._scale)
-        self._base_h = round(36 * self._scale)
+        # Derive dimensions directly from standard DialogueOverlay metrics (~308px × 76px)
+        base_inner_w = round(84 * self._scale)
+        base_inner_h = round(19 * self._scale)
+        pad_x = round(4 * self._scale)
+        pad_y = round(2 * self._scale)
+        req_inner_w = DIALOGUE_MAX_WIDTH_PX + pad_x * 2
+        extra_w = max(0, req_inner_w - base_inner_w)
+        req_inner_h = 24 * 2 + pad_y * 2
+        extra_h = max(0, req_inner_h - base_inner_h)
+
+        self._base_w = round(108 * self._scale) + extra_w  # ~308px
+        self._base_h = round(33 * self._scale) + extra_h   # ~76px
         self._last_pet_x: float | None = None
         self._last_pet_y: float | None = None
 
@@ -2935,16 +2947,17 @@ class ChatInputOverlay(QWidget):
             self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
 
     def _init_ui(self) -> None:
-        font = QFont(self._font_family, 12)
+        font = QFont(self._font_family)
+        font.setPixelSize(DIALOGUE_FONT_PIXEL_SIZE)
         font.setBold(False)
         font.setWeight(QFont.Normal)
         font.setStyleStrategy(QFont.PreferDefault)
 
         layout = QHBoxLayout(self)
-        pad_h = round(16 * self._scale)
+        pad_h = round(14 * self._scale)
         pad_v = round(10 * self._scale)
         layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
-        layout.setSpacing(6)
+        layout.setSpacing(5)
 
         # Soul heart indicator
         self._heart_label = QLabel(self)
@@ -3102,7 +3115,9 @@ class ChatInputOverlay(QWidget):
         clamped_lines = min(4, max(1, line_count))
         fm = self._text_edit.fontMetrics()
         line_step = fm.lineSpacing()
-        target_h = self._base_h + (clamped_lines - 1) * line_step
+        # _base_h (~76px) comfortably fits up to 2 lines; extra height needed only for 3+ lines
+        extra_lines = max(0, clamped_lines - 2)
+        target_h = self._base_h + extra_lines * line_step
         if line_count > 4:
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         else:
@@ -5146,6 +5161,14 @@ def split_dual_dialogue(
     1. Both Ghost spirit and Doll vessel speak in the same response (e.g. Ghost roast + Doll comment/mew).
     2. Multiple lines have distinct [anim: ...] or [mode: ghost] tags.
     """
+    if default_anim == "crying":
+        sad_cues = ("cry", "crying", "tears", "sob", "sobbing", "heartbroken", "heartbreak",
+                    "sad", "sadness", "tragic", "tragedy", "grief", "mourn", "mourning",
+                    "loss", "pain", "hurts", "whimper", "waaa", "depress", "sorrow")
+        raw_clean = re.sub(r"\[anim:\s*[^\\\]]+\]", "", raw_text, flags=re.IGNORECASE).lower()
+        if not any(k in raw_clean for k in sad_cues):
+            default_anim = "wistful"
+
     raw_lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
     if not raw_lines:
         return [DialogueStep(text=raw_text.strip(), anim=default_anim, is_ghost=default_ghost)]
@@ -5166,6 +5189,13 @@ def split_dual_dialogue(
             if line_anim in ("ghost", "spectral"):
                 line_ghost = True
                 line_anim = "angry"
+            elif line_anim == "crying":
+                sad_cues = ("cry", "crying", "tears", "sob", "sobbing", "heartbroken", "heartbreak",
+                            "sad", "sadness", "tragic", "tragedy", "grief", "mourn", "mourning",
+                            "loss", "pain", "hurts", "whimper", "waaa", "depress", "sorrow")
+                l_without_anim = (l[:anim_match.start()] + l[anim_match.end():]).lower()
+                if not any(k in l_without_anim for k in sad_cues):
+                    line_anim = "wistful"
             l = l[:anim_match.start()] + l[anim_match.end():]
 
         # Strip explicit role prefixes like "* Body:" or "* Ghost:" if present
@@ -7363,6 +7393,13 @@ class YellowsPixelBuddies(QWidget):
         self._reset_ambient_ai_cooldowns(now)
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
+        if reaction_anim == "crying":
+            sad_cues = ("cry", "crying", "tears", "sob", "sobbing", "heartbroken", "heartbreak",
+                        "sad", "sadness", "tragic", "tragedy", "grief", "mourn", "mourning",
+                        "loss", "pain", "hurts", "whimper", "waaa", "depress", "sorrow")
+            react_clean = re.sub(r"\[anim:\s*[^\\\]]+\]", "", reaction_text, flags=re.IGNORECASE).lower()
+            if not any(k in react_clean for k in sad_cues):
+                reaction_anim = "wistful"
         if reaction_anim and self._can_play(reaction_anim):
             self._play(reaction_anim)
         self._keep_response_anim = True
@@ -7601,10 +7638,16 @@ SITUATIONAL AWARENESS, ANTI-REPETITION & EMOTIONAL DIVERGENCE RULES:
    * NEVER use the accusatory dichotomy template: 'Is [X] supposed to be [A], or are you just [B / slacking / procrastinating]?!'.
    * NEVER default to accusing the user of 'procrastination', 'slacking', or 'laziness' unless the user explicitly confessed to procrastinating.
    * DO NOT repeat recently asked questions or recent topics (like cat bombs or repeatedly asking about the same app/task).
+   * DO NOT turn active reminders into snooze/hibernate questionnaires! NEVER ask 'Should we snooze this reminder?', 'Should we banish it until finals/next week?', or 'Shall we lock it away?'. Pink is a magical desktop companion, NOT an annoying calendar notification!
 3. STRICTLY FORBIDDEN REACTION PATTERNS & TRUE EMOTIONAL DIVERGENCE:
-   * NEVER start reaction texts with '* Hmph!' and never dismiss all user choices with the same generic tsundere insult.
+   * NEVER start reaction texts with formulaic templates: FORBIDDEN: '* Wise choice', '* Good choice', '* Excellent choice', '* Splendid choice', '* As expected', '* Hmph!'.
+   * NEVER repeat the formulaic lecture: 'Let's let [X] hibernate until your [presentation/slides/work] is finished, mew!'. That repetitive loop is COMPLETELY BANNED.
    * Each choice MUST produce a genuinely DIFFERENT emotional reaction, animation, and verbal tone!
-   * Example: One choice makes Pink flustered [anim: embarrassed], another makes her proud/laughing [anim: laughing], another makes the doll vessel purr sweetly [anim: peace_sign] or the ghost puzzled [anim: behind].
+   * High-contrast divergence across choices:
+     - One choice triggers sassy / tsundere / indignant rage [anim: angry] or stunned shock [anim: shocked].
+     - One choice triggers proud / mischievous / celebratory giggles [anim: laughing] or sweet purring [anim: peace_sign].
+     - One choice triggers flustered embarrassment [anim: embarrassed], sarcastic teasing [anim: tongue], or nostalgic wonder [anim: wistful].
+     - NEVER use [anim: crying] in question reactions unless the user picked an option about an actual tragic loss.
 4. CASUAL CARE (EATING, DRINKING, REST):
    * When checking on water, meals, or late-night rest, DO NOT give preachy parental lectures!
    * Deliver care through the charming dual persona: the sweet Doll Vessel cares innocently ('* Even cotton needs water, mew!') while the Ghost Spirit acts tsundere-protective ('* Don't you dare collapse on my watch, human!').
@@ -10006,11 +10049,14 @@ RULES:
         self._tray_observations = []
         self.hide()
 
-        # Update tray actions
+        # Update tray actions (only one restore action to avoid duplicate 'shows shows')
         if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
-            self._hide_tray_action.setText("Restore Pink from Tray \U0001f4e4")
+            self._hide_tray_action.setVisible(False)
         if hasattr(self, "_bring_action") and self._bring_action is not None:
             self._bring_action.setText("Restore Pink from Tray \U0001f4e4")
+            self._bring_action.setVisible(True)
+        if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+            self._hide_peek_action.setVisible(False)
 
         # Show brief balloon message from tray
         if hasattr(self, "_tray_icon") and self._tray_icon is not None and self._tray_icon.isVisible():
@@ -10056,8 +10102,12 @@ RULES:
 
         if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
             self._hide_tray_action.setText("Hide to Tray \U0001f4e5")
+            self._hide_tray_action.setVisible(True)
         if hasattr(self, "_bring_action") and self._bring_action is not None:
             self._bring_action.setText("Bring to Taskbar")
+            self._bring_action.setVisible(True)
+        if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+            self._hide_peek_action.setVisible(True)
 
         # Contextual return line acknowledging what Pink saw while in tray
         obs = getattr(self, "_tray_observations", [])
@@ -10862,6 +10912,16 @@ RULES:
                     self._grab_offset = event.globalPos() - self.pos()
                     event.accept()
                     return
+            # Track left clicks for rapid spam-click jumping feature
+            now = time.perf_counter()
+            self._click_times.append(now)
+            self._click_times = [t for t in self._click_times if now - t <= 0.8]
+            if len(self._click_times) >= 3:
+                self._click_times.clear()
+                if self._trigger_spam_click_jump():
+                    event.accept()
+                    return
+
             if hasattr(self, "_single_click_timer") and self._single_click_timer.isActive():
                 self._single_click_timer.stop()
             self._dialogue_clicked = False
@@ -10928,11 +10988,48 @@ RULES:
             self._single_click_timer.stop()
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW):
+            return
         if event.button() == Qt.LeftButton:
             self._open_chat_input()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def _trigger_spam_click_jump(self) -> bool:
+        """Trigger a playful upward hop/jump when the user spams clicks on Pink."""
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.DRAG):
+            return False
+
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.cancel()
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+
+        is_already_jumping = (self._phase is Phase.JUMP)
+        self._jump_active = False
+        self._brain_timer.stop()
+        self._pause_elapsed = False
+        self._phase = Phase.JUMP
+        self._gravity = JUMP_GRAVITY_PX_S2
+
+        if is_already_jumping:
+            # Mid-air juggling boost!
+            self._vy = -480.0
+            self._vx = random.choice([-50.0, 50.0, 0.0])
+        else:
+            self._vy = -520.0
+            self._vx = random.choice([-60.0, 60.0, 0.0])
+
+        self._pending_reaction = random.choice(["laughing", "shocked", "peace_sign"])
+        self._wall_bounced = False
+        self._can_catch_cursor = False
+        self._shake_trail.clear()
+        self._play(AIRBORNE_STATE, mirrored=(self._vx < 0))
+        log.debug("Spam click jump triggered (vy=%.1f, vx=%.1f)", self._vy, self._vx)
+        return True
 
     def _on_single_click(self) -> None:
         """Handle single left-click on Pink: randomly play peace_sign, laughing, or shocked without dialogue."""
@@ -10995,8 +11092,30 @@ RULES:
         self._post_throw_laugh = False
         self._in_angry_spam = False
         self._click_times.clear()
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
+        if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
+            # Right-clicking while Pink is hiding displays minimal contextual actions
+            hide_menu = QMenu(self)
+            show_up_action = hide_menu.addAction("Show Up 🐾")
+            hide_tray_action = hide_menu.addAction("Hide in Tray 📥")
+            hide_menu.addSeparator()
+            exit_action = hide_menu.addAction("Exit")
+
+            self._menu_open = True
+            try:
+                chosen = hide_menu.exec_(event.globalPos())
+            finally:
+                self._menu_open = False
+
+            if chosen is show_up_action:
+                self._on_peek_ears_clicked()
+            elif chosen is hide_tray_action:
+                self._hide_to_tray()
+            elif chosen is exit_action:
+                self._quit()
+            return
+
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
@@ -11188,7 +11307,7 @@ RULES:
 
         tray_menu.addSeparator()
 
-        self._bring_action = tray_menu.addAction("Call Pink 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
+        self._bring_action = tray_menu.addAction("Show Up 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
         self._bring_action.triggered.connect(self._reset_to_taskbar)
 
         self._talk_tray_action = tray_menu.addAction("Talk to Pink 💬")
@@ -11222,8 +11341,8 @@ RULES:
         self._hide_tray_action = tray_menu.addAction("Hide to Tray 📥")
         self._hide_tray_action.triggered.connect(self._toggle_hide_to_tray)
 
-        hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
-        hide_peek_action.triggered.connect(self._start_hide_sequence)
+        self._hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
+        self._hide_peek_action.triggered.connect(self._start_hide_sequence)
 
         self._jump_action = tray_menu.addAction("Jump to Cursor Mode")
         self._jump_action.setCheckable(True)
@@ -11287,15 +11406,35 @@ RULES:
 
     def _sync_startup_action_state(self) -> None:
         """Sync checkmark and controls with actual state right before displaying the menu."""
-        if self._bring_action is not None:
-            if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
-                self._bring_action.setText("Call Pink 🐾")
-            else:
+        is_hidden_tray = getattr(self, "_hidden_in_tray", False)
+        if is_hidden_tray:
+            if self._bring_action is not None:
+                self._bring_action.setText("Restore Pink from Tray 📤")
+                self._bring_action.setVisible(True)
+            if self._hide_tray_action is not None:
+                self._hide_tray_action.setVisible(False)
+            if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+                self._hide_peek_action.setVisible(False)
+        elif self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
+            if self._bring_action is not None:
+                self._bring_action.setText("Show Up 🐾")
+                self._bring_action.setVisible(True)
+            if self._hide_tray_action is not None:
+                self._hide_tray_action.setText("Hide to Tray 📥")
+                self._hide_tray_action.setVisible(True)
+            if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+                self._hide_peek_action.setVisible(False)
+        else:
+            if self._bring_action is not None:
                 self._bring_action.setText("Bring to Taskbar")
-        if self._hide_tray_action is not None:
-            self._hide_tray_action.setVisible(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
+                self._bring_action.setVisible(True)
+            if self._hide_tray_action is not None:
+                self._hide_tray_action.setText("Hide to Tray 📥")
+                self._hide_tray_action.setVisible(True)
+            if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
+                self._hide_peek_action.setVisible(True)
         if hasattr(self, "_talk_tray_action") and self._talk_tray_action is not None:
-            self._talk_tray_action.setEnabled(self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
+            self._talk_tray_action.setEnabled(not is_hidden_tray and self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
