@@ -580,7 +580,39 @@ KNOWN_GAME_PLATFORM_PATHS = (
     r"\gog games",
     r"\ubisoft",
     r"\xboxgames",
-    r"\windowsapps",
+)
+
+EXCLUDED_NON_GAME_TITLES = (
+    "yellow's pixel buddies",
+    "yellows pixel buddies",
+    "pink's dark world sanctuary",
+    "pixel buddies",
+)
+
+EXCLUDED_NON_GAME_EXES = (
+    "yellows_pixel_buddies.exe",
+    "yellow's pixel buddies.exe",
+    "pixel_buddies.exe",
+    "python.exe",
+    "pythonw.exe",
+    "explorer.exe",
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "code.exe",
+    "devenv.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "windowsterminal.exe",
+    "notepad.exe",
+    "taskmgr.exe",
+    "discord.exe",
+    "spotify.exe",
+    "slack.exe",
+    "teams.exe",
 )
 
 KNOWN_GAME_EXE_NAMES = {
@@ -3358,15 +3390,15 @@ def is_d3d_fullscreen_active() -> bool:
     return False
 
 
-def get_foreground_process_info() -> tuple[int, str, str, str]:
-    """Return (hwnd, exe_name, exe_path, window_title) of current foreground window."""
+def get_foreground_process_info() -> tuple[int, str, str, str, int]:
+    """Return (hwnd, exe_name, exe_path, window_title, pid) of current foreground window."""
     if sys.platform != "win32":
-        return 0, "", "", ""
+        return 0, "", "", "", 0
     try:
         user32 = ctypes.windll.user32
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
-            return 0, "", "", ""
+            return 0, "", "", "", 0
 
         txt_buf = ctypes.create_unicode_buffer(512)
         user32.GetWindowTextW(hwnd, txt_buf, 512)
@@ -3374,25 +3406,26 @@ def get_foreground_process_info() -> tuple[int, str, str, str]:
 
         pid = ctypes.c_ulong()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if pid.value <= 0:
-            return hwnd, "", "", title
+        pid_val = pid.value
+        if pid_val <= 0:
+            return hwnd, "", "", title, 0
 
         try:
             import psutil
-            proc = psutil.Process(pid.value)
+            proc = psutil.Process(pid_val)
             name = proc.name().lower()
             try:
                 exe_path = proc.exe().lower()
             except Exception:
                 exe_path = ""
-            return hwnd, name, exe_path, title
+            return hwnd, name, exe_path, title, pid_val
         except Exception:
-            return hwnd, "", "", title
+            return hwnd, "", "", title, pid_val
     except Exception:
-        return 0, "", "", ""
+        return 0, "", "", "", 0
 
 
-def detect_foreground_game(custom_game_list: list[str] | None = None) -> tuple[bool, str]:
+def detect_foreground_game(custom_game_list: list[str] | None = None, excluded_hwnds: set[int] | None = None) -> tuple[bool, str]:
     """Detect whether a video game is running in the foreground.
 
     Returns (is_game, display_title).
@@ -3400,8 +3433,29 @@ def detect_foreground_game(custom_game_list: list[str] | None = None) -> tuple[b
     if sys.platform != "win32":
         return False, ""
 
-    hwnd, exe_name, exe_path, title = get_foreground_process_info()
+    hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
     if not hwnd or not exe_name:
+        return False, ""
+
+    if excluded_hwnds and hwnd in excluded_hwnds:
+        return False, ""
+
+    # 0. Exclude Yellow's Pixel Buddies own process and known desktop non-game apps
+    try:
+        if pid and pid == os.getpid():
+            return False, ""
+    except Exception:
+        pass
+
+    title_lower = title.lower()
+    for excl_title in EXCLUDED_NON_GAME_TITLES:
+        if excl_title in title_lower:
+            return False, ""
+
+    if exe_name in EXCLUDED_NON_GAME_EXES:
+        return False, ""
+
+    if "yellow's pixel buddies" in exe_path or "yellows_pixel_buddies" in exe_path:
         return False, ""
 
     d3d_active = is_d3d_fullscreen_active()
@@ -3411,26 +3465,26 @@ def detect_foreground_game(custom_game_list: list[str] | None = None) -> tuple[b
         for platform_p in KNOWN_GAME_PLATFORM_PATHS:
             if platform_p in exe_path:
                 game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
-                return True, game_title
+                if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+                    return True, game_title
 
     # 2. Known game executables / emulators
     if exe_name in KNOWN_GAME_EXE_NAMES:
         game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
-        return True, game_title
+        if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            return True, game_title
 
     # 3. Custom user whitelist from config
     if custom_game_list and exe_name in [g.lower() for g in custom_game_list]:
         game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
-        return True, game_title
+        if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            return True, game_title
 
     # 4. Direct3D fullscreen on non-system, non-browser app
-    non_game_exes = (
-        "explorer.exe", "chrome.exe", "msedge.exe", "firefox.exe", "code.exe",
-        "devenv.exe", "cmd.exe", "powershell.exe", "windowsterminal.exe",
-    )
-    if d3d_active and exe_name not in non_game_exes:
+    if d3d_active and exe_name not in EXCLUDED_NON_GAME_EXES:
         game_title = title or exe_name.removesuffix(".exe").replace("_", " ").title()
-        return True, game_title
+        if not any(excl in game_title.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            return True, game_title
 
     return False, ""
 
@@ -8820,6 +8874,7 @@ RULES:
             candidate_directive = (
                 f"[STRUCTURAL DIRECTIVE: GAME MODE ACTIVE - BACKSEAT GAMER CATGIRL{game_label}]\n"
                 "The user is actively playing a video game! You are an invested, playful, tsundere catgirl spectator watching their screen.\n"
+                "- CRITICAL IDENTITY RULE: You, Pink, and Yellow's Pixel Buddies DO NOT COUNT AS A GAME. Never refer to Yellow's Pixel Buddies as the game being played!\n"
                 "Generate exactly 4 distinct candidate options for your spontaneous in-game reaction, separated by '---' on a line by itself.\n"
                 "Each candidate MUST explore a different gameplay angle and use a completely different sentence opener:\n"
                 "- Candidate 1 (Action & Combat): React to combat, boss fights, clutch dodges, health/mana bars, damage, or close calls. (1 line)\n"
@@ -11689,7 +11744,16 @@ RULES:
             return getattr(self, "_is_game_active", False), getattr(self, "_current_game_name", "")
 
         self._last_game_check_time = now
-        is_game, name = detect_foreground_game()
+        excluded_hwnds = {int(self.winId())}
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            try:
+                excluded_hwnds.add(int(self._shop_window.winId()))
+            except Exception:
+                pass
+        is_game, name = detect_foreground_game(excluded_hwnds=excluded_hwnds)
+        if any(excl in name.lower() for excl in EXCLUDED_NON_GAME_TITLES):
+            is_game = False
+            name = ""
         self._is_game_active = is_game
         self._current_game_name = name if is_game else ""
         return is_game, self._current_game_name
