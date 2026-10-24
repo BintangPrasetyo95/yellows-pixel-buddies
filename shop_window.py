@@ -25,6 +25,7 @@ Comprehensive Feature Set:
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import math
@@ -237,22 +238,99 @@ TALK_TOPICS = [
 ]
 
 
+def _parse_iso_ts(ts_str: str | None) -> datetime.datetime | None:
+    """Safely parse ISO 8601 timestamps into naive datetime for comparison."""
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(ts_str)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _is_task_creation_turn(msg: dict[str, Any]) -> bool:
+    """Identify if a session message turn was creating or registering a reminder."""
+    user_text = (msg.get("user") or "").lower()
+    pink_text = (msg.get("pink") or "").lower()
+
+    creation_patterns = [
+        r"\[add_reminder:",
+        r"^/remind\b",
+        r"^/todo\b",
+        r"^/add_reminder\b",
+        r"\bremind me\b",
+        r"\bdon't let me forget\b",
+        r"\badd (?:a )?(?:new )?(?:task|reminder|chore|todo)\b",
+        r"\bput (?:this )?on my (?:chore|task|todo) list\b",
+        r"\bregister (?:a )?(?:new )?(?:task|reminder|chore)\b",
+    ]
+    for pat in creation_patterns:
+        if re.search(pat, user_text, re.IGNORECASE) or re.search(pat, pink_text, re.IGNORECASE):
+            return True
+    return False
+
+
 def evaluate_task_value(text: str) -> int:
-    """Pink evaluates a task's worth between P$ 1 and P$ 3 based on complexity."""
-    lower = text.lower()
-    heavy_words = {
-        "code", "project", "exam", "slides", "finals", "build", "deploy",
-        "study", "calendar", "refactor", "feature", "write", "model",
-        "database", "api", "shop", "algorithm", "report"
-    }
-    words = re.findall(r"\w+", lower)
-    if any(w in lower for w in heavy_words) or len(words) >= 8:
-        return 3
-    elif len(words) >= 4:
-        return 2
-    else:
+    """Pink evaluates a task's worth between P$ 1 and P$ 4 based on effort, complexity, and scope."""
+    clean = (text or "").strip().lower()
+    if not clean:
         return 1
 
+    words = re.findall(r"[a-zA-Z0-9_]+", clean)
+    if not words:
+        return 1
+
+    word_set = set(words)
+    score = 2  # Baseline reward for standard daily chores
+
+    # 1. High-complexity / Heavy cognitive or heavy manual labor (+2)
+    heavy_kws = {
+        "code", "coding", "program", "programming", "develop", "dev", "build", "deploy",
+        "deployment", "refactor", "refactoring", "algorithm", "database", "sql", "migration",
+        "infrastructure", "infra", "architecture", "thesis", "dissertation", "exam", "finals",
+        "midterm", "audit", "presentation", "slides", "pipeline", "backend", "frontend",
+        "fullstack", "security", "docker", "kubernetes", "deepwork", "assignment", "paper"
+    }
+    if any(w in word_set for w in heavy_kws):
+        score += 2
+
+    # 2. Medium-complexity / Substantial chores (+1)
+    medium_kws = {
+        "study", "studying", "homework", "research", "analyze", "analysis", "review",
+        "write", "writing", "draft", "article", "essay", "chapter", "documentation", "docs",
+        "clean", "cleaning", "organize", "organizing", "declutter", "vacuum", "mop", "laundry",
+        "cook", "cooking", "mealprep", "bake", "baking", "workout", "exercise", "gym",
+        "fitness", "run", "running", "cardio", "budget", "finance", "taxes", "debug",
+        "debugging", "test", "testing", "practice", "rehearse", "design", "figma",
+        "wireframe", "read", "reading", "translate", "translation", "groceries", "grocery"
+    }
+    if any(w in word_set for w in medium_kws):
+        score += 1
+
+    # 3. Action / Execution commitment verbs (+1)
+    commitment_kws = {
+        "finish", "complete", "completed", "submit", "submitted", "publish", "published",
+        "ship", "shipped", "finalize", "finalized", "implement", "implemented", "solve", "solved"
+    }
+    if any(w in word_set for w in commitment_kws):
+        score += 1
+
+    # 4. Detail & specificity bonus (+1 if user clearly defined scope)
+    if len(words) >= 6 or len(clean) >= 32:
+        score += 1
+
+    # 5. Micro-habits & trivial actions (-1, but min 1)
+    trivial_kws = {
+        "water", "drink", "sip", "snack", "eat", "bite", "stretch", "breathe",
+        "blink", "afk", "glance", "check", "tap", "nap", "brush", "floss", "rest"
+    }
+    if any(w in word_set for w in trivial_kws):
+        score -= 1
+
+    return max(1, min(4, score))
 
 class DeltaruneShopWindow(QWidget):
     """Pink's Dark World Sanctuary & Companion Command Center."""
@@ -730,50 +808,96 @@ class DeltaruneShopWindow(QWidget):
 
     # --- Evidence Detection (Screen + Sessions) --------------------------------
 
-    def _scan_task_evidence(self, task_text: str) -> tuple[bool, bool, str]:
+    def _find_task_created_dt(self, task_text: str, task_data: dict[str, Any] | None = None) -> datetime.datetime | None:
+        """Find the creation datetime of a task from task data or memory."""
+        created_str = None
+        if task_data and isinstance(task_data, dict):
+            created_str = task_data.get("created_at")
+        if not created_str and self._memory and hasattr(self._memory, "get_active_reminders"):
+            try:
+                active = self._memory.get_active_reminders()
+                for r in active:
+                    if isinstance(r, dict) and r.get("text", "").strip().lower() == task_text.strip().lower():
+                        created_str = r.get("created_at")
+                        if created_str:
+                            break
+            except Exception:
+                pass
+        return _parse_iso_ts(created_str)
+
+    def _scan_task_evidence(self, task_text: str, task_data: dict[str, Any] | None = None) -> tuple[bool, bool, str]:
         stopwords = {
             "remind", "reminder", "reminders", "user", "me", "to", "add", "a", "an", "the",
             "in", "for", "you", "and", "or", "of", "on", "with", "from", "till", "this",
             "that", "it", "is", "be", "do", "have", "i", "my", "our", "out", "first",
             "feature", "please", "task", "tasks", "todos", "todo", "chore", "chores",
-            "duty", "duties", "check", "work", "working", "done", "finish", "finished",
-            "started", "start", "make", "just", "about", "thing", "things", "will"
+            "duty", "duties", "check", "started", "start", "make", "just", "about",
+            "thing", "things", "will"
         }
-        words = re.findall(r"[a-zA-Z0-9_]{3,}", task_text.lower())
-        keywords = [w for w in words if w not in stopwords]
+        all_words = re.findall(r"[a-zA-Z0-9_]{3,}", task_text.lower())
+        keywords = [w for w in all_words if w not in stopwords]
+        if not keywords:
+            basic_grammar = {"the", "and", "for", "with", "from", "this", "that", "you", "remind", "reminder"}
+            keywords = [w for w in all_words if w not in basic_grammar]
+        if not keywords and all_words:
+            keywords = all_words
+        if not keywords:
+            keywords = re.findall(r"[a-zA-Z0-9_]{2,}", task_text.lower())
         if not keywords:
             return False, False, ""
 
+        task_created_dt = self._find_task_created_dt(task_text, task_data)
+
+        # 1. Background system tray observations (_tray_observations)
         if self._pet and hasattr(self._pet, "_tray_observations"):
             for obs in getattr(self._pet, "_tray_observations", []):
-                summary = (obs.get("summary") or "").lower()
+                obs_ts = _parse_iso_ts(obs.get("timestamp"))
+                if task_created_dt and obs_ts and obs_ts <= task_created_dt + datetime.timedelta(seconds=5):
+                    continue
+                seen_text = (obs.get("seen") or "").lower()
+                obs_text = (obs.get("text") or "").lower()
                 for kw in keywords:
-                    if kw in summary:
+                    kw_pat = rf"\b{re.escape(kw)}\b"
+                    if (seen_text and re.search(kw_pat, seen_text, re.IGNORECASE)) or (obs_text and re.search(kw_pat, obs_text, re.IGNORECASE)):
                         return True, True, kw
 
+        # 2. Session logs (memory/sessions/*.json)
         sessions_dir = _BASE_DIR / "memory" / "sessions"
         if sessions_dir.exists():
             for s_file in sorted(sessions_dir.glob("*.json"), reverse=True)[:12]:
                 try:
                     data = json.loads(s_file.read_text(encoding="utf-8"))
                     for msg in data.get("messages", []):
+                        msg_ts = _parse_iso_ts(msg.get("timestamp"))
+                        # Validate that evidence occurred strictly after task creation
+                        if task_created_dt and msg_ts and msg_ts <= task_created_dt + datetime.timedelta(seconds=5):
+                            continue
+                        # Prevent task creation prompts from counting as proof
+                        if _is_task_creation_turn(msg):
+                            continue
+
+                        seen_text = (msg.get("seen") or "").lower()
                         user_text = (msg.get("user") or "").lower()
-                        had_screen = msg.get("had_screen", False)
+                        pink_text = (msg.get("pink") or "").lower()
+
+                        # Check desktop screen sights (turn["seen"] or peek observation headers)
                         for kw in keywords:
-                            if kw in user_text:
-                                if had_screen:
-                                    return True, True, kw
+                            kw_pat = rf"\b{re.escape(kw)}\b"
+                            if seen_text and re.search(kw_pat, seen_text, re.IGNORECASE):
+                                return True, True, kw
+                            if user_text.startswith("[pink peeks") and re.search(kw_pat, user_text, re.IGNORECASE):
+                                return True, True, kw
+
+                        # Check general chat turns (user or pink talking about task completion/work)
+                        for kw in keywords:
+                            kw_pat = rf"\b{re.escape(kw)}\b"
+                            if re.search(kw_pat, user_text, re.IGNORECASE) or re.search(kw_pat, pink_text, re.IGNORECASE):
                                 return True, False, kw
-                        if had_screen:
-                            pink_text = (msg.get("pink") or "").lower()
-                            for kw in keywords:
-                                if kw in pink_text:
-                                    return True, True, kw
                 except Exception:
                     pass
 
-        return False, False, ""
-
+        # If no evidence found, return False with first keyword for dialogue display
+        return False, False, (keywords[0] if keywords else "")
     # --- Goals, Facts, Tasks & Alarms Model ------------------------------------
 
     def _get_goals_file_path(self) -> Path:
@@ -943,7 +1067,8 @@ class DeltaruneShopWindow(QWidget):
                 log.warning("Could not delete fact note: %s", e)
         return False
 
-    def _get_active_reminders(self) -> list[str]:
+    def _get_active_reminder_objects(self) -> list[dict[str, Any]]:
+        """Return raw active reminder objects with IDs and created_at timestamps."""
         if not self._memory:
             return []
         try:
@@ -953,11 +1078,14 @@ class DeltaruneShopWindow(QWidget):
                 reminders = self._memory.get_reminders()
             else:
                 reminders = []
-            return [r.get("text", "") for r in reminders if r.get("text")]
+            return [r for r in reminders if isinstance(r, dict) and r.get("text")]
         except Exception as e:
-            log.warning("Could not fetch active reminders: %s", e)
+            log.warning("Could not fetch active reminder objects: %s", e)
             return []
 
+    def _get_active_reminders(self) -> list[str]:
+        objs = self._get_active_reminder_objects()
+        return [r.get("text", "") for r in objs if r.get("text")]
     def _complete_reminder(self, text: str, reward: int) -> None:
         if not self._memory:
             return
@@ -965,7 +1093,7 @@ class DeltaruneShopWindow(QWidget):
         if ok:
             self._wallet.add(reward)
             self.set_dialogue(
-                f"{CANON_SELL_SUCCESS}\n* \"{deleted_text}\" finished! (+P$ {reward})"
+                f"{CANON_SELL_SUCCESS}\n* \"{deleted_text}\" finished! (+P$ {reward:02d})"
             )
         else:
             self.set_dialogue(f"{CANON_SELL_UNSELLABLE}\n* Couldn't process that reminder, silly!")
@@ -1046,7 +1174,8 @@ class DeltaruneShopWindow(QWidget):
                 task_text = self._inspect_item_text
                 self._pending_sell_reminder = task_text
                 self._pending_sell_value = evaluate_task_value(task_text)
-                has_ev, on_screen, kw = self._scan_task_evidence(task_text)
+                r_data = self._inspect_item_data if isinstance(self._inspect_item_data, dict) else None
+                has_ev, on_screen, kw = self._scan_task_evidence(task_text, task_data=r_data)
                 self._sell_has_evidence = has_ev
                 self._sell_saw_on_screen = on_screen
                 self._sell_evidence_kw = kw
@@ -1056,11 +1185,12 @@ class DeltaruneShopWindow(QWidget):
                 if has_ev:
                     proof_loc = "on screen" if on_screen else "in session logs"
                     self.set_dialogue(
-                        f"* You're gonna give me stuff?\n* Found proof of '{kw}' {proof_loc}! Complete for P$ {self._pending_sell_value}?"
+                        f"* You're gonna give me stuff?\n* Found proof of '{kw}' {proof_loc}! Complete for P$ {self._pending_sell_value:02d}?"
                     )
                 else:
+                    target_kw = kw or (task_text[:15] if task_text else "that")
                     self.set_dialogue(
-                        f"* Huh?\n* I haven't seen you do '{kw or task_text[:12]}' at all... Are you sure you finished it?"
+                        f"* Huh?\n* I haven't seen you do '{target_kw}' at all... Are you sure you finished it?"
                     )
             elif opt.startswith("Delete"):
                 if self._memory:
@@ -1512,12 +1642,13 @@ class DeltaruneShopWindow(QWidget):
                     self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
 
             elif self._tasks_tab == 1:  # TASKS
-                reminders = self._get_active_reminders()
+                reminder_objs = self._get_active_reminder_objects()
                 if self._selected_index == 0:
                     self._prompt_add_task()
-                elif self._selected_index <= len(reminders):
-                    task_text = reminders[self._selected_index - 1]
-                    self._open_item_action("task", task_text)
+                elif self._selected_index <= len(reminder_objs):
+                    r_obj = reminder_objs[self._selected_index - 1]
+                    task_text = r_obj.get("text", "")
+                    self._open_item_action("task", task_text, r_obj)
                 else:  # Back
                     self.state = ShopState.TASKS_SUBMENU
                     self._selected_index = self._tasks_tab
@@ -2290,7 +2421,9 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_body)
         p.setPen(QColor(255, 255, 255))
         if self._selected_index == 0:
-            if self._tasks_tab == 0:
+            if self._dialogue_text and ("finished!" in self._dialogue_text or "MINE now" in self._dialogue_text):
+                desc = self._dialogue_text
+            elif self._tasks_tab == 0:
                 desc = "* Register a new personal goal into your log!"
             else:
                 desc = "* Register a new chore to complete for Pink Dollars!"
