@@ -1523,6 +1523,14 @@ ANNOYED_IGNORED_LINES: list[str] = [
     "* Ignored twice in a row... That's it, you're getting the royal cold shoulder until you come back, human!",
 ]
 
+ANNOYED_MOVING_IGNORED_LINES: list[str] = [
+    "* ... I literally see you moving your cursor all over the screen, minion! FIVE messages ignored in a row?! HMPH!",
+    "* FIVE times in a row ignored while you're clicking away right in front of me?! What am I, invisible to you?!",
+    "* You're actively using the computer and ignored me FIVE TIMES?! Stop clicking other windows and look at me!",
+    "* Moving your mouse right past my face five times without clicking?! The absolute disrespect, mew!",
+    "* Five messages ignored while you're sitting right there! Don't make me bite your cursor, dummy!",
+]
+
 ANNOYED_COMEBACK_LINES: list[str] = [
     "* Hmph! Finally back, are we?! Don't you dare leave me talking to myself again, mew! [anim: tongue]",
     "* Oh, so you DO know how to click! You're lucky you came back before I readied the cat bombs! [anim: embarrassed]",
@@ -2374,6 +2382,9 @@ class DialogueOverlay(QWidget):
         self._track_ignore = False
         self._user_interacted = False
         self._last_was_ignored = False
+        self._user_moved_during_dialogue = False
+        self._dialogue_start_time = 0.0
+        self._cursor_start_pos = QPoint(0, 0)
 
     def mark_user_interacted(self) -> None:
         """Mark that the user actively interacted with the current dialogue sequence."""
@@ -2382,6 +2393,27 @@ class DialogueOverlay(QWidget):
     def was_ignored(self) -> bool:
         """Return True if the last dialogue closed automatically without user interaction."""
         return self._last_was_ignored
+
+    def was_user_moving(self) -> bool:
+        """Return True if user moved the mouse or had active input during dialogue display."""
+        if getattr(self, "_user_moved_during_dialogue", False):
+            return True
+        if hasattr(self, "_cursor_start_pos"):
+            try:
+                curr_pos = QCursor.pos()
+                dx = abs(curr_pos.x() - self._cursor_start_pos.x())
+                dy = abs(curr_pos.y() - self._cursor_start_pos.y())
+                if (dx * dx + dy * dy) > 36:
+                    return True
+            except Exception:
+                pass
+        idle_s = get_user_idle_seconds()
+        elapsed = time.perf_counter() - getattr(self, "_dialogue_start_time", 0.0)
+        if idle_s <= max(3.0, elapsed):
+            return True
+        if is_d3d_fullscreen_active():
+            return True
+        return False
 
     def _create_soul_heart_pixmap(self) -> QPixmap:
         """Create a crisp pixel-art Deltarune red soul heart pixmap."""
@@ -2425,6 +2457,12 @@ class DialogueOverlay(QWidget):
         self._track_ignore = track_ignore
         self._user_interacted = False
         self._last_was_ignored = False
+        self._user_moved_during_dialogue = False
+        self._dialogue_start_time = time.perf_counter()
+        try:
+            self._cursor_start_pos = QCursor.pos()
+        except Exception:
+            self._cursor_start_pos = QPoint(0, 0)
         self._queue.clear()
         self._choices = list(choices)
         self._choice_rects.clear()
@@ -2465,6 +2503,12 @@ class DialogueOverlay(QWidget):
         self._track_ignore = track_ignore and auto_dismiss
         self._user_interacted = False
         self._last_was_ignored = False
+        self._user_moved_during_dialogue = False
+        self._dialogue_start_time = time.perf_counter()
+        try:
+            self._cursor_start_pos = QCursor.pos()
+        except Exception:
+            self._cursor_start_pos = QPoint(0, 0)
         self._queue = list(queue) if queue else []
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
@@ -2710,6 +2754,16 @@ class DialogueOverlay(QWidget):
             self._type_timer.stop()
             return
 
+        try:
+            curr_pos = QCursor.pos()
+            if hasattr(self, "_cursor_start_pos"):
+                dx = abs(curr_pos.x() - self._cursor_start_pos.x())
+                dy = abs(curr_pos.y() - self._cursor_start_pos.y())
+                if (dx * dx + dy * dy) > 36:
+                    self._user_moved_during_dialogue = True
+        except Exception:
+            pass
+
         if self._char_delay_ticks > 0:
             self._char_delay_ticks -= 1
             return
@@ -2832,11 +2886,13 @@ class DialogueOverlay(QWidget):
 
     def enterEvent(self, event) -> None:
         """Pause the auto-dismiss countdown while cursor is inside the dialogue box."""
+        self._user_moved_during_dialogue = True
         self._pause_hold_timer()
         super().enterEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         """Track mouse hover across choice options and ensure countdown is paused while hovering."""
+        self._user_moved_during_dialogue = True
         if not self._hold_paused and self._hold_timer.isActive():
             self._pause_hold_timer()
         if not self._active or not self._choices or self._visible_chars < self._total_chars:
@@ -4652,6 +4708,17 @@ class MemoryManager:
                             seen = u.split("Saw:", 1)[1].strip().rstrip("]")
                         if seen:
                             lines.append(f"- [{m_ts}] (Screen Sight): {seen}")
+                    elif u.startswith("[Pink annoyed:"):
+                        if "5 dialogue" in u or "moving" in u:
+                            lines.append(f"- [{m_ts}] (Event): Pink got annoyed because user was active but ignored 5 dialogues in a row -> Pink: \"{p}\"")
+                        else:
+                            lines.append(f"- [{m_ts}] (Event): Pink got annoyed after user ignored 2 dialogues in a row while away -> Pink: \"{p}\"")
+                    elif u.startswith("[User clicked Pink"):
+                        lines.append(f"- [{m_ts}] (Event): User acknowledged Pink -> Pink: \"{p}\"")
+                    elif u.startswith("[User returned after being away]"):
+                        lines.append(f"- [{m_ts}] (Event): User returned from AFK -> Pink: \"{p}\"")
+                    elif u.startswith("[Music played:"):
+                        lines.append(f"- [{m_ts}] (Music): {u} -> Pink: \"{p}\"")
                     else:
                         lines.append(f"- [{m_ts}] User: \"{u}\" -> Pink: \"{p}\"")
                 session_entries.append("\n".join(lines))
@@ -7207,7 +7274,10 @@ class YellowsPixelBuddies(QWidget):
         self._keep_response_anim: bool = False
         # --- Annoyed on ignored dialogues & user away status -------------------
         self._consecutive_ignored_dialogues: int = 0
+        self._consecutive_ignored_idle: int = 0
         self._is_annoyed_ignored: bool = False
+        self._annoyed_reason: str = "idle"
+        self._annoyed_reason_when_chat_opened: str = "idle"
         self._user_away_notified: bool = False
         self._user_away_time: float = 0.0
         self._user_away_was_idle: bool = False
@@ -8117,9 +8187,11 @@ RULES:
         if getattr(self, "_is_annoyed_ignored", False):
             self._is_annoyed_ignored = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if getattr(self, "_user_away_notified", False):
             self._user_away_notified = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
 
         self._last_question_item = q_item
         self._last_dialogue = q_item.question
@@ -8242,6 +8314,14 @@ RULES:
         if hasattr(self, "_dialogue_overlay") and hasattr(self._dialogue_overlay, "was_ignored"):
             was_ignored = self._dialogue_overlay.was_ignored()
 
+        now = time.perf_counter()
+        user_moved = False
+        if hasattr(self, "_dialogue_overlay") and hasattr(self._dialogue_overlay, "was_user_moving"):
+            user_moved = self._dialogue_overlay.was_user_moving()
+        if hasattr(self, "_still_since"):
+            if (now - self._still_since) <= 4.0:
+                user_moved = True
+
         if was_ignored:
             if getattr(self, "_user_away_notified", False):
                 log.info("Dialogue dismissed without interaction, but user notified away; not counting as ignored.")
@@ -8249,10 +8329,28 @@ RULES:
                 pass
             else:
                 self._consecutive_ignored_dialogues = getattr(self, "_consecutive_ignored_dialogues", 0) + 1
-                log.info("Dialogue ignored! Consecutive ignored count: %d", self._consecutive_ignored_dialogues)
-                if self._consecutive_ignored_dialogues >= 2:
-                    log.info("User ignored dialogue boxes 2 times in a row! Triggering annoyed state.")
-                    self._trigger_annoyed_ignored()
+                if not user_moved:
+                    self._consecutive_ignored_idle = getattr(self, "_consecutive_ignored_idle", 0) + 1
+                else:
+                    self._consecutive_ignored_idle = 0
+
+                log.info(
+                    "Dialogue ignored! user_moved=%s, total_ignored=%d, idle_ignored=%d",
+                    user_moved,
+                    self._consecutive_ignored_dialogues,
+                    self._consecutive_ignored_idle,
+                )
+
+                # Annoyed conditions:
+                # 1) If user did NOT move: needs 2 ignored messages
+                # 2) If user moved (active): needs 5 ignored messages
+                if self._consecutive_ignored_idle >= 2:
+                    log.info("User did not move and ignored 2 dialogues in a row! Triggering annoyed state (reason=idle).")
+                    self._trigger_annoyed_ignored(reason="idle")
+                    return
+                elif self._consecutive_ignored_dialogues >= 5:
+                    log.info("User moved but ignored 5 dialogues in a row! Triggering annoyed state (reason=moving).")
+                    self._trigger_annoyed_ignored(reason="moving")
                     return
         else:
             # User interacted with dialogue (clicked, chose option, or dismissed manually)
@@ -8260,6 +8358,7 @@ RULES:
                 self._handle_user_returned_after_annoyed()
                 return
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
 
         if getattr(self, "_is_annoyed_ignored", False):
             # If annoyed, stay in angry loop at PAUSE
@@ -8288,19 +8387,38 @@ RULES:
         self.update()
         self._check_and_play_pending_song()
 
-    def _trigger_annoyed_ignored(self) -> None:
-        """Trigger Pink's annoyed state when user ignores 2 dialogue boxes in a row without notifying away."""
+    def _trigger_annoyed_ignored(self, reason: str = "idle") -> None:
+        """Trigger Pink's annoyed state when user ignores dialogue boxes.
+
+        reason: 'idle' (user did not move; 2 ignored messages) or
+                'moving' (user was moving/active; 5 ignored messages).
+        """
         if getattr(self, "_is_annoyed_ignored", False):
             return
         self._is_annoyed_ignored = True
-        self._consecutive_ignored_dialogues = 2
+        self._annoyed_reason = reason
+        self._consecutive_ignored_dialogues = 5 if reason == "moving" else 2
+        self._consecutive_ignored_idle = 0
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         self._brain_timer.stop()
         if self._can_play("angry"):
             self._play("angry", loop=True)
 
-        line = random.choice(ANNOYED_IGNORED_LINES)
+        if reason == "moving":
+            line = random.choice(ANNOYED_MOVING_IGNORED_LINES)
+            user_text = "[Pink annoyed: User was active/moving but ignored 5 dialogue boxes in a row]"
+        else:
+            line = random.choice(ANNOYED_IGNORED_LINES)
+            user_text = "[Pink annoyed: User was away/not moving — ignored 2 dialogue boxes in a row]"
+
+        if hasattr(self, "_memory") and self._memory:
+            self._memory.record_turn(
+                user_text=user_text,
+                pink_response=line,
+                anim="angry",
+                had_screen=False,
+            )
         self._say(
             line,
             force=True,
@@ -8313,13 +8431,28 @@ RULES:
         )
 
     def _handle_user_returned_after_annoyed(self) -> None:
-        """Handle player acknowledging Pink or returning after she got annoyed from being ignored twice."""
+        """Handle player acknowledging Pink or returning after she got annoyed from being ignored."""
         if not getattr(self, "_is_annoyed_ignored", False):
             return
+        was_moving = getattr(self, "_annoyed_reason", "idle") == "moving"
         self._is_annoyed_ignored = False
+        self._annoyed_reason = "idle"
         self._consecutive_ignored_dialogues = 0
+        self._consecutive_ignored_idle = 0
 
         line = random.choice(ANNOYED_COMEBACK_LINES)
+        ack_text = (
+            "[User clicked Pink to acknowledge her after ignoring 5 dialogues while active]"
+            if was_moving
+            else "[User clicked Pink to acknowledge her after being away]"
+        )
+        if hasattr(self, "_memory") and self._memory:
+            self._memory.record_turn(
+                user_text=ack_text,
+                pink_response=line,
+                anim="peace_sign",
+                had_screen=False,
+            )
         self._say(
             line,
             force=True,
@@ -8380,11 +8513,14 @@ RULES:
             self._dialogue_overlay.dismiss(clear_queue=True)
         if getattr(self, "_is_annoyed_ignored", False):
             self._was_annoyed_when_chat_opened = True
+            self._annoyed_reason_when_chat_opened = getattr(self, "_annoyed_reason", "idle")
             self._is_annoyed_ignored = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if getattr(self, "_user_away_notified", False):
             self._user_away_notified = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if self.state in MOVE_VELOCITY_PX_S:
             self._play("idle")
         if hasattr(self, "_chat_input"):
@@ -8431,6 +8567,7 @@ RULES:
             self._dialogue_overlay.mark_user_interacted()
 
         was_annoyed_chat = getattr(self, "_was_annoyed_when_chat_opened", False)
+        annoyed_reason = getattr(self, "_annoyed_reason_when_chat_opened", "idle")
         self._was_annoyed_when_chat_opened = False
         was_away_notified = getattr(self, "_user_away_notified", False)
 
@@ -8440,8 +8577,11 @@ RULES:
             self._user_away_time = now
             self._user_away_was_idle = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
             self._is_annoyed_ignored = False
             reply = random.choice(DEPARTURE_RESPONSES)
+            if hasattr(self, "_memory") and self._memory:
+                self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="wistful", had_screen=False)
             self._say(reply, force=True, record_memory=True, step_anim="wistful", track_ignore=False)
             return
 
@@ -8450,8 +8590,11 @@ RULES:
             self._user_away_notified = False
             self._user_away_was_idle = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
             self._is_annoyed_ignored = False
             reply = random.choice(WELCOME_BACK_RESPONSES)
+            if hasattr(self, "_memory") and self._memory:
+                self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
             self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
             return
 
@@ -8463,10 +8606,13 @@ RULES:
             self._user_away_time = now
             self._user_away_was_idle = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
             self._is_annoyed_ignored = False
             api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
             if not api_key:
                 reply = random.choice(DEPARTURE_RESPONSES)
+                if hasattr(self, "_memory") and self._memory:
+                    self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="wistful", had_screen=False)
                 self._say(reply, force=True, record_memory=True, step_anim="wistful", track_ignore=False)
                 return
 
@@ -8474,15 +8620,23 @@ RULES:
             self._user_away_notified = False
             self._user_away_was_idle = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
             self._is_annoyed_ignored = False
             api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
             if not api_key and is_return:
                 reply = random.choice(WELCOME_BACK_RESPONSES)
+                if hasattr(self, "_memory") and self._memory:
+                    self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
                 self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
                 return
 
         if was_annoyed_chat and not (self._memory.get_api_key() if hasattr(self, "_memory") else ""):
-            reply = "* Hmph! You finally talk to me after ignoring two of my dialogue boxes?! You better apologize properly, dummy! [anim: angry]"
+            if annoyed_reason == "moving":
+                reply = "* Hmph! You've been clicking around your desktop and ignored FIVE of my dialogues in a row?! You better apologize properly, dummy! [anim: angry]"
+            else:
+                reply = "* Hmph! You finally talk to me after ignoring two of my dialogue boxes?! You better apologize properly, dummy! [anim: angry]"
+            if hasattr(self, "_memory") and self._memory:
+                self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="angry", had_screen=False)
             self._say(reply, force=True, record_memory=True, step_anim="angry", track_ignore=False)
             return
 
@@ -8796,13 +8950,24 @@ RULES:
             )
 
         if was_annoyed_chat:
-            system_inst += (
-                "\n\nCRITICAL CONTEXT - USER PREVIOUSLY IGNORED YOU:\n"
-                "You were just standing there fuming because the user ignored your last two dialogue boxes in a row while away without telling you! "
-                "The user has now opened chat to talk to you.\n"
-                "- Act offended, sassy, and tsundere! Demand a proper explanation or apology for leaving you talking to thin air twice!\n"
-                "- Tag your reaction with [anim: angry], [anim: tongue], or [anim: embarrassed]."
-            )
+            if annoyed_reason == "moving":
+                system_inst += (
+                    "\n\nCRITICAL CONTEXT - USER DELIBERATELY IGNORED YOU WHILE ACTIVE:\n"
+                    "You were just standing there fuming because the user was actively using their computer and moving their mouse around, "
+                    "but completely ignored FIVE of your dialogue boxes in a row without clicking you! "
+                    "The user has now opened chat to talk to you.\n"
+                    "- Act outraged, sassy, and tsundere! Call them out for deliberately ignoring you while clicking other windows right in front of your face!\n"
+                    "- Demand to know what was so important that they ignored their royal companion 5 times!\n"
+                    "- Tag your reaction with [anim: angry], [anim: tongue], or [anim: embarrassed]."
+                )
+            else:
+                system_inst += (
+                    "\n\nCRITICAL CONTEXT - USER PREVIOUSLY IGNORED YOU WHILE AWAY:\n"
+                    "You were just standing there fuming because the user wasn't moving and ignored your last two dialogue boxes in a row while away without telling you! "
+                    "The user has now opened chat to talk to you.\n"
+                    "- Act offended, sassy, and tsundere! Demand a proper explanation or apology for leaving you talking to thin air twice!\n"
+                    "- Tag your reaction with [anim: angry], [anim: tongue], or [anim: embarrassed]."
+                )
 
         # Add elapsed time since user's previous interaction if available
         last_turn = self._memory.history[-1] if self._memory.history else None
@@ -10822,9 +10987,11 @@ RULES:
         if getattr(self, "_is_annoyed_ignored", False):
             self._is_annoyed_ignored = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if getattr(self, "_user_away_notified", False):
             self._user_away_notified = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if hasattr(self, "_chat_input"):
             self._chat_input.cancel()
         self._brain_timer.stop()
@@ -10921,9 +11088,11 @@ RULES:
         if getattr(self, "_is_annoyed_ignored", False):
             self._is_annoyed_ignored = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if getattr(self, "_user_away_notified", False):
             self._user_away_notified = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._reset_jump_state()
@@ -11108,9 +11277,11 @@ RULES:
         if getattr(self, "_is_annoyed_ignored", False):
             self._is_annoyed_ignored = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if getattr(self, "_user_away_notified", False):
             self._user_away_notified = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         self._brain_timer.stop()                     # no walk / pause timeout may fire mid-air
         self._pause_elapsed = False
         self._gravity = JUMP_GRAVITY_PX_S2
@@ -11507,8 +11678,17 @@ RULES:
             if getattr(self, "_user_away_notified", False):
                 self._user_away_notified = False
                 self._consecutive_ignored_dialogues = 0
+                self._consecutive_ignored_idle = 0
+                reply = "* Ah, you're back! Good, I was starting to think you got lost out there, mew!"
+                if hasattr(self, "_memory") and self._memory:
+                    self._memory.record_turn(
+                        user_text="[User clicked Pink to return after being away]",
+                        pink_response=reply,
+                        anim="peace_sign",
+                        had_screen=False,
+                    )
                 self._say(
-                    "* Ah, you're back! Good, I was starting to think you got lost out there, mew!",
+                    reply,
                     force=True,
                     step_anim="peace_sign",
                     dialogue_category="welcome_back",
@@ -11675,9 +11855,11 @@ RULES:
         if getattr(self, "_is_annoyed_ignored", False):
             self._is_annoyed_ignored = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if getattr(self, "_user_away_notified", False):
             self._user_away_notified = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if hasattr(self, "_chat_input"):
             self._chat_input.cancel()
         self._play("shocked", loop=True)          # loop it for as long as it is held
@@ -11799,6 +11981,7 @@ RULES:
                 self._user_away_notified = False
                 self._user_away_was_idle = False
                 self._consecutive_ignored_dialogues = 0
+                self._consecutive_ignored_idle = 0
                 log.info("User returned after being away (idle -> active input). Welcome back!")
                 self._say(
                     "* Ah! Welcome back, minion! Did you finish what you had to do, mew?",
@@ -12356,9 +12539,11 @@ RULES:
         if getattr(self, "_is_annoyed_ignored", False):
             self._is_annoyed_ignored = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
         if getattr(self, "_user_away_notified", False):
             self._user_away_notified = False
             self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
             self._dialogue_overlay.close()
         if hasattr(self, "_chat_input"):
             self._chat_input.close()
