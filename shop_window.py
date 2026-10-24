@@ -906,6 +906,15 @@ class DeltaruneShopWindow(QWidget):
             elif u_raw.startswith("[Pink asked:"):
                 q_info = u_raw[12:].rstrip("]")
                 card_lines.append(f"* {pfx}{q_info}")
+            elif u_raw.startswith("[Pink annoyed:"):
+                if "5 dialogue" in u_raw or "moving" in u_raw:
+                    card_lines.append(f"* {pfx}(Annoyed): Ignored 5 dialogue boxes while active")
+                else:
+                    card_lines.append(f"* {pfx}(Annoyed): Ignored 2 dialogue boxes while away")
+            elif u_raw.startswith("[User clicked Pink to acknowledge"):
+                card_lines.append(f"* {pfx}(Returned): Acknowledged Pink")
+            elif u_raw.startswith(("[User returned after being away]", "[User clicked Pink to return")):
+                card_lines.append(f"* {pfx}(Returned): User returned from AFK")
             elif u_raw:
                 clean_u = u_raw.replace("\n", " ").strip()
                 if len(clean_u) > 90:
