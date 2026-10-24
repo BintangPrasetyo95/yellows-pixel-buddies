@@ -355,6 +355,17 @@ LASER_EXTEND_SPEED_PX_S = 6000.0  # speed at which laser beam extends outwards
 BOMB_PHYSICS_INTERVAL_MS = 16     # physics & overlay tick interval (~60 FPS)
 BOMB_LAUGH_EXTRA_S = 1.3          # seconds to laugh after the last bomb explodes (1+ sec)
 
+# --- Combat & Hit Points System (Undertale 20 HP Scale) ---
+PLAYER_MAX_HP = 20
+PINK_MAX_HP = 20
+LASER_DAMAGE = 4                  # 4 dmg = 5 laser hits to KO
+BOMB_DIRECT_DAMAGE = 8            # Ground-zero direct blast
+BOMB_KICK_DAMAGE = 5              # 4 bombs defused/kicked = 20 dmg to defeat Pink!
+PLAYER_IFRAME_DURATION_S = 0.65   # Invulnerability after hit
+PLAYER_REGEN_INTERVAL_S = 3.0     # Passive heal out of combat (+1 HP / 3s)
+PLAYER_KO_COOLDOWN_S = 3.0        # Cooldown before auto-revive
+COMBAT_HUD_FADEOUT_S = 2.5        # Seconds to keep HUD visible after combat/damage
+
 BOMB_BOTTOM_PADDING = 8.0          # transparent px under bomb in 20x20 art (2px * 4x scale)
 
 # Relative rope tip anchor (x_frac, y_frac) for each of the 5 bomb frames:
@@ -1512,6 +1523,35 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* This song... fills me with rage and joy!",
         "* Did that little dog write this?!",
         "* Toby Fox... that guest composer dog strikes again!",
+    ],
+    # Bomb attack throw dialogue
+    "throw": [
+        "* Bombs away, minion! Dodge this if you can, mew!",
+        "* Take THIS! Cat-bomb barrage incoming!!",
+        "* Think you can handle my pyrotechnics?! Mew!",
+        "* Here comes a special explosive delivery!",
+    ],
+    # Player cursor downed by bombs / lasers
+    "player_downed": [
+        "* AHAHAHA! Direct hit! Total feline victory, mew!",
+        "* KABOOM! That's what you get for underestimating my bombs!",
+        "* Downed! My laser aim is utterly unmatched, puppet!",
+    ],
+    # Pink defeated by deflected bombs
+    "pink_defeated": [
+        "* W-WHAT?! You kicked my own bomb right back at me?! Cheater!! Mew!",
+        "* U-Unacceptable!! Kicking bombs is against the rules, minion!",
+        "* GAH! Blasted by my own explosive masterwork...!!",
+    ],
+    # Flawless dodge (took 0 damage)
+    "flawless_dodge": [
+        "* W-What?! You dodged every single bomb?! Impossible... you're cheating, minion!",
+        "* Not even a single scratch?! Hmph, pure luck! Next time you won't be so slippery, mew!",
+    ],
+    # Survived with scratches (>0 damage taken)
+    "survived_bombs": [
+        "* Barely made it out of that one, dummy! My laser aim is getting sharper!",
+        "* Phew, you survived with scratches! Don't push your luck next time, mew!",
     ],
 }
 
@@ -6405,6 +6445,19 @@ class Bomb:
     spark_frame_idx: int = 0
     spark_timer: float = 0.0
     exploded: bool = False
+    kicked: bool = False
+    kicked_at: float = 0.0
+
+
+@dataclass
+class DamagePopup:
+    x: float
+    y: float
+    text: str
+    color: QColor
+    created_at: float
+    duration: float = 1.2
+    vy: float = -45.0
 
 
 @dataclass
@@ -6419,51 +6472,276 @@ class LaserCross:
 
 
 class BombLaserOverlay(QWidget):
-    """Full-screen, click-through overlay managing falling bombs, sparks, and laser beams."""
+    """Full-screen, click-through overlay managing falling bombs, sparks, laser beams, and cursor combat HUD."""
 
-    def __init__(self, bank: SpriteBank) -> None:
+    def __init__(self, bank: SpriteBank, pet: "YellowsPixelBuddies | None" = None, font_family: str | None = None) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._bank = bank
+        self._pet: "YellowsPixelBuddies | None" = pet
+        self._font_family = font_family
         self._bombs: list[Bomb] = []
         self._lasers: list[LaserCross] = []
+        self._damage_popups: list[DamagePopup] = []
         self._ground_y: float = 0.0
         self._last_bomb_exploded_at: float = 0.0
+
+        # Undertale 20 HP Scale & Combat State
+        self._player_hp: int = PLAYER_MAX_HP
+        self._pink_hp: int = PINK_MAX_HP
+        self._player_iframe_until: float = 0.0
+        self._last_lbutton_down: bool = False
+        self._round_active: bool = False
+        self._damage_taken_this_round: int = 0
+        self._bombs_defused_this_round: int = 0
+        self._player_downed: bool = False
+        self._player_downed_until: float = 0.0
+        self._last_regen_time: float = time.perf_counter()
+
+        # Floating Cursor HUD Visuals
+        self._hud_alpha: float = 0.0
+        self._hud_fadeout_until: float = 0.0
+        self._soul_heart_pixmap = self._create_soul_heart(cracked=False)
+        self._soul_heart_cracked_pixmap = self._create_soul_heart(cracked=True)
 
         self._timer = QTimer(self)
         self._timer.setInterval(BOMB_PHYSICS_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
         self._last_time = time.perf_counter()
 
+    @staticmethod
+    def _create_soul_heart(cracked: bool = False) -> QPixmap:
+        if not cracked:
+            grid = [
+                " 11   11 ",
+                "1111 1111",
+                "111111111",
+                "111111111",
+                " 1111111 ",
+                "  11111  ",
+                "   111   ",
+                "    1    ",
+            ]
+        else:
+            grid = [
+                " 11   11 ",
+                "111 1111",
+                "111  1111",
+                "11  11111",
+                " 11  111 ",
+                "  11  1  ",
+                "   1 1   ",
+                "    1    ",
+            ]
+        h, w = len(grid), len(grid[0])
+        img = QImage(w * 2, h * 2, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        red = QColor(255, 0, 64, 255).rgba()
+        for y, row in enumerate(grid):
+            for x, c in enumerate(row):
+                if c == "1":
+                    for dy in range(2):
+                        for dx in range(2):
+                            img.setPixel(x * 2 + dx, y * 2 + dy, red)
+        return QPixmap.fromImage(img)
+
+    def set_pet(self, pet: "YellowsPixelBuddies") -> None:
+        self._pet = pet
+
+    @property
+    def player_hp(self) -> int:
+        return self._player_hp
+
+    @property
+    def pink_hp(self) -> int:
+        return self._pink_hp
+
     @property
     def last_bomb_exploded_at(self) -> float:
         return self._last_bomb_exploded_at
 
     def has_active_bombs(self) -> bool:
-        """True if any unexploded bombs are currently bouncing or falling."""
+        """True if any unexploded bombs are currently bouncing, falling, or kicked."""
         return any(not b.exploded for b in self._bombs)
 
     def has_active_lasers(self) -> bool:
         """True if any laser crosses are currently extending/visible."""
         return any(not l.finished for l in self._lasers)
 
-    def reset_state(self) -> None:
-        """Reset bombs, lasers, and explosion tracking for a new attack."""
+    def reset_state(self, start_round: bool = False) -> None:
+        """Reset bombs, lasers, and explosion tracking."""
         self._bombs.clear()
         self._lasers.clear()
+        self._damage_popups.clear()
         self._last_bomb_exploded_at = 0.0
+        self._round_active = start_round
+        if start_round:
+            self._pink_hp = PINK_MAX_HP
+            self._damage_taken_this_round = 0
+            self._bombs_defused_this_round = 0
+            self._player_downed = False
+            self._hud_alpha = 1.0
+            self._hud_fadeout_until = 0.0
+        else:
+            self._hud_alpha = 0.0
+            self._timer.stop()
+            self.hide()
+
+    def restore_player_hp(self, amount: int = PLAYER_MAX_HP) -> None:
+        """Restore player HP (from care, water, or shop consumables)."""
+        now = time.perf_counter()
+        if self._player_hp >= PLAYER_MAX_HP and not self._player_downed:
+            return
+        old_hp = self._player_hp
+        self._player_hp = min(PLAYER_MAX_HP, self._player_hp + amount)
+        self._player_downed = False
+        restored = self._player_hp - old_hp
+        cur_pos = QCursor.pos()
+        self._damage_popups.append(DamagePopup(
+            x=float(cur_pos.x()),
+            y=float(cur_pos.y()) - 22.0,
+            text=f"+{restored} HP!" if restored > 0 else "FULL HP!",
+            color=QColor(80, 255, 120),
+            created_at=now,
+            duration=1.6,
+        ))
+        self._hud_alpha = 1.0
+        self._hud_fadeout_until = max(self._hud_fadeout_until, now + 2.5)
+        if not self.isVisible():
+            self.show()
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
+    def check_passive_regen(self, now: float) -> None:
+        """Passive HP regen when idle and not in combat."""
+        if self._round_active or self.has_active_bombs() or self.has_active_lasers() or self._player_downed:
+            return
+        if self._player_hp >= PLAYER_MAX_HP:
+            return
+        if (now - self._last_regen_time) >= PLAYER_REGEN_INTERVAL_S:
+            self._last_regen_time = now
+            self._player_hp = min(PLAYER_MAX_HP, self._player_hp + 1)
+            cur_pos = QCursor.pos()
+            self._damage_popups.append(DamagePopup(
+                x=float(cur_pos.x()),
+                y=float(cur_pos.y()) - 16.0,
+                text="+1",
+                color=QColor(80, 255, 120),
+                created_at=now,
+                duration=1.0,
+            ))
+            self._hud_alpha = max(self._hud_alpha, 0.75)
+            self._hud_fadeout_until = max(self._hud_fadeout_until, now + 1.8)
+            if not self.isVisible():
+                self.show()
+            if not self._timer.isActive():
+                self._timer.start()
+            self.update()
+
+    def trigger_click_at(self, x: float, y: float) -> bool:
+        """Manually trigger a defusal click at coordinates (used for tests or programmatic events)."""
+        now = time.perf_counter()
+        for b in self._bombs:
+            if b.is_ignited and not b.exploded and not b.kicked:
+                bx = b.x + b.size / 2.0
+                by = b.y + b.size / 2.0
+                dist = math.hypot(x - bx, y - by)
+                if dist <= (b.size / 2.0 + 26.0):
+                    b.kicked = True
+                    b.is_ignited = False
+                    b.kicked_at = now
+                    self._bombs_defused_this_round += 1
+                    target_px = x
+                    target_py = y - 300.0
+                    if self._pet:
+                        target_px = self._pet.x() + self._pet.width() / 2.0
+                        target_py = self._pet.y() + self._pet.height() / 2.0
+                    dx = target_px - bx
+                    dy = target_py - by
+                    t_travel = 0.42
+                    b.vx = dx / t_travel
+                    b.vy = (dy - 0.5 * 1400.0 * (t_travel ** 2)) / t_travel
+                    self._damage_popups.append(DamagePopup(
+                        x=bx,
+                        y=by - 16.0,
+                        text="DEFLECT! \u2728",
+                        color=QColor(255, 220, 0),
+                        created_at=now,
+                        duration=1.2,
+                    ))
+                    return True
+        return False
+
+    def _apply_player_damage(self, damage: int, cx: float, cy: float, now: float) -> None:
+        """Apply damage to the player cursor, deduct HP, grant i-frames, and check for KO."""
+        if self._player_downed or (now < self._player_iframe_until):
+            return
+        self._player_hp = max(0, self._player_hp - damage)
+        self._player_iframe_until = now + PLAYER_IFRAME_DURATION_S
+        self._damage_taken_this_round += damage
+        self._hud_alpha = 1.0
+        self._hud_fadeout_until = max(self._hud_fadeout_until, now + COMBAT_HUD_FADEOUT_S)
+
+        self._damage_popups.append(DamagePopup(
+            x=cx,
+            y=cy - 20.0,
+            text=f"-{damage}",
+            color=QColor(255, 60, 60),
+            created_at=now,
+            duration=1.3,
+        ))
+        log.info("Player took %d damage! HP: %d/%d", damage, self._player_hp, PLAYER_MAX_HP)
+        if self._player_hp <= 0:
+            self._on_player_downed(now)
+
+    def _on_player_downed(self, now: float) -> None:
+        """Triggered when Player HP drops to 0."""
+        self._player_downed = True
+        self._player_downed_until = now + PLAYER_KO_COOLDOWN_S
+        cur_pos = QCursor.pos()
+        self._damage_popups.append(DamagePopup(
+            x=float(cur_pos.x()),
+            y=float(cur_pos.y()) - 30.0,
+            text="-KO-",
+            color=QColor(255, 40, 40),
+            created_at=now,
+            duration=2.5,
+        ))
+        if self._pet and hasattr(self._pet, "_on_player_downed_by_bombs"):
+            self._pet._on_player_downed_by_bombs()
+
+    def _on_pink_defeated(self, now: float) -> None:
+        """Triggered when Pink HP drops to 0 from kicked bombs."""
+        self._bombs.clear()
+        self._lasers.clear()
+        self._round_active = False
+        self._hud_fadeout_until = now + 3.0
+        if self._pet:
+            px = self._pet.x() + self._pet.width() / 2.0
+            py = self._pet.y()
+            self._damage_popups.append(DamagePopup(
+                x=px,
+                y=py - 24.0,
+                text="PINK DEFEATED! \U0001f4a5",
+                color=QColor(255, 215, 0),
+                created_at=now,
+                duration=2.5,
+            ))
+            if hasattr(self._pet, "_on_pink_defeated_by_bombs"):
+                self._pet._on_pink_defeated_by_bombs()
 
     def spawn_bombs(self, origin_x: float, origin_y: float, ground_y: float,
                     screen_rect: QRect, facing_left: bool = True) -> None:
         """Spawn 4 bombs thrown downwards with fanning velocities."""
         self._ground_y = ground_y
+        self._round_active = True
         if self.geometry() != screen_rect:
             self.setGeometry(screen_rect)
 
-        # 4 spread velocities fanning out below
         base_vx = [-220.0, -75.0, 75.0, 220.0]
         if not facing_left:
             base_vx.reverse()
@@ -6477,11 +6755,21 @@ class BombLaserOverlay(QWidget):
                 x=bx, y=by, vx=vx, vy=vy, size=float(BOMB_SIZE)
             ))
 
+        self._last_time = time.perf_counter()
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        set_window_input_transparent(self, True)
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
     def spawn_single_bomb(self, bx: float, by: float, vx: float, vy: float,
                           ground_y: float, screen_rect: QRect,
                           target_mode: str = "random") -> None:
         """Spawn a single bomb into the overlay simulation."""
         self._ground_y = ground_y
+        self._round_active = True
         if self.geometry() != screen_rect:
             self.setGeometry(screen_rect)
 
@@ -6511,6 +6799,80 @@ class BombLaserOverlay(QWidget):
         screen_left = float(self.x())
         screen_right = float(self.x() + self.width())
 
+        # Prune expired damage popups
+        self._damage_popups = [p for p in self._damage_popups if (now - p.created_at) < p.duration]
+
+        # Check auto-revive for downed player
+        if self._player_downed and (now >= self._player_downed_until):
+            self._player_downed = False
+            self._player_hp = PLAYER_MAX_HP
+            self._hud_fadeout_until = now + 2.5
+            cur_pos = QCursor.pos()
+            self._damage_popups.append(DamagePopup(
+                x=float(cur_pos.x()),
+                y=float(cur_pos.y()) - 22.0,
+                text="REVIVED! \u2764",
+                color=QColor(80, 255, 120),
+                created_at=now,
+                duration=1.5,
+            ))
+            log.info("Player auto-revived with 20/20 HP!")
+
+        # Detect left mouse button edge (press transition) for defusing/kicking bombs
+        lbutton_down = False
+        dll = _user32()
+        if dll is not None:
+            try:
+                lbutton_down = bool(dll.GetAsyncKeyState(0x01) & 0x8000)
+            except Exception:
+                pass
+
+        is_click_edge = lbutton_down and not self._last_lbutton_down
+        self._last_lbutton_down = lbutton_down
+
+        cursor_pos = QCursor.pos()
+        cur_x = float(cursor_pos.x())
+        cur_y = float(cursor_pos.y())
+
+        # Clicking on a ticking bomb defuses and kicks it back towards Pink!
+        if is_click_edge and not self._player_downed:
+            for b in self._bombs:
+                if b.is_ignited and not b.exploded and not b.kicked:
+                    bx = b.x + b.size / 2.0
+                    by = b.y + b.size / 2.0
+                    dist = math.hypot(cur_x - bx, cur_y - by)
+                    if dist <= (b.size / 2.0 + 26.0):  # Responsive click hitbox
+                        b.kicked = True
+                        b.is_ignited = False
+                        b.kicked_at = now
+                        self._bombs_defused_this_round += 1
+
+                        # Calculate kick trajectory towards Pink
+                        target_px = cur_x
+                        target_py = cur_y - 300.0
+                        if self._pet:
+                            target_px = self._pet.x() + self._pet.width() / 2.0
+                            target_py = self._pet.y() + self._pet.height() / 2.0
+
+                        dx = target_px - bx
+                        dy = target_py - by
+                        t_travel = 0.42
+                        b.vx = dx / t_travel
+                        b.vy = (dy - 0.5 * 1400.0 * (t_travel ** 2)) / t_travel
+
+                        self._damage_popups.append(DamagePopup(
+                            x=bx,
+                            y=by - 16.0,
+                            text="DEFLECT! \u2728",
+                            color=QColor(255, 220, 0),
+                            created_at=now,
+                            duration=1.2,
+                        ))
+                        self._hud_alpha = 1.0
+                        self._hud_fadeout_until = max(self._hud_fadeout_until, now + COMBAT_HUD_FADEOUT_S)
+                        log.info("Bomb defused and kicked towards Pink! (at %.1f, %.1f)", bx, by)
+                        break
+
         spark_frames = self._bank.frames.get("sparks", [])
         bomb_frames = self._bank.frames.get("bomb", [])
         laser_mid_frames = self._bank.frames.get("laser_mid", [])
@@ -6520,6 +6882,40 @@ class BombLaserOverlay(QWidget):
 
         # Update bombs
         for b in self._bombs:
+            if b.kicked:
+                # Kicked bomb travels upwards in an arc toward Pink
+                b.vy += 1400.0 * dt
+                b.x += b.vx * dt
+                b.y += b.vy * dt
+
+                # Check collision with Pink
+                hit_pink = False
+                if self._pet:
+                    pet_rect = QRectF(self._pet.x(), self._pet.y(), self._pet.width(), self._pet.height())
+                    hit_pink = pet_rect.contains(QPointF(b.x + b.size / 2.0, b.y + b.size / 2.0))
+                elif (now - b.kicked_at) >= 0.42:
+                    hit_pink = True
+
+                if hit_pink or (now - b.kicked_at) >= 0.42:
+                    b.exploded = True
+                    self._pink_hp = max(0, self._pink_hp - BOMB_KICK_DAMAGE)
+                    px = self._pet.x() + self._pet.width() / 2.0 if self._pet else b.x
+                    py = self._pet.y() if self._pet else b.y
+                    self._damage_popups.append(DamagePopup(
+                        x=px,
+                        y=py,
+                        text=f"-{BOMB_KICK_DAMAGE}",
+                        color=QColor(255, 80, 160),
+                        created_at=now,
+                        duration=1.2,
+                    ))
+                    log.info("Kicked bomb hit Pink! Pink HP: %d/%d", self._pink_hp, PINK_MAX_HP)
+                    if self._pink_hp <= 0:
+                        self._on_pink_defeated(now)
+                    elif self._pet and hasattr(self._pet, "_on_pink_hit_by_bomb"):
+                        self._pet._on_pink_hit_by_bomb()
+                continue
+
             gravity = BOMB_GRAVITY_PX_S2 if b.has_bounced else BOMB_FIRST_FALL_GRAVITY_PX_S2
             b.vy += gravity * dt
             b.x += b.vx * dt
@@ -6543,8 +6939,6 @@ class BombLaserOverlay(QWidget):
                         target_x = max(min_x, min(max_x, cursor_x))
                         dx = target_x - center_x
                         b.vx = max(-1000.0, min(1000.0, dx / 0.75))
-                        # Gentle upward bounce that reaches apex and lands back near ground at ~0.75s
-                        # (flight time = 2 * vy / g = 2 * 490 / 1300 = 0.754s)
                         b.vy = -490.0
                     elif b.target_mode == "near":
                         b.fuse_duration = random.uniform(1.3, 1.7)
@@ -6581,10 +6975,19 @@ class BombLaserOverlay(QWidget):
                 if b.fuse_time <= 0.0:
                     b.exploded = True
                     self._last_bomb_exploded_at = now
+
+                    # Ground zero direct blast check on cursor
+                    bx = b.x + b.size / 2.0
+                    by = b.y + b.size / 2.0
+                    dist_to_cursor = math.hypot(cur_x - bx, cur_y - by)
+                    if dist_to_cursor <= (b.size / 2.0 + 16.0):
+                        if now >= self._player_iframe_until and not self._player_downed:
+                            self._apply_player_damage(BOMB_DIRECT_DAMAGE, cur_x, cur_y, now)
+
                     # Detonate into cross laser
                     self._lasers.append(LaserCross(
-                        cx=b.x + b.size / 2.0,
-                        cy=b.y + b.size / 2.0,
+                        cx=bx,
+                        cy=by,
                     ))
                     continue
 
@@ -6604,7 +7007,6 @@ class BombLaserOverlay(QWidget):
         self._bombs = [b for b in self._bombs if not b.exploded]
 
         # Update lasers
-        cursor_pos = QCursor.pos()
         for laser in self._lasers:
             laser.extend_length += LASER_EXTEND_SPEED_PX_S * dt
             laser.frame_timer += dt
@@ -6617,33 +7019,56 @@ class BombLaserOverlay(QWidget):
             # Laser hit detection on mouse cursor
             if not laser.hit_detected:
                 half = LASER_SIZE / 2.0
-                hit_vert = abs(cursor_pos.x() - laser.cx) <= half
-                hit_horiz = abs(cursor_pos.y() - laser.cy) <= half
+                hit_vert = abs(cur_x - laser.cx) <= half
+                hit_horiz = abs(cur_y - laser.cy) <= half
                 if hit_vert or hit_horiz:
                     laser.hit_detected = True
-                    log.info("Cursor hit by laser cross beam! (laser cx=%.1f, cy=%.1f, cursor=%d, %d)",
-                             laser.cx, laser.cy, cursor_pos.x(), cursor_pos.y())
+                    log.info("Cursor hit by laser cross beam! (laser cx=%.1f, cy=%.1f, cursor=%.0f, %.0f)",
+                             laser.cx, laser.cy, cur_x, cur_y)
+                    if now >= self._player_iframe_until and not self._player_downed:
+                        self._apply_player_damage(LASER_DAMAGE, cur_x, cur_y, now)
 
         # Remove finished lasers
         self._lasers = [l for l in self._lasers if not l.finished]
 
-        # Auto-hide when done
-        if not self._bombs and not self._lasers:
+        # Check round end (flawless dodge or survived with scratches)
+        if self._round_active and not self.has_active_bombs() and not self.has_active_lasers():
+            self._round_active = False
+            if self._pink_hp > 0 and not self._player_downed and self._pet:
+                if self._damage_taken_this_round == 0:
+                    if hasattr(self._pet, "_on_flawless_dodge"):
+                        self._pet._on_flawless_dodge()
+                else:
+                    if hasattr(self._pet, "_on_survived_bombs"):
+                        self._pet._on_survived_bombs()
+
+        # HUD alpha fade in / out
+        combat_busy = (self.has_active_bombs() or self.has_active_lasers()
+                       or self._round_active or (now < self._hud_fadeout_until)
+                       or bool(self._damage_popups))
+        if combat_busy:
+            self._hud_alpha = min(1.0, self._hud_alpha + dt * 4.0)
+        else:
+            self._hud_alpha = max(0.0, self._hud_alpha - dt * 2.0)
+
+        # Auto-hide when fully done and faded out
+        if not self.has_active_bombs() and not self.has_active_lasers() and not self._damage_popups and self._hud_alpha <= 0.001:
             self._timer.stop()
             self.hide()
 
         self.update()
 
     def paintEvent(self, event) -> None:
+        now = time.perf_counter()
         painter = QPainter(self)
         painter.setCompositionMode(QPainter.CompositionMode_Source)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
-        screen_offset_x = self.x()
-        screen_offset_y = self.y()
-        win_w = self.width()
-        win_h = self.height()
+        screen_offset_x = float(self.x())
+        screen_offset_y = float(self.y())
+        win_w = float(self.width())
+        win_h = float(self.height())
 
         mid_frames = self._bank.frames.get("laser_mid", [])
         ext_v_frames = self._bank.frames.get("laser_extend", [])
@@ -6712,6 +7137,17 @@ class BombLaserOverlay(QWidget):
             bx = b.x - screen_offset_x
             by = b.y - screen_offset_y
 
+            if b.kicked:
+                if bomb_frames:
+                    b_pix = bomb_frames[0].pixmap
+                    painter.save()
+                    painter.translate(bx + b.size / 2.0, by + b.size / 2.0)
+                    elapsed_kicked = now - b.kicked_at
+                    painter.rotate(elapsed_kicked * 720.0)
+                    painter.drawPixmap(QPointF(-b.size / 2.0, -b.size / 2.0), b_pix)
+                    painter.restore()
+                continue
+
             if bomb_frames:
                 b_pix = bomb_frames[min(b.bomb_frame_idx, len(bomb_frames) - 1)].pixmap
                 painter.drawPixmap(QPointF(bx, by), b_pix)
@@ -6723,6 +7159,137 @@ class BombLaserOverlay(QWidget):
                 tip_x = bx + tip_frac_x * b.size
                 tip_y = by + tip_frac_y * b.size
                 painter.drawPixmap(QPointF(tip_x - SPARK_SIZE / 2.0, tip_y - SPARK_SIZE / 2.0), s_pix)
+
+        # Draw Damage / Heal Popups
+        font_pop = painter.font()
+        if getattr(self, "_font_family", None):
+            font_pop.setFamily(self._font_family)
+        else:
+            font_pop.setFamily("monospace")
+        font_pop.setPixelSize(12)
+        font_pop.setBold(True)
+        painter.setFont(font_pop)
+
+        for popup in self._damage_popups:
+            elapsed = now - popup.created_at
+            if elapsed >= popup.duration:
+                continue
+            progress = elapsed / popup.duration
+            fade = max(0.0, min(1.0, 1.0 - progress))
+            py = popup.y + popup.vy * elapsed - screen_offset_y
+            px = popup.x - screen_offset_x
+            popup_alpha = int(fade * 255)
+
+            # Text shadow / dark outline
+            painter.setPen(QColor(0, 0, 0, popup_alpha))
+            for ox, oy in ((-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (0.0, 1.0), (0.0, -1.0)):
+                painter.drawText(QPointF(px + ox - 20.0, py + oy), popup.text)
+
+            c = QColor(popup.color)
+            c.setAlpha(popup_alpha)
+            painter.setPen(c)
+            painter.drawText(QPointF(px - 20.0, py), popup.text)
+
+        # Draw Floating Cursor HUD & Boss Bar
+        if self._hud_alpha > 0.005:
+            painter.setOpacity(self._hud_alpha)
+
+            # 1. Floating Cursor HUD
+            cursor_pos = QCursor.pos()
+            cx = float(cursor_pos.x()) - screen_offset_x
+            cy = float(cursor_pos.y()) - screen_offset_y
+
+            hud_w = 112.0
+            hud_h = 24.0
+            hud_x = cx + 24.0
+            hud_y = cy + 14.0
+
+            if hud_x + hud_w > win_w - 10.0:
+                hud_x = cx - hud_w - 12.0
+            if hud_y + hud_h > win_h - 10.0:
+                hud_y = cy - hud_h - 8.0
+            hud_x = max(8.0, hud_x)
+            hud_y = max(8.0, hud_y)
+
+            # Undertale retro panel
+            painter.setPen(QColor(255, 255, 255, 210))
+            painter.setBrush(QColor(0, 0, 0, 210))
+            painter.drawRoundedRect(QRectF(hud_x, hud_y, hud_w, hud_h), 3.0, 3.0)
+
+            # Red Soul Heart Icon
+            is_iframe = (now < self._player_iframe_until)
+            blink = is_iframe and (int(now * 18) % 2 == 0)
+            if not blink:
+                heart_pix = self._soul_heart_cracked_pixmap if self._player_downed else self._soul_heart_pixmap
+                painter.drawPixmap(QPointF(hud_x + 5.0, hud_y + 4.0), heart_pix)
+
+            # Player HP Bar
+            bar_x = hud_x + 26.0
+            bar_y = hud_y + 11.0
+            bar_w = 46.0
+            bar_h = 8.0
+
+            painter.fillRect(QRectF(bar_x, bar_y, bar_w, bar_h), QColor(190, 0, 0))
+            fill_ratio = max(0.0, min(1.0, self._player_hp / float(PLAYER_MAX_HP)))
+            fill_w = bar_w * fill_ratio
+            fill_color = QColor(255, 255, 0) if self._player_hp > 5 else QColor(255, 70, 70)
+            painter.fillRect(QRectF(bar_x, bar_y, fill_w, bar_h), fill_color)
+
+            painter.setPen(QColor(0, 0, 0, 220))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(bar_x, bar_y, bar_w, bar_h))
+
+            # Player HP label and number
+            font_hud = QFont(font_pop)
+            font_hud.setPixelSize(8)
+            font_hud.setBold(True)
+            painter.setFont(font_hud)
+            painter.setPen(QColor(255, 220, 0))
+            painter.drawText(QRectF(bar_x, hud_y + 2.0, 30.0, 8.0),
+                             Qt.AlignVCenter | Qt.AlignLeft, "HP")
+
+            font_num = QFont(font_pop)
+            font_num.setPixelSize(10)
+            font_num.setBold(True)
+            painter.setFont(font_num)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(QRectF(hud_x + 75.0, hud_y + 1.0, 32.0, 22.0),
+                             Qt.AlignVCenter | Qt.AlignLeft, f"{self._player_hp:02d}")
+
+            # 2. Pink Boss Mini-Bar (Floating above Pink when combat is active)
+            if self._pet and self._round_active and self._pink_hp > 0:
+                pet_cx = (self._pet.x() + self._pet.width() / 2.0) - screen_offset_x
+                pet_top = self._pet.y() - screen_offset_y
+                boss_w = 84.0
+                boss_h = 18.0
+                boss_x = pet_cx - boss_w / 2.0
+                boss_y = pet_top - boss_h - 6.0
+
+                painter.setPen(QColor(255, 180, 220, 220))
+                painter.setBrush(QColor(20, 10, 20, 210))
+                painter.drawRoundedRect(QRectF(boss_x, boss_y, boss_w, boss_h), 2.0, 2.0)
+
+                painter.setFont(font_hud)
+                painter.setPen(QColor(255, 140, 190))
+                painter.drawText(QRectF(boss_x + 4.0, boss_y + 1.0, 30.0, 8.0),
+                                 Qt.AlignVCenter | Qt.AlignLeft, "PINK")
+
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(QRectF(boss_x + boss_w - 36.0, boss_y + 1.0, 32.0, 8.0),
+                                 Qt.AlignVCenter | Qt.AlignRight, f"{self._pink_hp:02d}/{PINK_MAX_HP}")
+
+                pbar_x = boss_x + 4.0
+                pbar_y = boss_y + 9.0
+                pbar_w = boss_w - 8.0
+                pbar_h = 6.0
+                painter.fillRect(QRectF(pbar_x, pbar_y, pbar_w, pbar_h), QColor(100, 20, 50))
+                pfill_ratio = max(0.0, min(1.0, self._pink_hp / float(PINK_MAX_HP)))
+                painter.fillRect(QRectF(pbar_x, pbar_y, pbar_w * pfill_ratio, pbar_h), QColor(255, 80, 160))
+                painter.setPen(QColor(0, 0, 0, 200))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(pbar_x, pbar_y, pbar_w, pbar_h))
+
+            painter.setOpacity(1.0)
 
         painter.end()
 
@@ -7331,7 +7898,7 @@ class YellowsPixelBuddies(QWidget):
         self._overlay_frame_idx = 0
         self._overlay_pixmap: QPixmap | None = None
         self._vfx_overlay = VfxOverlay()
-        self._bomb_overlay = BombLaserOverlay(bank)
+        self._bomb_overlay = BombLaserOverlay(bank, self, self._font_family)
         self._dialogue_overlay = DialogueOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._dialogue_overlay.dismissed.connect(self._on_dialogue_dismissed)
         self._dialogue_overlay.step_started.connect(self._on_dialogue_step_started)
@@ -7871,6 +8438,8 @@ class YellowsPixelBuddies(QWidget):
         if any(w in lower_choice for w in ("drank", "water", "cup", "hydrat", "eating", "ate", "food", "snack", "meal", "fed")):
             self._last_hydration_check_time = now
             self._last_care_question_time = now
+            if hasattr(self, "_bomb_overlay") and self._bomb_overlay:
+                self._bomb_overlay.restore_player_hp(PLAYER_MAX_HP)
         if hasattr(self, "_memory") and self._memory:
             # Extract any permanent facts embedded in the reaction
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
@@ -10376,6 +10945,8 @@ RULES:
 
     def _finish_throw_sequence(self) -> None:
         """Finished 4-bomb barrage floating mid-air: fall laughing down to the ground."""
+        if hasattr(self, "_bomb_overlay") and self._bomb_overlay.pink_hp <= 0:
+            return  # Pink was defeated; defeat sequence handled fall and reaction
         self._anim_timer.setInterval(FRAME_INTERVAL_MS.get("laughing", ANIM_INTERVAL_MS))
         self._hang_bomb_count_remaining = 0
         self._hang_bomb_index = 0
@@ -10395,6 +10966,8 @@ RULES:
         """
         if self._throw_started_at > 0.0 and (now - self._throw_started_at) > 20.0:
             return True  # failsafe timeout
+        if hasattr(self, "_bomb_overlay") and self._bomb_overlay.pink_hp <= 0:
+            return True  # Pink was defeated by deflected bombs
         if self._hang_bomb_count_remaining > 0:
             return False
         if self._bomb_overlay.has_active_bombs():
@@ -10405,6 +10978,60 @@ RULES:
         if last_exploded <= 0.0:
             return False
         return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
+
+    def _on_pink_hit_by_bomb(self) -> None:
+        """Pink gets struck by her own kicked-back bomb."""
+        if self._phase is Phase.THROW or self._post_throw_laugh:
+            candidates = [s for s in ("shocked", "angry") if self._can_play(s)]
+            if candidates:
+                self._play(candidates[0], loop=False)
+
+    def _on_pink_defeated_by_bombs(self) -> None:
+        """Pink is defeated by the user kicking back bombs."""
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._post_throw_laugh = False
+
+        if self._can_play("burnt"):
+            self._play("burnt")
+            if "explosion" in self._bank.frames:
+                self._start_overlay("explosion")
+        else:
+            self._play("shocked")
+
+        defeated_lines = DIALOGUE_LINES.get("pink_defeated", [
+            "* W-WHAT?! You kicked my own bomb right back at me?! Cheater!! Mew!",
+        ])
+        self._say(random.choice(defeated_lines), force=True, auto_dismiss=True)
+        self._begin_fall(JUMP_GRAVITY_PX_S2, reaction="embarrassed")
+
+    def _on_player_downed_by_bombs(self) -> None:
+        """User reached 0 HP from bomb/laser barrage."""
+        downed_lines = DIALOGUE_LINES.get("player_downed", [
+            "* AHAHAHA! Direct hit! Total feline victory, mew!",
+        ])
+        self._say(random.choice(downed_lines), force=True, auto_dismiss=True)
+        if self._can_play("laughing"):
+            self._play("laughing", loop=True)
+
+    def _on_flawless_dodge(self) -> None:
+        """User dodged all bombs and lasers without taking damage."""
+        flawless_lines = DIALOGUE_LINES.get("flawless_dodge", [
+            "* W-What?! You dodged every single bomb?! Impossible... you're cheating, minion!",
+        ])
+        self._say(random.choice(flawless_lines), force=True, auto_dismiss=True)
+        if self._can_play("shocked"):
+            self._play("shocked")
+
+    def _on_survived_bombs(self) -> None:
+        """User survived the bomb attack with scratches."""
+        survived_lines = DIALOGUE_LINES.get("survived_bombs", [
+            "* Barely made it out of that one, dummy! My laser aim is getting sharper!",
+        ])
+        self._say(random.choice(survived_lines), force=True, auto_dismiss=True)
+        if self._can_play("tongue"):
+            self._play("tongue")
 
     def _keep_angry(self) -> None:
         """Keep Pink continuously mad while clicks keep coming in the angry spam."""
@@ -10644,6 +11271,8 @@ RULES:
         self._last_tick = now
         cursor = QCursor.pos()                      # THE cursor sample of this tick (no extra timer)
         self._track_cursor(cursor, now, real_dt)
+        if hasattr(self, "_bomb_overlay") and self._bomb_overlay:
+            self._bomb_overlay.check_passive_regen(now)
         if getattr(self, "_hidden_in_tray", False):
             return
         if getattr(self, "_is_ghost_talking", False):
@@ -11573,7 +12202,7 @@ RULES:
         self._phase = Phase.THROW
         self._post_throw_laugh = False
         self._say("throw", force=True)
-        self._bomb_overlay.reset_state()
+        self._bomb_overlay.reset_state(start_round=True)
         pair = ["near", "beneath"]
         random.shuffle(pair)
         self._bomb_target_plan = ["random", "random"] + pair

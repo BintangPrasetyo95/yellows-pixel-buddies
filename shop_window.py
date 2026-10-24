@@ -984,6 +984,8 @@ class DeltaruneShopWindow(QWidget):
                 self._pet._play("shocked")
             self.set_dialogue(alarm_msg)
             self._wallet.add(2)
+            if self._pet and hasattr(self._pet, "_bomb_overlay") and self._pet._bomb_overlay:
+                self._pet._bomb_overlay.restore_player_hp(20)
 
     # --- Evidence Detection (Screen + Sessions) --------------------------------
 
@@ -1147,6 +1149,8 @@ class DeltaruneShopWindow(QWidget):
         val = self.evaluate_goal_value(text)
         if self._delete_goal(text):
             self._wallet.add(val)
+            if self._pet and hasattr(self._pet, "_bomb_overlay") and self._pet._bomb_overlay:
+                self._pet._bomb_overlay.restore_player_hp(20)
             self.set_dialogue(
                 f"* TARGET MILESTONE CONQUERED!!\n* You finished: \"{text}\"\n* Pink evaluated your achievement at +P$ {val:06d}!"
             )
@@ -1271,6 +1275,8 @@ class DeltaruneShopWindow(QWidget):
         ok, deleted_text = self._memory.delete_reminder(text)
         if ok:
             self._wallet.add(reward)
+            if self._pet and hasattr(self._pet, "_bomb_overlay") and self._pet._bomb_overlay:
+                self._pet._bomb_overlay.restore_player_hp(20)
             self.set_dialogue(
                 f"{CANON_SELL_SUCCESS}\n* \"{deleted_text}\" finished! (+P$ {reward:02d})"
             )
