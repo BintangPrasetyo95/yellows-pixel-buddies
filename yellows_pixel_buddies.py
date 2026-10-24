@@ -1537,6 +1537,13 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* KABOOM! That's what you get for underestimating my bombs!",
         "* Downed! My laser aim is utterly unmatched, puppet!",
     ],
+    # Pink struck by kicked-back bomb (non-lethal hit)
+    "pink_hit_by_bomb": [
+        "* OUCH! Watch where you're kicking that, minion! Mew!",
+        "* GAH! That was meant for YOU, not me!!",
+        "* H-HEY! Kicking my own bombs back is against the rules!!",
+        "* MEOW?! Direct hit to my cute face! You'll pay for that!",
+    ],
     # Pink defeated by deflected bombs
     "pink_defeated": [
         "* W-WHAT?! You kicked my own bomb right back at me?! Cheater!! Mew!",
@@ -6488,6 +6495,8 @@ class BombLaserOverlay(QWidget):
         self._damage_popups: list[DamagePopup] = []
         self._ground_y: float = 0.0
         self._last_bomb_exploded_at: float = 0.0
+        self._round_started_at: float = 0.0
+        self._last_bomb_resolved_at: float = 0.0
 
         # Undertale 20 HP Scale & Combat State
         self._player_hp: int = PLAYER_MAX_HP
@@ -6563,6 +6572,14 @@ class BombLaserOverlay(QWidget):
     def last_bomb_exploded_at(self) -> float:
         return self._last_bomb_exploded_at
 
+    @property
+    def round_started_at(self) -> float:
+        return self._round_started_at
+
+    @property
+    def last_bomb_resolved_at(self) -> float:
+        return self._last_bomb_resolved_at
+
     def has_active_bombs(self) -> bool:
         """True if any unexploded bombs are currently bouncing, falling, or kicked."""
         return any(not b.exploded for b in self._bombs)
@@ -6577,6 +6594,8 @@ class BombLaserOverlay(QWidget):
         self._lasers.clear()
         self._damage_popups.clear()
         self._last_bomb_exploded_at = 0.0
+        self._round_started_at = time.perf_counter() if start_round else 0.0
+        self._last_bomb_resolved_at = 0.0
         self._round_active = start_round
         if start_round:
             self._pink_hp = PINK_MAX_HP
@@ -6719,6 +6738,7 @@ class BombLaserOverlay(QWidget):
         self._bombs.clear()
         self._lasers.clear()
         self._round_active = False
+        self._last_bomb_resolved_at = now
         self._hud_fadeout_until = now + 3.0
         if self._pet:
             px = self._pet.x() + self._pet.width() / 2.0
@@ -6898,6 +6918,7 @@ class BombLaserOverlay(QWidget):
 
                 if hit_pink or (now - b.kicked_at) >= 0.42:
                     b.exploded = True
+                    self._last_bomb_resolved_at = now
                     total_b = getattr(self._pet, "bomb_count", BOMB_COUNT) if self._pet else BOMB_COUNT
                     kick_dmg = max(1, math.ceil(PINK_MAX_HP / float(total_b)))
                     self._pink_hp = max(0, self._pink_hp - kick_dmg)
@@ -6977,6 +6998,7 @@ class BombLaserOverlay(QWidget):
                 if b.fuse_time <= 0.0:
                     b.exploded = True
                     self._last_bomb_exploded_at = now
+                    self._last_bomb_resolved_at = now
 
                     # Ground zero direct blast check on cursor
                     bx = b.x + b.size / 2.0
@@ -8340,7 +8362,7 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved" and not force:
             return
-        if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
+        if not force and (getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                               Phase.SUMMON_INTRO, Phase.EXIT_OUTRO)
                 or getattr(self, "_jump_active", False)
@@ -8460,7 +8482,11 @@ class YellowsPixelBuddies(QWidget):
             not auto_dismiss
             or getattr(self, "_user_away_notified", False)
             or (getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved")
-            or dialogue_category in ("annoyed_ignored", "annoyed_resolved", "welcome_back", "startup_summon", "error")
+            or dialogue_category in (
+                "annoyed_ignored", "annoyed_resolved", "welcome_back", "startup_summon", "error",
+                "throw", "land", "pink_hit_by_bomb", "pink_defeated", "player_downed", "flawless_dodge", "survived_bombs"
+            )
+            or category_or_text in ("throw", "land", "pink_hit_by_bomb", "pink_defeated", "player_downed", "flawless_dodge", "survived_bombs")
             or line.startswith(("* Inspecting", "* Watching", "* Hold your horses", "* Rebooting", "* ...", "* ..?"))
         ):
             track_ignore = False
@@ -8835,6 +8861,12 @@ RULES:
             return False
         if getattr(self, "_hidden_in_tray", False):
             return False
+        if getattr(self, "_phase", None) in (
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+        ):
+            return False
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -9125,6 +9157,8 @@ RULES:
         """
         if getattr(self, "_is_annoyed_ignored", False):
             return
+        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW):
+            return
         self._is_annoyed_ignored = True
         self._annoyed_reason = reason
         self._consecutive_ignored_dialogues = 5 if reason == "moving" else 2
@@ -9228,7 +9262,7 @@ RULES:
             self._single_click_timer.stop()
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
-        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.DRAG):
+        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG):
             return
         if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
             self._say("* Hold your horses, minion! I'm still thinking about your screen or last question!", force=True, record_memory=False)
@@ -9962,13 +9996,13 @@ RULES:
         if not api_key:
             return
 
-        if self._is_dialogue_convo_active():
-            return
-
         if getattr(self, "_phase", None) in (
             Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
-            Phase.DRAG, Phase.JUMP,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
         ):
+            return
+
+        if self._is_dialogue_convo_active():
             return
 
         if getattr(self, "_jump_active", False) or getattr(self, "_dragging", False):
@@ -10006,6 +10040,12 @@ RULES:
         """Capture desktop screen in background and generate spontaneous commentary via Gemini AI."""
         api_key = self._memory.get_api_key()
         if not api_key:
+            return
+
+        if getattr(self, "_phase", None) in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
             return
 
         if self._gemini_thread is not None and self._gemini_thread.isRunning():
@@ -10583,7 +10623,8 @@ RULES:
             return
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+                           Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
             return
@@ -10674,6 +10715,12 @@ RULES:
             return
         api_key = self._memory.get_api_key()
         if not api_key:
+            return
+
+        if getattr(self, "_phase", None) in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
             return
 
         clean_artist = artist.strip()
@@ -11051,27 +11098,65 @@ RULES:
         Must laugh until all bombs have exploded, all lasers have cleared, and at least
         BOMB_LAUGH_EXTRA_S has elapsed since the last bomb explosion.
         """
-        if self._throw_started_at > 0.0 and (now - self._throw_started_at) > 20.0:
+        if getattr(self, "_throw_started_at", 0.0) > 0.0 and (now - self._throw_started_at) > 12.0:
             return True  # failsafe timeout
-        if hasattr(self, "_bomb_overlay") and self._bomb_overlay.pink_hp <= 0:
-            return True  # Pink was defeated by deflected bombs
-        if self._hang_bomb_count_remaining > 0:
-            return False
-        if self._bomb_overlay.has_active_bombs():
-            return False
-        if self._bomb_overlay.has_active_lasers():
-            return False
-        last_exploded = self._bomb_overlay.last_bomb_exploded_at
-        if last_exploded <= 0.0:
-            return False
-        return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
+        if hasattr(self, "_bomb_overlay"):
+            if self._bomb_overlay.pink_hp <= 0:
+                return True  # Pink was defeated by deflected bombs
+            if self._bomb_overlay.has_active_bombs():
+                return False
+            if self._bomb_overlay.has_active_lasers():
+                return False
+            last_exploded = self._bomb_overlay.last_bomb_exploded_at
+            if last_exploded > 0.0:
+                return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
+            last_resolved = getattr(self._bomb_overlay, "last_bomb_resolved_at", 0.0)
+            if last_resolved > 0.0:
+                return now >= (last_resolved + 1.0)
+        return True
 
     def _on_pink_hit_by_bomb(self) -> None:
         """Pink gets struck by her own kicked-back bomb."""
-        if self._phase is Phase.THROW or self._post_throw_laugh:
-            candidates = [s for s in ("shocked", "angry") if self._can_play(s)]
-            if candidates:
-                self._play(candidates[0], loop=False)
+        now = time.perf_counter()
+        self._post_throw_laugh = False
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
+        self._bombs_spawned_for_current_throw = False
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay._last_bomb_resolved_at = now
+
+        reaction = "shocked" if self._can_play("shocked") else ("angry" if self._can_play("angry") else None)
+
+        bounds = self._bounds()
+        ground_y = bounds[3]
+        is_airborne = (self._phase in (Phase.THROW, Phase.HANG, Phase.JUMP, Phase.FALL)
+                       or self._y < ground_y - 8.0)
+
+        hit_lines = DIALOGUE_LINES.get("pink_hit_by_bomb", [
+            "* OUCH! Watch where you're kicking that, minion! Mew!",
+            "* GAH! That was meant for YOU, not me!!",
+            "* H-HEY! Kicking my own bombs back is against the rules!!",
+            "* MEOW?! Direct hit to my cute face! You'll pay for that!",
+        ])
+        self._say(random.choice(hit_lines), force=True, auto_dismiss=True, track_ignore=False)
+
+        if is_airborne:
+            self._begin_fall(JUMP_GRAVITY_PX_S2, reaction=reaction)
+            if reaction:
+                self._play(reaction, loop=False)
+            else:
+                self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        else:
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            self._brain_timer.stop()
+            self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+            if reaction:
+                self._play(reaction, loop=False)
+            else:
+                self._play("idle")
 
     def _on_pink_defeated_by_bombs(self) -> None:
         """Pink is defeated by the user kicking back bombs."""
@@ -11157,6 +11242,27 @@ RULES:
 
         if self._phase is Phase.HANG:
             self._play(HANGING_STATE, mirrored=self._hang_mirrored())
+            return
+
+        # Failsafe: if an animation ends while in THROW phase, end the throw sequence cleanly
+        if self._phase is Phase.THROW:
+            self._finish_throw_sequence()
+            return
+
+        # Failsafe: if an animation ends while falling or jumping, restore airborne sprite
+        if self._phase in (Phase.FALL, Phase.JUMP):
+            self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+            return
+
+        # Failsafe: if buddy is physically in mid-air and not in special non-falling phases, drop to earth
+        bounds = self._bounds()
+        ground_y = bounds[3]
+        if self._y < ground_y - 6.0 and self._phase not in (
+            Phase.HANG, Phase.DRAG, Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+            Phase.SUMMON_INTRO, Phase.SUMMON_DIALOGUE
+        ):
+            self._begin_fall(JUMP_GRAVITY_PX_S2, reaction=None)
+            self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
             return
 
         if getattr(self, "_is_annoyed_ignored", False):
@@ -11413,11 +11519,29 @@ RULES:
             return
 
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
+            if now - getattr(self, "_hang_started_at", now) > 15.0:
+                log.warning("Phase.HANG watchdog: hang timed out (>15.0s). Forcing release.")
+                self._fall_after_jump(RELEASE_REACTION)
+                return
             self._tick_hang(cursor, now, dt, bounds)
             self._sync_window_position()
             return
 
         if self._phase is Phase.THROW:              # stops hanging from cursor, floats mid-air
+            # Watchdog 1: Not in throw animation -> force fall
+            if self.state not in (THROW_STATE, mirrored_key(THROW_STATE)):
+                log.warning("Phase.THROW watchdog: state '%s' is not throw. Forcing fall.", self.state)
+                self._finish_throw_sequence()
+                self._sync_window_position()
+                return
+
+            # Watchdog 2: Throw duration timeout (>8.0s) -> force fall
+            if now - getattr(self, "_throw_started_at", 0.0) > 8.0:
+                log.warning("Phase.THROW watchdog: throw timed out (>8.0s). Forcing fall.")
+                self._finish_throw_sequence()
+                self._sync_window_position()
+                return
+
             # First throw frames 1-5: float smoothly upwards
             if self._throw_rise_px > 0.0:
                 rise_dur_s = 5 * (THROW_BASE_INTERVAL_MS / 1000.0)
@@ -11456,8 +11580,13 @@ RULES:
         if self._phase in (Phase.FALL, Phase.JUMP):
             self._tick_airborne(cursor, now, dt, bounds)
         else:
-            self._y = ground_y
-            self._vy = 0.0
+            if not self._dragging:
+                if self._y < ground_y - 12.0:
+                    log.warning("Mid-air walk/pause watchdog: buddy at y=%.1f (ground=%.1f). Forcing fall.", self._y, ground_y)
+                    self._begin_fall(JUMP_GRAVITY_PX_S2, reaction="embarrassed")
+                    return
+                self._y = ground_y
+                self._vy = 0.0
 
         self._sync_window_position()
 
@@ -11715,6 +11844,12 @@ RULES:
 
         api_key = self._memory.get_api_key()
         if not api_key:
+            return
+
+        if getattr(self, "_phase", None) in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
             return
 
         if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
@@ -12131,6 +12266,7 @@ RULES:
         self._pending_reaction = None
         self._wall_bounced = False
         self._can_catch_cursor = True
+        self._airborne_started_at = time.perf_counter()
         self._shake_trail.clear()
         self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
         log.debug("Jump %s: rise %.0f px (asked %.0f), launch %.0f px/s, apex in %.2f s, "
@@ -12142,6 +12278,18 @@ RULES:
                        bounds: tuple[float, float, float, float]) -> None:
         """One gravity step of a JUMP (rise, apex, fall after a miss) or of a FALL; ends on touchdown."""
         _min_x, _max_x, min_y, ground_y = bounds
+
+        # Failsafe: gravity must be active
+        if self._gravity <= 0.0:
+            self._gravity = JUMP_GRAVITY_PX_S2
+
+        # Failsafe watchdog: buddy airborne for >8.0s continuously
+        if now - getattr(self, "_airborne_started_at", now) > 8.0:
+            log.warning("Airborne watchdog: buddy airborne for >8.0s. Forcing touchdown.")
+            self._y = ground_y
+            self._touch_down()
+            return
+
         vy_before = self._vy
         self._y += self._vy * dt + 0.5 * self._gravity * dt * dt
         self._vy += self._gravity * dt
@@ -12160,7 +12308,7 @@ RULES:
             self._resolve_apex(cursor, now)          # the vertical speed just crossed zero
 
         # Touch-down. NEVER while she is moving upward: a launch starts exactly ON the ground.
-        if self._vy >= 0.0 and self._y >= ground_y:
+        if (self._vy >= 0.0 and self._y >= ground_y) or (self._y >= ground_y + 12.0):
             self._y = ground_y
             self._touch_down()
 
@@ -12381,6 +12529,7 @@ RULES:
         self._vx = 0.0
         self._pending_reaction = reaction
         self._can_catch_cursor = False
+        self._airborne_started_at = time.perf_counter()
         self._last_tick = time.perf_counter()
 
     def _fall_after_jump(self, reaction: str | None) -> None:
@@ -12638,11 +12787,13 @@ RULES:
             self._single_click_timer.stop()
 
         is_already_jumping = (self._phase is Phase.JUMP)
+        self._leave_hang()
         self._jump_active = False
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._phase = Phase.JUMP
         self._gravity = JUMP_GRAVITY_PX_S2
+        self._airborne_started_at = time.perf_counter()
 
         if is_already_jumping:
             # Mid-air juggling boost!
@@ -12922,7 +13073,8 @@ RULES:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+                           Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
             return
@@ -13247,7 +13399,7 @@ RULES:
             self._jump_action.blockSignals(False)
         if hasattr(self, "_jump_chance_widget") and self._jump_chance_widget is not None:
             self._jump_chance_widget.setEnabled(self._jump_enabled and getattr(self, "_jump_sprites_ready", True))
-        if not self._jump_enabled and self._phase in (Phase.JUMP, Phase.HANG):
+        if not self._jump_enabled and self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
             self._fall_after_jump(None)
         log.info("Jump to cursor mode: %s", "ENABLED" if self._jump_enabled else "DISABLED")
 
