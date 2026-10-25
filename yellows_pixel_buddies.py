@@ -16,8 +16,9 @@ Sprites (next to this script)
         so the script always runs.
     new states      : run_left, run_right                          (movement, looping)
                       wistful_walk_left, wistful_walk_right        (slow movement, looping)
-                      embarrassed, overjoyed, wistful, sad,
-                      crying, tongue, kneeling, behind             (random specials)
+                      embarrassed, wistful, sad,
+                      tongue, kneeling, behind                     (random specials)
+                      overjoyed, crying                            (exceptional / AI-triggered)
                       angry                                        (triggered reaction)
                       airborne, hanging                            (jump to the cursor, looping)
         A missing / empty folder means the state is never used (no placeholder), so
@@ -354,6 +355,17 @@ LASER_EXTEND_SPEED_PX_S = 6000.0  # speed at which laser beam extends outwards
 BOMB_PHYSICS_INTERVAL_MS = 16     # physics & overlay tick interval (~60 FPS)
 BOMB_LAUGH_EXTRA_S = 1.3          # seconds to laugh after the last bomb explodes (1+ sec)
 
+# --- Combat & Hit Points System (Undertale 20 HP Scale) ---
+PLAYER_MAX_HP = 20
+PINK_MAX_HP = 20
+LASER_DAMAGE = 4                  # 4 dmg = 5 laser hits to KO
+BOMB_DIRECT_DAMAGE = 8            # Ground-zero direct blast
+BOMB_KICK_DAMAGE = 5              # 4 bombs defused/kicked = 20 dmg to defeat Pink!
+PLAYER_IFRAME_DURATION_S = 0.65   # Invulnerability after hit
+PLAYER_REGEN_INTERVAL_S = 60.0    # Passive heal out of combat (+1 HP every 1 minute)
+PLAYER_KO_COOLDOWN_S = 3.0        # Cooldown before auto-revive
+COMBAT_HUD_FADEOUT_S = 2.5        # Seconds to keep HUD visible after combat/damage
+
 BOMB_BOTTOM_PADDING = 8.0          # transparent px under bomb in 20x20 art (2px * 4x scale)
 
 # Relative rope tip anchor (x_frac, y_frac) for each of the 5 bomb frames:
@@ -371,8 +383,8 @@ LOOPING_STATES = ("idle", "walk_left", "walk_right", "run_left", "run_right",
 LOOPING_REST_STATES = ()                  # loops for the whole pause; picked like a special
 SPECIAL_STATES = ("laughing", "shocked", "singing", "peace_sign",
                   "embarrassed", "wistful", "sad",
-                  "crying", "tongue", "kneeling", "behind")           # one-shot -> idle
-EXCEPTIONAL_STATES = ("overjoyed",)       # reserved for rare / exceptional moments; never picked randomly
+                  "tongue", "kneeling", "behind")           # one-shot -> idle
+EXCEPTIONAL_STATES = ("overjoyed", "crying")       # reserved for rare / exceptional moments; never picked randomly
 REACTION_STATES = ("angry",)              # one-shot -> idle; triggered, never random
 BURNT_STATE = "burnt"                                                # one-shot (+hold) -> idle
 AIRBORNE_STATE = "airborne"               # jump to the cursor: the flight and every fall after it
@@ -1512,6 +1524,42 @@ DIALOGUE_LINES: dict[str, list[str]] = {
         "* Did that little dog write this?!",
         "* Toby Fox... that guest composer dog strikes again!",
     ],
+    # Bomb attack throw dialogue
+    "throw": [
+        "* Bombs away, minion! Dodge this if you can, mew!",
+        "* Take THIS! Cat-bomb barrage incoming!!",
+        "* Think you can handle my pyrotechnics?! Mew!",
+        "* Here comes a special explosive delivery!",
+    ],
+    # Player cursor downed by bombs / lasers
+    "player_downed": [
+        "* AHAHAHA! Direct hit! Total feline victory, mew!",
+        "* KABOOM! That's what you get for underestimating my bombs!",
+        "* Downed! My laser aim is utterly unmatched, puppet!",
+    ],
+    # Pink struck by kicked-back bomb (non-lethal hit)
+    "pink_hit_by_bomb": [
+        "* OUCH! Watch where you're kicking that, minion! Mew!",
+        "* GAH! That was meant for YOU, not me!!",
+        "* H-HEY! Kicking my own bombs back is against the rules!!",
+        "* MEOW?! Direct hit to my cute face! You'll pay for that!",
+    ],
+    # Pink defeated by deflected bombs
+    "pink_defeated": [
+        "* W-WHAT?! You kicked my own bomb right back at me?! Cheater!! Mew!",
+        "* U-Unacceptable!! Kicking bombs is against the rules, minion!",
+        "* GAH! Blasted by my own explosive masterwork...!!",
+    ],
+    # Flawless dodge (took 0 damage)
+    "flawless_dodge": [
+        "* W-What?! You dodged every single bomb?! Impossible... you're cheating, minion!",
+        "* Not even a single scratch?! Hmph, pure luck! Next time you won't be so slippery, mew!",
+    ],
+    # Survived with scratches (>0 damage taken)
+    "survived_bombs": [
+        "* Barely made it out of that one, dummy! My laser aim is getting sharper!",
+        "* Phew, you survived with scratches! Don't push your luck next time, mew!",
+    ],
 }
 
 # --- Annoyed / Ignored Dialogue Lines & Departure Helpers --------------------
@@ -1593,6 +1641,86 @@ def check_is_return_message(text: str) -> bool:
         r"\b(?:i\s+)?(?:have\s+)?returned\b",
         r"\b(?:i\s+)?came\s+back\b",
         r"\bback\s+now\b",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            return True
+    return False
+
+
+DEFAULT_FOCUS_ANNOYANCE_DURATION_S: float = 8 * 60.0  # 8 minutes
+
+FOCUS_RESPONSES: list[str] = [
+    "* Focusing, are you?! Royal decree grants you 8 minutes of peace and quiet, minion! Make it count, mew! [anim: peace_sign]",
+    "* Trying to focus? Understood! I'll hold back my annoyance for the next 8 minutes so you can lock in! [anim: wistful]",
+    "* 8 minutes of focus mode engaged! I won't pester you or get mad while you're in the zone, dummy! [anim: peace_sign]",
+    "* Hmph! Deep work mode acknowledged! You have 8 minutes of focus before I demand your attention again, mew! [anim: behind]",
+    "* Focusing on your mortal tasks?! Fine, I'll be nice and give you 8 minutes of uninterrupted focus! [anim: peace_sign]",
+]
+
+UNFOCUS_RESPONSES: list[str] = [
+    "* Focus mode concluded, minion! Welcome back to the mortal realm, mew! [anim: peace_sign]",
+    "* Done focusing already?! Good, now you can pay proper attention to your doll master! [anim: laughing]",
+    "* Focus interval ended! Back to our regular schedule of royal companionship, mew! [anim: idle]",
+]
+
+
+def check_is_focus_message(text: str) -> tuple[bool, float]:
+    """Return (True, duration_seconds) if the text indicates the user is focusing or trying to focus.
+
+    Defaults to 8 minutes (480.0 seconds).
+    """
+    clean = text.strip().lower()
+    if not clean:
+        return False, 0.0
+
+    # Slash commands
+    if clean.startswith(("/focus", "/focusing", "/deepwork", "/lockin")):
+        m_dur = re.search(r"/(?:focus|focusing|deepwork|lockin)\s+(\d+)\s*(m|min|minutes)?\b", clean)
+        if m_dur:
+            mins = float(m_dur.group(1))
+            return True, max(1.0, mins) * 60.0
+        return True, DEFAULT_FOCUS_ANNOYANCE_DURATION_S
+
+    # Negative / question filters: e.g. "what is focus", "can you focus", "how to focus"
+    if re.search(r"^(?:what|how|why|can\s+you|could\s+you|tell\s+me\s+about)\b", clean):
+        return False, 0.0
+
+    patterns = [
+        r"\b(?:i\s*['’]?m|i\s+am)\s+(?:trying\s+to\s+focus|focusing)\b",
+        r"\b(?:try|trying)\s+to\s+focus\b",
+        r"\b(?:need|have|got|gotta)\s+to\s+focus\b",
+        r"\b(?:gonna|going\s+to)\s+focus\b",
+        r"\blet\s+me\s+focus\b",
+        r"\bfocusing\s+(?:on|right\s+now|here|today|now)\b",
+        r"\b(?:in\s+)?focus\s+mode\b",
+        r"\bdeep\s+work\b",
+        r"\blocked\s+in\b",
+        r"^(?:focusing|trying\s+to\s+focus)[.!]?$",
+    ]
+    for pat in patterns:
+        if re.search(pat, clean):
+            # Check if custom minutes mentioned, e.g. "trying to focus for 15 minutes"
+            m_dur = re.search(r"\bfor\s+(\d+)\s*(?:m|min|minutes?)\b", clean)
+            if m_dur:
+                mins = float(m_dur.group(1))
+                return True, max(1.0, mins) * 60.0
+            return True, DEFAULT_FOCUS_ANNOYANCE_DURATION_S
+
+    return False, 0.0
+
+
+def check_is_unfocus_message(text: str) -> bool:
+    """Return True if user explicitly announces they are done focusing."""
+    clean = text.strip().lower()
+    if not clean:
+        return False
+    if clean in ("/unfocus", "/stopfocus", "/done_focus", "/end_focus"):
+        return True
+    patterns = [
+        r"\b(?:done|finished|stopped)\s+focusing\b",
+        r"\b(?:stop|end|cancel)\s+focus\b",
+        r"\bout\s+of\s+focus\s+mode\b",
     ]
     for pat in patterns:
         if re.search(pat, clean):
@@ -6324,6 +6452,19 @@ class Bomb:
     spark_frame_idx: int = 0
     spark_timer: float = 0.0
     exploded: bool = False
+    kicked: bool = False
+    kicked_at: float = 0.0
+
+
+@dataclass
+class DamagePopup:
+    x: float
+    y: float
+    text: str
+    color: QColor
+    created_at: float
+    duration: float = 1.2
+    vy: float = -45.0
 
 
 @dataclass
@@ -6338,51 +6479,289 @@ class LaserCross:
 
 
 class BombLaserOverlay(QWidget):
-    """Full-screen, click-through overlay managing falling bombs, sparks, and laser beams."""
+    """Full-screen, click-through overlay managing falling bombs, sparks, laser beams, and cursor combat HUD."""
 
-    def __init__(self, bank: SpriteBank) -> None:
+    def __init__(self, bank: SpriteBank, pet: "YellowsPixelBuddies | None" = None, font_family: str | None = None) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._bank = bank
+        self._pet: "YellowsPixelBuddies | None" = pet
+        self._font_family = font_family
         self._bombs: list[Bomb] = []
         self._lasers: list[LaserCross] = []
+        self._damage_popups: list[DamagePopup] = []
         self._ground_y: float = 0.0
         self._last_bomb_exploded_at: float = 0.0
+        self._round_started_at: float = 0.0
+        self._last_bomb_resolved_at: float = 0.0
+
+        # Undertale 20 HP Scale & Combat State
+        self._player_hp: int = PLAYER_MAX_HP
+        self._pink_hp: int = PINK_MAX_HP
+        self._player_iframe_until: float = 0.0
+        self._last_lbutton_down: bool = False
+        self._round_active: bool = False
+        self._damage_taken_this_round: int = 0
+        self._bombs_defused_this_round: int = 0
+        self._player_downed: bool = False
+        self._player_downed_until: float = 0.0
+        self._last_regen_time: float = time.perf_counter()
+
+        # Floating Cursor HUD Visuals
+        self._hud_alpha: float = 0.0
+        self._hud_fadeout_until: float = 0.0
+        self._soul_heart_pixmap = self._create_soul_heart(cracked=False)
+        self._soul_heart_cracked_pixmap = self._create_soul_heart(cracked=True)
 
         self._timer = QTimer(self)
         self._timer.setInterval(BOMB_PHYSICS_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
         self._last_time = time.perf_counter()
 
+    @staticmethod
+    def _create_soul_heart(cracked: bool = False) -> QPixmap:
+        if not cracked:
+            grid = [
+                " 11   11 ",
+                "1111 1111",
+                "111111111",
+                "111111111",
+                " 1111111 ",
+                "  11111  ",
+                "   111   ",
+                "    1    ",
+            ]
+        else:
+            grid = [
+                " 11   11 ",
+                "111 1111",
+                "111  1111",
+                "11  11111",
+                " 11  111 ",
+                "  11  1  ",
+                "   1 1   ",
+                "    1    ",
+            ]
+        h, w = len(grid), len(grid[0])
+        img = QImage(w * 2, h * 2, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        red = QColor(255, 0, 64, 255).rgba()
+        for y, row in enumerate(grid):
+            for x, c in enumerate(row):
+                if c == "1":
+                    for dy in range(2):
+                        for dx in range(2):
+                            img.setPixel(x * 2 + dx, y * 2 + dy, red)
+        return QPixmap.fromImage(img)
+
+    def set_pet(self, pet: "YellowsPixelBuddies") -> None:
+        self._pet = pet
+
+    @property
+    def player_hp(self) -> int:
+        return self._player_hp
+
+    @property
+    def pink_hp(self) -> int:
+        return self._pink_hp
+
     @property
     def last_bomb_exploded_at(self) -> float:
         return self._last_bomb_exploded_at
 
+    @property
+    def round_started_at(self) -> float:
+        return self._round_started_at
+
+    @property
+    def last_bomb_resolved_at(self) -> float:
+        return self._last_bomb_resolved_at
+
     def has_active_bombs(self) -> bool:
-        """True if any unexploded bombs are currently bouncing or falling."""
+        """True if any unexploded bombs are currently bouncing, falling, or kicked."""
         return any(not b.exploded for b in self._bombs)
 
     def has_active_lasers(self) -> bool:
         """True if any laser crosses are currently extending/visible."""
         return any(not l.finished for l in self._lasers)
 
-    def reset_state(self) -> None:
-        """Reset bombs, lasers, and explosion tracking for a new attack."""
+    def reset_state(self, start_round: bool = False) -> None:
+        """Reset bombs, lasers, and explosion tracking."""
         self._bombs.clear()
         self._lasers.clear()
+        self._damage_popups.clear()
         self._last_bomb_exploded_at = 0.0
+        self._round_started_at = time.perf_counter() if start_round else 0.0
+        self._last_bomb_resolved_at = 0.0
+        self._round_active = start_round
+        if start_round:
+            self._pink_hp = PINK_MAX_HP
+            self._damage_taken_this_round = 0
+            self._bombs_defused_this_round = 0
+            self._player_downed = False
+            self._hud_alpha = 1.0
+            self._hud_fadeout_until = 0.0
+        else:
+            self._hud_alpha = 0.0
+            self._timer.stop()
+            self.hide()
+
+    def restore_player_hp(self, amount: int = PLAYER_MAX_HP) -> None:
+        """Restore player HP (from care, water, or shop consumables)."""
+        now = time.perf_counter()
+        if self._player_hp >= PLAYER_MAX_HP and not self._player_downed:
+            return
+        old_hp = self._player_hp
+        self._player_hp = min(PLAYER_MAX_HP, self._player_hp + amount)
+        self._player_downed = False
+        restored = self._player_hp - old_hp
+        cur_pos = QCursor.pos()
+        self._damage_popups.append(DamagePopup(
+            x=float(cur_pos.x()),
+            y=float(cur_pos.y()) - 22.0,
+            text=f"+{restored} HP!" if restored > 0 else "FULL HP!",
+            color=QColor(80, 255, 120),
+            created_at=now,
+            duration=1.6,
+        ))
+        self._hud_alpha = 1.0
+        self._hud_fadeout_until = max(self._hud_fadeout_until, now + 2.5)
+        if not self.isVisible():
+            self.show()
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
+    def check_passive_regen(self, now: float) -> None:
+        """Passive HP regen when idle and not in combat."""
+        if self._round_active or self.has_active_bombs() or self.has_active_lasers() or self._player_downed:
+            return
+        if self._player_hp >= PLAYER_MAX_HP:
+            return
+        if (now - self._last_regen_time) >= PLAYER_REGEN_INTERVAL_S:
+            self._last_regen_time = now
+            self._player_hp = min(PLAYER_MAX_HP, self._player_hp + 1)
+            cur_pos = QCursor.pos()
+            self._damage_popups.append(DamagePopup(
+                x=float(cur_pos.x()),
+                y=float(cur_pos.y()) - 16.0,
+                text="+1",
+                color=QColor(80, 255, 120),
+                created_at=now,
+                duration=1.0,
+            ))
+            self._hud_alpha = max(self._hud_alpha, 0.75)
+            self._hud_fadeout_until = max(self._hud_fadeout_until, now + 1.8)
+            if not self.isVisible():
+                self.show()
+            if not self._timer.isActive():
+                self._timer.start()
+            self.update()
+
+    def trigger_click_at(self, x: float, y: float) -> bool:
+        """Manually trigger a defusal click at coordinates (used for tests or programmatic events)."""
+        now = time.perf_counter()
+        for b in self._bombs:
+            if b.is_ignited and not b.exploded and not b.kicked:
+                bx = b.x + b.size / 2.0
+                by = b.y + b.size / 2.0
+                dist = math.hypot(x - bx, y - by)
+                if dist <= (b.size / 2.0 + 26.0):
+                    b.kicked = True
+                    b.is_ignited = False
+                    b.kicked_at = now
+                    self._bombs_defused_this_round += 1
+                    target_px = x
+                    target_py = y - 300.0
+                    if self._pet:
+                        target_px = self._pet.x() + self._pet.width() / 2.0
+                        target_py = self._pet.y() + self._pet.height() / 2.0
+                    dx = target_px - bx
+                    dy = target_py - by
+                    t_travel = 0.42
+                    b.vx = dx / t_travel
+                    b.vy = (dy - 0.5 * 1400.0 * (t_travel ** 2)) / t_travel
+                    self._damage_popups.append(DamagePopup(
+                        x=bx,
+                        y=by - 16.0,
+                        text="DEFLECT! \u2728",
+                        color=QColor(255, 220, 0),
+                        created_at=now,
+                        duration=1.2,
+                    ))
+                    return True
+        return False
+
+    def _apply_player_damage(self, damage: int, cx: float, cy: float, now: float) -> None:
+        """Apply damage to the player cursor, deduct HP, grant i-frames, and check for KO."""
+        if self._player_downed or (now < self._player_iframe_until):
+            return
+        self._player_hp = max(0, self._player_hp - damage)
+        self._player_iframe_until = now + PLAYER_IFRAME_DURATION_S
+        self._damage_taken_this_round += damage
+        self._hud_alpha = 1.0
+        self._hud_fadeout_until = max(self._hud_fadeout_until, now + COMBAT_HUD_FADEOUT_S)
+
+        self._damage_popups.append(DamagePopup(
+            x=cx,
+            y=cy - 20.0,
+            text=f"-{damage}",
+            color=QColor(255, 60, 60),
+            created_at=now,
+            duration=1.3,
+        ))
+        log.info("Player took %d damage! HP: %d/%d", damage, self._player_hp, PLAYER_MAX_HP)
+        if self._player_hp <= 0:
+            self._on_player_downed(now)
+
+    def _on_player_downed(self, now: float) -> None:
+        """Triggered when Player HP drops to 0."""
+        self._player_downed = True
+        self._player_downed_until = now + PLAYER_KO_COOLDOWN_S
+        cur_pos = QCursor.pos()
+        self._damage_popups.append(DamagePopup(
+            x=float(cur_pos.x()),
+            y=float(cur_pos.y()) - 30.0,
+            text="-KO-",
+            color=QColor(255, 40, 40),
+            created_at=now,
+            duration=2.5,
+        ))
+        if self._pet and hasattr(self._pet, "_on_player_downed_by_bombs"):
+            self._pet._on_player_downed_by_bombs()
+
+    def _on_pink_defeated(self, now: float) -> None:
+        """Triggered when Pink HP drops to 0 from kicked bombs."""
+        self._bombs.clear()
+        self._lasers.clear()
+        self._round_active = False
+        self._last_bomb_resolved_at = now
+        self._hud_fadeout_until = now + 3.0
+        if self._pet:
+            px = self._pet.x() + self._pet.width() / 2.0
+            py = self._pet.y()
+            self._damage_popups.append(DamagePopup(
+                x=px,
+                y=py - 24.0,
+                text="PINK DEFEATED! \U0001f4a5",
+                color=QColor(255, 215, 0),
+                created_at=now,
+                duration=2.5,
+            ))
+            if hasattr(self._pet, "_on_pink_defeated_by_bombs"):
+                self._pet._on_pink_defeated_by_bombs()
 
     def spawn_bombs(self, origin_x: float, origin_y: float, ground_y: float,
                     screen_rect: QRect, facing_left: bool = True) -> None:
         """Spawn 4 bombs thrown downwards with fanning velocities."""
         self._ground_y = ground_y
+        self._round_active = True
         if self.geometry() != screen_rect:
             self.setGeometry(screen_rect)
 
-        # 4 spread velocities fanning out below
         base_vx = [-220.0, -75.0, 75.0, 220.0]
         if not facing_left:
             base_vx.reverse()
@@ -6396,11 +6775,21 @@ class BombLaserOverlay(QWidget):
                 x=bx, y=by, vx=vx, vy=vy, size=float(BOMB_SIZE)
             ))
 
+        self._last_time = time.perf_counter()
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        set_window_input_transparent(self, True)
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
     def spawn_single_bomb(self, bx: float, by: float, vx: float, vy: float,
                           ground_y: float, screen_rect: QRect,
                           target_mode: str = "random") -> None:
         """Spawn a single bomb into the overlay simulation."""
         self._ground_y = ground_y
+        self._round_active = True
         if self.geometry() != screen_rect:
             self.setGeometry(screen_rect)
 
@@ -6430,6 +6819,80 @@ class BombLaserOverlay(QWidget):
         screen_left = float(self.x())
         screen_right = float(self.x() + self.width())
 
+        # Prune expired damage popups
+        self._damage_popups = [p for p in self._damage_popups if (now - p.created_at) < p.duration]
+
+        # Check auto-revive for downed player
+        if self._player_downed and (now >= self._player_downed_until):
+            self._player_downed = False
+            self._player_hp = PLAYER_MAX_HP
+            self._hud_fadeout_until = now + 2.5
+            cur_pos = QCursor.pos()
+            self._damage_popups.append(DamagePopup(
+                x=float(cur_pos.x()),
+                y=float(cur_pos.y()) - 22.0,
+                text="REVIVED! \u2764",
+                color=QColor(80, 255, 120),
+                created_at=now,
+                duration=1.5,
+            ))
+            log.info("Player auto-revived with 20/20 HP!")
+
+        # Detect left mouse button edge (press transition) for defusing/kicking bombs
+        lbutton_down = False
+        dll = _user32()
+        if dll is not None:
+            try:
+                lbutton_down = bool(dll.GetAsyncKeyState(0x01) & 0x8000)
+            except Exception:
+                pass
+
+        is_click_edge = lbutton_down and not self._last_lbutton_down
+        self._last_lbutton_down = lbutton_down
+
+        cursor_pos = QCursor.pos()
+        cur_x = float(cursor_pos.x())
+        cur_y = float(cursor_pos.y())
+
+        # Clicking on a ticking bomb defuses and kicks it back towards Pink!
+        if is_click_edge and not self._player_downed:
+            for b in self._bombs:
+                if b.is_ignited and not b.exploded and not b.kicked:
+                    bx = b.x + b.size / 2.0
+                    by = b.y + b.size / 2.0
+                    dist = math.hypot(cur_x - bx, cur_y - by)
+                    if dist <= (b.size / 2.0 + 26.0):  # Responsive click hitbox
+                        b.kicked = True
+                        b.is_ignited = False
+                        b.kicked_at = now
+                        self._bombs_defused_this_round += 1
+
+                        # Calculate kick trajectory towards Pink
+                        target_px = cur_x
+                        target_py = cur_y - 300.0
+                        if self._pet:
+                            target_px = self._pet.x() + self._pet.width() / 2.0
+                            target_py = self._pet.y() + self._pet.height() / 2.0
+
+                        dx = target_px - bx
+                        dy = target_py - by
+                        t_travel = 0.42
+                        b.vx = dx / t_travel
+                        b.vy = (dy - 0.5 * 1400.0 * (t_travel ** 2)) / t_travel
+
+                        self._damage_popups.append(DamagePopup(
+                            x=bx,
+                            y=by - 16.0,
+                            text="DEFLECT! \u2728",
+                            color=QColor(255, 220, 0),
+                            created_at=now,
+                            duration=1.2,
+                        ))
+                        self._hud_alpha = 1.0
+                        self._hud_fadeout_until = max(self._hud_fadeout_until, now + COMBAT_HUD_FADEOUT_S)
+                        log.info("Bomb defused and kicked towards Pink! (at %.1f, %.1f)", bx, by)
+                        break
+
         spark_frames = self._bank.frames.get("sparks", [])
         bomb_frames = self._bank.frames.get("bomb", [])
         laser_mid_frames = self._bank.frames.get("laser_mid", [])
@@ -6439,6 +6902,43 @@ class BombLaserOverlay(QWidget):
 
         # Update bombs
         for b in self._bombs:
+            if b.kicked:
+                # Kicked bomb travels upwards in an arc toward Pink
+                b.vy += 1400.0 * dt
+                b.x += b.vx * dt
+                b.y += b.vy * dt
+
+                # Check collision with Pink
+                hit_pink = False
+                if self._pet:
+                    pet_rect = QRectF(self._pet.x(), self._pet.y(), self._pet.width(), self._pet.height())
+                    hit_pink = pet_rect.contains(QPointF(b.x + b.size / 2.0, b.y + b.size / 2.0))
+                elif (now - b.kicked_at) >= 0.42:
+                    hit_pink = True
+
+                if hit_pink or (now - b.kicked_at) >= 0.42:
+                    b.exploded = True
+                    self._last_bomb_resolved_at = now
+                    total_b = getattr(self._pet, "bomb_count", BOMB_COUNT) if self._pet else BOMB_COUNT
+                    kick_dmg = max(1, math.ceil(PINK_MAX_HP / float(total_b)))
+                    self._pink_hp = max(0, self._pink_hp - kick_dmg)
+                    px = self._pet.x() + self._pet.width() / 2.0 if self._pet else b.x
+                    py = self._pet.y() if self._pet else b.y
+                    self._damage_popups.append(DamagePopup(
+                        x=px,
+                        y=py,
+                        text=f"-{kick_dmg}",
+                        color=QColor(255, 80, 160),
+                        created_at=now,
+                        duration=1.2,
+                    ))
+                    log.info("Kicked bomb hit Pink! Pink HP: %d/%d", self._pink_hp, PINK_MAX_HP)
+                    if self._pink_hp <= 0:
+                        self._on_pink_defeated(now)
+                    elif self._pet and hasattr(self._pet, "_on_pink_hit_by_bomb"):
+                        self._pet._on_pink_hit_by_bomb()
+                continue
+
             gravity = BOMB_GRAVITY_PX_S2 if b.has_bounced else BOMB_FIRST_FALL_GRAVITY_PX_S2
             b.vy += gravity * dt
             b.x += b.vx * dt
@@ -6462,8 +6962,6 @@ class BombLaserOverlay(QWidget):
                         target_x = max(min_x, min(max_x, cursor_x))
                         dx = target_x - center_x
                         b.vx = max(-1000.0, min(1000.0, dx / 0.75))
-                        # Gentle upward bounce that reaches apex and lands back near ground at ~0.75s
-                        # (flight time = 2 * vy / g = 2 * 490 / 1300 = 0.754s)
                         b.vy = -490.0
                     elif b.target_mode == "near":
                         b.fuse_duration = random.uniform(1.3, 1.7)
@@ -6500,10 +6998,20 @@ class BombLaserOverlay(QWidget):
                 if b.fuse_time <= 0.0:
                     b.exploded = True
                     self._last_bomb_exploded_at = now
+                    self._last_bomb_resolved_at = now
+
+                    # Ground zero direct blast check on cursor
+                    bx = b.x + b.size / 2.0
+                    by = b.y + b.size / 2.0
+                    dist_to_cursor = math.hypot(cur_x - bx, cur_y - by)
+                    if dist_to_cursor <= (b.size / 2.0 + 16.0):
+                        if now >= self._player_iframe_until and not self._player_downed:
+                            self._apply_player_damage(BOMB_DIRECT_DAMAGE, cur_x, cur_y, now)
+
                     # Detonate into cross laser
                     self._lasers.append(LaserCross(
-                        cx=b.x + b.size / 2.0,
-                        cy=b.y + b.size / 2.0,
+                        cx=bx,
+                        cy=by,
                     ))
                     continue
 
@@ -6523,7 +7031,6 @@ class BombLaserOverlay(QWidget):
         self._bombs = [b for b in self._bombs if not b.exploded]
 
         # Update lasers
-        cursor_pos = QCursor.pos()
         for laser in self._lasers:
             laser.extend_length += LASER_EXTEND_SPEED_PX_S * dt
             laser.frame_timer += dt
@@ -6536,33 +7043,56 @@ class BombLaserOverlay(QWidget):
             # Laser hit detection on mouse cursor
             if not laser.hit_detected:
                 half = LASER_SIZE / 2.0
-                hit_vert = abs(cursor_pos.x() - laser.cx) <= half
-                hit_horiz = abs(cursor_pos.y() - laser.cy) <= half
+                hit_vert = abs(cur_x - laser.cx) <= half
+                hit_horiz = abs(cur_y - laser.cy) <= half
                 if hit_vert or hit_horiz:
                     laser.hit_detected = True
-                    log.info("Cursor hit by laser cross beam! (laser cx=%.1f, cy=%.1f, cursor=%d, %d)",
-                             laser.cx, laser.cy, cursor_pos.x(), cursor_pos.y())
+                    log.info("Cursor hit by laser cross beam! (laser cx=%.1f, cy=%.1f, cursor=%.0f, %.0f)",
+                             laser.cx, laser.cy, cur_x, cur_y)
+                    if now >= self._player_iframe_until and not self._player_downed:
+                        self._apply_player_damage(LASER_DAMAGE, cur_x, cur_y, now)
 
         # Remove finished lasers
         self._lasers = [l for l in self._lasers if not l.finished]
 
-        # Auto-hide when done
-        if not self._bombs and not self._lasers:
+        # Check round end (flawless dodge or survived with scratches)
+        if self._round_active and not self.has_active_bombs() and not self.has_active_lasers():
+            self._round_active = False
+            if self._pink_hp > 0 and not self._player_downed and self._pet:
+                if self._damage_taken_this_round == 0:
+                    if hasattr(self._pet, "_on_flawless_dodge"):
+                        self._pet._on_flawless_dodge()
+                else:
+                    if hasattr(self._pet, "_on_survived_bombs"):
+                        self._pet._on_survived_bombs()
+
+        # HUD alpha fade in / out
+        combat_busy = (self.has_active_bombs() or self.has_active_lasers()
+                       or self._round_active or (now < self._hud_fadeout_until)
+                       or bool(self._damage_popups))
+        if combat_busy:
+            self._hud_alpha = min(1.0, self._hud_alpha + dt * 4.0)
+        else:
+            self._hud_alpha = max(0.0, self._hud_alpha - dt * 2.0)
+
+        # Auto-hide when fully done and faded out
+        if not self.has_active_bombs() and not self.has_active_lasers() and not self._damage_popups and self._hud_alpha <= 0.001:
             self._timer.stop()
             self.hide()
 
         self.update()
 
     def paintEvent(self, event) -> None:
+        now = time.perf_counter()
         painter = QPainter(self)
         painter.setCompositionMode(QPainter.CompositionMode_Source)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 0))
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
-        screen_offset_x = self.x()
-        screen_offset_y = self.y()
-        win_w = self.width()
-        win_h = self.height()
+        screen_offset_x = float(self.x())
+        screen_offset_y = float(self.y())
+        win_w = float(self.width())
+        win_h = float(self.height())
 
         mid_frames = self._bank.frames.get("laser_mid", [])
         ext_v_frames = self._bank.frames.get("laser_extend", [])
@@ -6631,6 +7161,17 @@ class BombLaserOverlay(QWidget):
             bx = b.x - screen_offset_x
             by = b.y - screen_offset_y
 
+            if b.kicked:
+                if bomb_frames:
+                    b_pix = bomb_frames[0].pixmap
+                    painter.save()
+                    painter.translate(bx + b.size / 2.0, by + b.size / 2.0)
+                    elapsed_kicked = now - b.kicked_at
+                    painter.rotate(elapsed_kicked * 720.0)
+                    painter.drawPixmap(QPointF(-b.size / 2.0, -b.size / 2.0), b_pix)
+                    painter.restore()
+                continue
+
             if bomb_frames:
                 b_pix = bomb_frames[min(b.bomb_frame_idx, len(bomb_frames) - 1)].pixmap
                 painter.drawPixmap(QPointF(bx, by), b_pix)
@@ -6642,6 +7183,137 @@ class BombLaserOverlay(QWidget):
                 tip_x = bx + tip_frac_x * b.size
                 tip_y = by + tip_frac_y * b.size
                 painter.drawPixmap(QPointF(tip_x - SPARK_SIZE / 2.0, tip_y - SPARK_SIZE / 2.0), s_pix)
+
+        # Draw Damage / Heal Popups
+        font_pop = painter.font()
+        if getattr(self, "_font_family", None):
+            font_pop.setFamily(self._font_family)
+        else:
+            font_pop.setFamily("monospace")
+        font_pop.setPixelSize(12)
+        font_pop.setBold(True)
+        painter.setFont(font_pop)
+
+        for popup in self._damage_popups:
+            elapsed = now - popup.created_at
+            if elapsed >= popup.duration:
+                continue
+            progress = elapsed / popup.duration
+            fade = max(0.0, min(1.0, 1.0 - progress))
+            py = popup.y + popup.vy * elapsed - screen_offset_y
+            px = popup.x - screen_offset_x
+            popup_alpha = int(fade * 255)
+
+            # Text shadow / dark outline
+            painter.setPen(QColor(0, 0, 0, popup_alpha))
+            for ox, oy in ((-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (0.0, 1.0), (0.0, -1.0)):
+                painter.drawText(QPointF(px + ox - 20.0, py + oy), popup.text)
+
+            c = QColor(popup.color)
+            c.setAlpha(popup_alpha)
+            painter.setPen(c)
+            painter.drawText(QPointF(px - 20.0, py), popup.text)
+
+        # Draw Floating Cursor HUD & Boss Bar
+        if self._hud_alpha > 0.005:
+            painter.setOpacity(self._hud_alpha)
+
+            # 1. Floating Cursor HUD
+            cursor_pos = QCursor.pos()
+            cx = float(cursor_pos.x()) - screen_offset_x
+            cy = float(cursor_pos.y()) - screen_offset_y
+
+            hud_w = 112.0
+            hud_h = 24.0
+            hud_x = cx + 24.0
+            hud_y = cy + 14.0
+
+            if hud_x + hud_w > win_w - 10.0:
+                hud_x = cx - hud_w - 12.0
+            if hud_y + hud_h > win_h - 10.0:
+                hud_y = cy - hud_h - 8.0
+            hud_x = max(8.0, hud_x)
+            hud_y = max(8.0, hud_y)
+
+            # Undertale retro panel
+            painter.setPen(QColor(255, 255, 255, 210))
+            painter.setBrush(QColor(0, 0, 0, 210))
+            painter.drawRoundedRect(QRectF(hud_x, hud_y, hud_w, hud_h), 3.0, 3.0)
+
+            # Red Soul Heart Icon
+            is_iframe = (now < self._player_iframe_until)
+            blink = is_iframe and (int(now * 18) % 2 == 0)
+            if not blink:
+                heart_pix = self._soul_heart_cracked_pixmap if self._player_downed else self._soul_heart_pixmap
+                painter.drawPixmap(QPointF(hud_x + 5.0, hud_y + 4.0), heart_pix)
+
+            # Player HP Bar
+            bar_x = hud_x + 26.0
+            bar_y = hud_y + 11.0
+            bar_w = 46.0
+            bar_h = 8.0
+
+            painter.fillRect(QRectF(bar_x, bar_y, bar_w, bar_h), QColor(190, 0, 0))
+            fill_ratio = max(0.0, min(1.0, self._player_hp / float(PLAYER_MAX_HP)))
+            fill_w = bar_w * fill_ratio
+            fill_color = QColor(255, 255, 0) if self._player_hp > 5 else QColor(255, 70, 70)
+            painter.fillRect(QRectF(bar_x, bar_y, fill_w, bar_h), fill_color)
+
+            painter.setPen(QColor(0, 0, 0, 220))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(bar_x, bar_y, bar_w, bar_h))
+
+            # Player HP label and number
+            font_hud = QFont(font_pop)
+            font_hud.setPixelSize(8)
+            font_hud.setBold(True)
+            painter.setFont(font_hud)
+            painter.setPen(QColor(255, 220, 0))
+            painter.drawText(QRectF(bar_x, hud_y + 2.0, 30.0, 8.0),
+                             Qt.AlignVCenter | Qt.AlignLeft, "HP")
+
+            font_num = QFont(font_pop)
+            font_num.setPixelSize(10)
+            font_num.setBold(True)
+            painter.setFont(font_num)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(QRectF(hud_x + 75.0, hud_y + 1.0, 32.0, 22.0),
+                             Qt.AlignVCenter | Qt.AlignLeft, f"{self._player_hp:02d}")
+
+            # 2. Pink Boss Mini-Bar (Floating above Pink when combat is active)
+            if self._pet and self._round_active and self._pink_hp > 0:
+                pet_cx = (self._pet.x() + self._pet.width() / 2.0) - screen_offset_x
+                pet_top = self._pet.y() - screen_offset_y
+                boss_w = 84.0
+                boss_h = 18.0
+                boss_x = pet_cx - boss_w / 2.0
+                boss_y = pet_top - boss_h - 6.0
+
+                painter.setPen(QColor(255, 180, 220, 220))
+                painter.setBrush(QColor(20, 10, 20, 210))
+                painter.drawRoundedRect(QRectF(boss_x, boss_y, boss_w, boss_h), 2.0, 2.0)
+
+                painter.setFont(font_hud)
+                painter.setPen(QColor(255, 140, 190))
+                painter.drawText(QRectF(boss_x + 4.0, boss_y + 1.0, 30.0, 8.0),
+                                 Qt.AlignVCenter | Qt.AlignLeft, "PINK")
+
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(QRectF(boss_x + boss_w - 36.0, boss_y + 1.0, 32.0, 8.0),
+                                 Qt.AlignVCenter | Qt.AlignRight, f"{self._pink_hp:02d}/{PINK_MAX_HP}")
+
+                pbar_x = boss_x + 4.0
+                pbar_y = boss_y + 9.0
+                pbar_w = boss_w - 8.0
+                pbar_h = 6.0
+                painter.fillRect(QRectF(pbar_x, pbar_y, pbar_w, pbar_h), QColor(100, 20, 50))
+                pfill_ratio = max(0.0, min(1.0, self._pink_hp / float(PINK_MAX_HP)))
+                painter.fillRect(QRectF(pbar_x, pbar_y, pbar_w * pfill_ratio, pbar_h), QColor(255, 80, 160))
+                painter.setPen(QColor(0, 0, 0, 200))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(QRectF(pbar_x, pbar_y, pbar_w, pbar_h))
+
+            painter.setOpacity(1.0)
 
         painter.end()
 
@@ -6727,6 +7399,73 @@ class ChanceSliderWidget(QWidget):
 
 BombChanceWidget = ChanceSliderWidget
 JumpChanceWidget = ChanceSliderWidget
+
+
+class CountSliderWidget(QWidget):
+    """Custom tray menu widget: integer count slider (e.g. 1 to 8 bombs) with a reset button."""
+
+    def __init__(self, initial_val: int = 4,
+                 min_val: int = 1,
+                 max_val: int = 8,
+                 default_val: int = 4,
+                 on_change=None, parent=None,
+                 title_prefix: str = "Bombs Thrown") -> None:
+        super().__init__(parent)
+        self._min_val = min_val
+        self._max_val = max_val
+        self._default_val = default_val
+        self._on_change = on_change
+        self._title_prefix = title_prefix
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 2, 16, 6)
+        layout.setSpacing(4)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
+        self.lbl_title = QLabel(f"{self._title_prefix}: {initial_val}")
+        self.lbl_title.setStyleSheet("font-size: 11px;")
+
+        self.btn_default = QPushButton(f"Default ({default_val})")
+        self.btn_default.setFocusPolicy(Qt.NoFocus)
+        self.btn_default.setCursor(Qt.PointingHandCursor)
+        self.btn_default.setStyleSheet("font-size: 10px; padding: 1px 5px;")
+
+        top_row.addWidget(self.lbl_title)
+        top_row.addStretch()
+        top_row.addWidget(self.btn_default)
+        layout.addLayout(top_row)
+
+        self.slider = ClickableSlider(Qt.Horizontal)
+        self.slider.setRange(min_val, max_val)
+        self.slider.setValue(initial_val)
+        self.slider.setSingleStep(1)
+        self.slider.setPageStep(1)
+        self.slider.setTickPosition(QSlider.TicksBelow)
+        self.slider.setTickInterval(1)
+        self.slider.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self.slider)
+
+        self.slider.valueChanged.connect(self._on_slider_changed)
+        self.btn_default.clicked.connect(self._on_default_clicked)
+
+    def _on_slider_changed(self, val: int) -> None:
+        self.lbl_title.setText(f"{self._title_prefix}: {val}")
+        if self._on_change is not None:
+            self._on_change(val)
+
+    def _on_default_clicked(self) -> None:
+        self.slider.setValue(self._default_val)
+
+    def set_value(self, val: int) -> None:
+        self.slider.blockSignals(True)
+        self.slider.setValue(val)
+        self.lbl_title.setText(f"{self._title_prefix}: {val}")
+        self.slider.blockSignals(False)
+
+    def value(self) -> int:
+        return self.slider.value()
 
 
 SHORTS_TAG_REGEX = re.compile(
@@ -7250,7 +7989,7 @@ class YellowsPixelBuddies(QWidget):
         self._overlay_frame_idx = 0
         self._overlay_pixmap: QPixmap | None = None
         self._vfx_overlay = VfxOverlay()
-        self._bomb_overlay = BombLaserOverlay(bank)
+        self._bomb_overlay = BombLaserOverlay(bank, self, self._font_family)
         self._dialogue_overlay = DialogueOverlay(self._font_family, DIALOGUE_BOX_PATH)
         self._dialogue_overlay.dismissed.connect(self._on_dialogue_dismissed)
         self._dialogue_overlay.step_started.connect(self._on_dialogue_step_started)
@@ -7281,6 +8020,8 @@ class YellowsPixelBuddies(QWidget):
         self._user_away_notified: bool = False
         self._user_away_time: float = 0.0
         self._user_away_was_idle: bool = False
+        self._user_focus_until: float = 0.0
+        self._user_focus_duration_s: float = DEFAULT_FOCUS_ANNOYANCE_DURATION_S
         self._was_annoyed_when_chat_opened: bool = False
         self._pending_song_announcement: tuple | None = None
         self._ai_song_comment_enabled: bool = AI_SONG_COMMENT_ENABLED
@@ -7373,6 +8114,7 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_target_plan: list[str] = ["random", "random", "near", "beneath"]
         self._bomb_attack_enabled: bool = HANG_BOMB_ENABLED
         self._bomb_chance_percent: int = HANG_BOMB_DEFAULT_CHANCE_PERCENT
+        self._bomb_count: int = BOMB_COUNT
 
         # Apply persistent settings if saved
         saved_settings = self._memory.load_settings() if hasattr(self, "_memory") and self._memory else {}
@@ -7382,6 +8124,11 @@ class YellowsPixelBuddies(QWidget):
             self._ai_song_comment_enabled = bool(saved_settings["ai_song_comment_enabled"])
         if "bomb_attack_enabled" in saved_settings:
             self._bomb_attack_enabled = bool(saved_settings["bomb_attack_enabled"])
+        if "bomb_count" in saved_settings:
+            try:
+                self._bomb_count = max(1, min(8, int(saved_settings["bomb_count"])))
+            except (ValueError, TypeError):
+                self._bomb_count = BOMB_COUNT
         if "jump_enabled" in saved_settings:
             self._jump_enabled = bool(saved_settings["jump_enabled"]) and getattr(self, "_jump_sprites_ready", True)
         self._game_mode: str = str(saved_settings.get("game_mode", "AUTO"))
@@ -7457,6 +8204,8 @@ class YellowsPixelBuddies(QWidget):
         self._bomb_force_action: QAction | None = None
         self._bomb_chance_action: QWidgetAction | None = None
         self._bomb_chance_widget: ChanceSliderWidget | None = None
+        self._bomb_count_action: QWidgetAction | None = None
+        self._bomb_count_widget: CountSliderWidget | None = None
 
         # --- startup summon intro & hide outro state -------------------------
         self._intro_subphase: str = ""
@@ -7613,7 +8362,7 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved" and not force:
             return
-        if (getattr(self, "_phase", None) in (Phase.JUMP, Phase.DRAG,
+        if not force and (getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                               Phase.SUMMON_INTRO, Phase.EXIT_OUTRO)
                 or getattr(self, "_jump_active", False)
@@ -7733,7 +8482,11 @@ class YellowsPixelBuddies(QWidget):
             not auto_dismiss
             or getattr(self, "_user_away_notified", False)
             or (getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved")
-            or dialogue_category in ("annoyed_ignored", "annoyed_resolved", "welcome_back", "startup_summon", "error")
+            or dialogue_category in (
+                "annoyed_ignored", "annoyed_resolved", "welcome_back", "startup_summon", "error",
+                "throw", "land", "pink_hit_by_bomb", "pink_defeated", "player_downed", "flawless_dodge", "survived_bombs"
+            )
+            or category_or_text in ("throw", "land", "pink_hit_by_bomb", "pink_defeated", "player_downed", "flawless_dodge", "survived_bombs")
             or line.startswith(("* Inspecting", "* Watching", "* Hold your horses", "* Rebooting", "* ...", "* ..?"))
         ):
             track_ignore = False
@@ -8108,6 +8861,12 @@ RULES:
             return False
         if getattr(self, "_hidden_in_tray", False):
             return False
+        if getattr(self, "_phase", None) in (
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+        ):
+            return False
 
         api_key = self._memory.get_api_key()
         if not api_key:
@@ -8325,6 +9084,9 @@ RULES:
         if was_ignored:
             if getattr(self, "_user_away_notified", False):
                 log.info("Dialogue dismissed without interaction, but user notified away; not counting as ignored.")
+            elif getattr(self, "_user_focus_until", 0.0) > now:
+                rem_mins = max(0.1, (self._user_focus_until - now) / 60.0)
+                log.info("Dialogue dismissed without interaction, but user in focus mode (%.1f mins left); annoyance suppressed.", rem_mins)
             elif getattr(self, "_is_annoyed_ignored", False):
                 pass
             else:
@@ -8394,6 +9156,8 @@ RULES:
                 'moving' (user was moving/active; 5 ignored messages).
         """
         if getattr(self, "_is_annoyed_ignored", False):
+            return
+        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW):
             return
         self._is_annoyed_ignored = True
         self._annoyed_reason = reason
@@ -8498,7 +9262,7 @@ RULES:
             self._single_click_timer.stop()
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
             return
-        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.DRAG):
+        if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG):
             return
         if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
             self._say("* Hold your horses, minion! I'm still thinking about your screen or last question!", force=True, record_memory=False)
@@ -8597,6 +9361,35 @@ RULES:
                 self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
             self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
             return
+
+        # Focus commands & natural intent recognition
+        is_focus, focus_dur_s = check_is_focus_message(clean_input)
+        is_unfocus = check_is_unfocus_message(clean_input)
+
+        if is_unfocus:
+            self._user_focus_until = 0.0
+            self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
+            reply = random.choice(UNFOCUS_RESPONSES)
+            if hasattr(self, "_memory") and self._memory:
+                self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
+            self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
+            return
+
+        if is_focus:
+            self._user_focus_until = now + focus_dur_s
+            self._user_focus_duration_s = focus_dur_s
+            self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
+            self._is_annoyed_ignored = False
+            log.info("User engaged focus mode for %.1f minutes (until %.1f)", focus_dur_s / 60.0, self._user_focus_until)
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            if not api_key:
+                reply = random.choice(FOCUS_RESPONSES)
+                if hasattr(self, "_memory") and self._memory:
+                    self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
+                self._say(reply, force=True, record_memory=True, step_anim="peace_sign", track_ignore=False)
+                return
 
         is_departure = check_is_departure_message(clean_input)
         is_return = check_is_return_message(clean_input)
@@ -8739,6 +9532,18 @@ RULES:
             msg = "* Bomb Attack Mode: ENABLED, minion! Cat ordnance primed!" if new_state else "* Bomb Attack Mode: DISABLED, mew! Explosives safely disarmed!"
             self._say(msg, force=True, record_memory=False)
             return
+        elif lower_input.startswith(("/bomb_count", "/bombs", "/bomb count", "/bombs_count")):
+            parts = lower_input.split()
+            if len(parts) > 1 and parts[-1].isdigit():
+                num = max(1, min(8, int(parts[-1])))
+                self._set_bomb_count(num)
+                msg = f"* Bomb Barrage Count set to {num} bombs (max 8), mew! Explosive intensity adjusted!"
+                self._say(msg, force=True, record_memory=False)
+                return
+            else:
+                msg = f"* Current Bomb Barrage Count: {self.bomb_count} bombs (max 8). Type /bombs <1-8> to adjust!"
+                self._say(msg, force=True, record_memory=False)
+                return
         elif lower_input in ("/shop", "shop", "/store", "store"):
             self._open_shop_window()
             return
@@ -8933,7 +9738,17 @@ RULES:
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
 
-        if is_departure:
+        if is_focus:
+            focus_mins = int(round(focus_dur_s / 60.0))
+            system_inst += (
+                f"\n\nCRITICAL CONTEXT - USER IS ENTERING FOCUS MODE ({focus_mins} MINUTES):\n"
+                f"The user just told you they are focusing or trying to focus on their work/study!\n"
+                f"- Acknowledge their focus mode and grant them {focus_mins} minutes of peace where you will hold back your annoyance!\n"
+                "- Tell them to lock in, concentrate, and make their royal doll master proud in your distinct sassy style!\n"
+                f"- Playfully remind them that once the {focus_mins} minutes are up, you'll expect their attention again!\n"
+                "- Tag your reaction with [anim: peace_sign], [anim: wistful], or [anim: behind]."
+            )
+        elif is_departure:
             system_inst += (
                 "\n\nCRITICAL CONTEXT - USER IS LEAVING / GOING AWAY:\n"
                 "The user just told you that they have to go, are stepping away, leaving, going AFK, or saying goodbye.\n"
@@ -9181,13 +9996,13 @@ RULES:
         if not api_key:
             return
 
-        if self._is_dialogue_convo_active():
-            return
-
         if getattr(self, "_phase", None) in (
             Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
-            Phase.DRAG, Phase.JUMP,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
         ):
+            return
+
+        if self._is_dialogue_convo_active():
             return
 
         if getattr(self, "_jump_active", False) or getattr(self, "_dragging", False):
@@ -9225,6 +10040,12 @@ RULES:
         """Capture desktop screen in background and generate spontaneous commentary via Gemini AI."""
         api_key = self._memory.get_api_key()
         if not api_key:
+            return
+
+        if getattr(self, "_phase", None) in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
             return
 
         if self._gemini_thread is not None and self._gemini_thread.isRunning():
@@ -9802,7 +10623,8 @@ RULES:
             return
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+                           Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
             return
@@ -9893,6 +10715,12 @@ RULES:
             return
         api_key = self._memory.get_api_key()
         if not api_key:
+            return
+
+        if getattr(self, "_phase", None) in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
             return
 
         clean_artist = artist.strip()
@@ -10251,6 +11079,8 @@ RULES:
 
     def _finish_throw_sequence(self) -> None:
         """Finished 4-bomb barrage floating mid-air: fall laughing down to the ground."""
+        if hasattr(self, "_bomb_overlay") and self._bomb_overlay.pink_hp <= 0:
+            return  # Pink was defeated; defeat sequence handled fall and reaction
         self._anim_timer.setInterval(FRAME_INTERVAL_MS.get("laughing", ANIM_INTERVAL_MS))
         self._hang_bomb_count_remaining = 0
         self._hang_bomb_index = 0
@@ -10268,18 +11098,112 @@ RULES:
         Must laugh until all bombs have exploded, all lasers have cleared, and at least
         BOMB_LAUGH_EXTRA_S has elapsed since the last bomb explosion.
         """
-        if self._throw_started_at > 0.0 and (now - self._throw_started_at) > 20.0:
+        if getattr(self, "_throw_started_at", 0.0) > 0.0 and (now - self._throw_started_at) > 12.0:
             return True  # failsafe timeout
-        if self._hang_bomb_count_remaining > 0:
-            return False
-        if self._bomb_overlay.has_active_bombs():
-            return False
-        if self._bomb_overlay.has_active_lasers():
-            return False
-        last_exploded = self._bomb_overlay.last_bomb_exploded_at
-        if last_exploded <= 0.0:
-            return False
-        return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
+        if hasattr(self, "_bomb_overlay"):
+            if self._bomb_overlay.pink_hp <= 0:
+                return True  # Pink was defeated by deflected bombs
+            if self._bomb_overlay.has_active_bombs():
+                return False
+            if self._bomb_overlay.has_active_lasers():
+                return False
+            last_exploded = self._bomb_overlay.last_bomb_exploded_at
+            if last_exploded > 0.0:
+                return now >= (last_exploded + BOMB_LAUGH_EXTRA_S)
+            last_resolved = getattr(self._bomb_overlay, "last_bomb_resolved_at", 0.0)
+            if last_resolved > 0.0:
+                return now >= (last_resolved + 1.0)
+        return True
+
+    def _on_pink_hit_by_bomb(self) -> None:
+        """Pink gets struck by her own kicked-back bomb."""
+        now = time.perf_counter()
+        self._post_throw_laugh = False
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._throw_rise_px = 0.0
+        self._bombs_spawned_for_current_throw = False
+        if hasattr(self, "_bomb_overlay"):
+            self._bomb_overlay._last_bomb_resolved_at = now
+
+        reaction = "shocked" if self._can_play("shocked") else ("angry" if self._can_play("angry") else None)
+
+        bounds = self._bounds()
+        ground_y = bounds[3]
+        is_airborne = (self._phase in (Phase.THROW, Phase.HANG, Phase.JUMP, Phase.FALL)
+                       or self._y < ground_y - 8.0)
+
+        hit_lines = DIALOGUE_LINES.get("pink_hit_by_bomb", [
+            "* OUCH! Watch where you're kicking that, minion! Mew!",
+            "* GAH! That was meant for YOU, not me!!",
+            "* H-HEY! Kicking my own bombs back is against the rules!!",
+            "* MEOW?! Direct hit to my cute face! You'll pay for that!",
+        ])
+        self._say(random.choice(hit_lines), force=True, auto_dismiss=True, track_ignore=False)
+
+        if is_airborne:
+            self._begin_fall(JUMP_GRAVITY_PX_S2, reaction=reaction)
+            if reaction:
+                self._play(reaction, loop=False)
+            else:
+                self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        else:
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            self._brain_timer.stop()
+            self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+            if reaction:
+                self._play(reaction, loop=False)
+            else:
+                self._play("idle")
+
+    def _on_pink_defeated_by_bombs(self) -> None:
+        """Pink is defeated by the user kicking back bombs."""
+        self._hang_bomb_count_remaining = 0
+        self._hang_bomb_index = 0
+        self._throw_pause_ticks = 0
+        self._post_throw_laugh = False
+
+        if self._can_play("burnt"):
+            self._play("burnt")
+            if "explosion" in self._bank.frames:
+                self._start_overlay("explosion")
+        else:
+            self._play("shocked")
+
+        defeated_lines = DIALOGUE_LINES.get("pink_defeated", [
+            "* W-WHAT?! You kicked my own bomb right back at me?! Cheater!! Mew!",
+        ])
+        self._say(random.choice(defeated_lines), force=True, auto_dismiss=True)
+        self._begin_fall(JUMP_GRAVITY_PX_S2, reaction="embarrassed")
+
+    def _on_player_downed_by_bombs(self) -> None:
+        """User reached 0 HP from bomb/laser barrage."""
+        downed_lines = DIALOGUE_LINES.get("player_downed", [
+            "* AHAHAHA! Direct hit! Total feline victory, mew!",
+        ])
+        self._say(random.choice(downed_lines), force=True, auto_dismiss=True)
+        if self._can_play("laughing"):
+            self._play("laughing", loop=True)
+
+    def _on_flawless_dodge(self) -> None:
+        """User dodged all bombs and lasers without taking damage."""
+        flawless_lines = DIALOGUE_LINES.get("flawless_dodge", [
+            "* W-What?! You dodged every single bomb?! Impossible... you're cheating, minion!",
+        ])
+        self._say(random.choice(flawless_lines), force=True, auto_dismiss=True)
+        if self._can_play("shocked"):
+            self._play("shocked")
+
+    def _on_survived_bombs(self) -> None:
+        """User survived the bomb attack with scratches."""
+        survived_lines = DIALOGUE_LINES.get("survived_bombs", [
+            "* Barely made it out of that one, dummy! My laser aim is getting sharper!",
+        ])
+        self._say(random.choice(survived_lines), force=True, auto_dismiss=True)
+        if self._can_play("tongue"):
+            self._play("tongue")
 
     def _keep_angry(self) -> None:
         """Keep Pink continuously mad while clicks keep coming in the angry spam."""
@@ -10318,6 +11242,27 @@ RULES:
 
         if self._phase is Phase.HANG:
             self._play(HANGING_STATE, mirrored=self._hang_mirrored())
+            return
+
+        # Failsafe: if an animation ends while in THROW phase, end the throw sequence cleanly
+        if self._phase is Phase.THROW:
+            self._finish_throw_sequence()
+            return
+
+        # Failsafe: if an animation ends while falling or jumping, restore airborne sprite
+        if self._phase in (Phase.FALL, Phase.JUMP):
+            self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+            return
+
+        # Failsafe: if buddy is physically in mid-air and not in special non-falling phases, drop to earth
+        bounds = self._bounds()
+        ground_y = bounds[3]
+        if self._y < ground_y - 6.0 and self._phase not in (
+            Phase.HANG, Phase.DRAG, Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+            Phase.SUMMON_INTRO, Phase.SUMMON_DIALOGUE
+        ):
+            self._begin_fall(JUMP_GRAVITY_PX_S2, reaction=None)
+            self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
             return
 
         if getattr(self, "_is_annoyed_ignored", False):
@@ -10519,6 +11464,8 @@ RULES:
         self._last_tick = now
         cursor = QCursor.pos()                      # THE cursor sample of this tick (no extra timer)
         self._track_cursor(cursor, now, real_dt)
+        if hasattr(self, "_bomb_overlay") and self._bomb_overlay:
+            self._bomb_overlay.check_passive_regen(now)
         if getattr(self, "_hidden_in_tray", False):
             return
         if getattr(self, "_is_ghost_talking", False):
@@ -10572,11 +11519,29 @@ RULES:
             return
 
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
+            if now - getattr(self, "_hang_started_at", now) > 15.0:
+                log.warning("Phase.HANG watchdog: hang timed out (>15.0s). Forcing release.")
+                self._fall_after_jump(RELEASE_REACTION)
+                return
             self._tick_hang(cursor, now, dt, bounds)
             self._sync_window_position()
             return
 
         if self._phase is Phase.THROW:              # stops hanging from cursor, floats mid-air
+            # Watchdog 1: Not in throw animation -> force fall
+            if self.state not in (THROW_STATE, mirrored_key(THROW_STATE)):
+                log.warning("Phase.THROW watchdog: state '%s' is not throw. Forcing fall.", self.state)
+                self._finish_throw_sequence()
+                self._sync_window_position()
+                return
+
+            # Watchdog 2: Throw duration timeout (>8.0s) -> force fall
+            if now - getattr(self, "_throw_started_at", 0.0) > 8.0:
+                log.warning("Phase.THROW watchdog: throw timed out (>8.0s). Forcing fall.")
+                self._finish_throw_sequence()
+                self._sync_window_position()
+                return
+
             # First throw frames 1-5: float smoothly upwards
             if self._throw_rise_px > 0.0:
                 rise_dur_s = 5 * (THROW_BASE_INTERVAL_MS / 1000.0)
@@ -10615,8 +11580,13 @@ RULES:
         if self._phase in (Phase.FALL, Phase.JUMP):
             self._tick_airborne(cursor, now, dt, bounds)
         else:
-            self._y = ground_y
-            self._vy = 0.0
+            if not self._dragging:
+                if self._y < ground_y - 12.0:
+                    log.warning("Mid-air walk/pause watchdog: buddy at y=%.1f (ground=%.1f). Forcing fall.", self._y, ground_y)
+                    self._begin_fall(JUMP_GRAVITY_PX_S2, reaction="embarrassed")
+                    return
+                self._y = ground_y
+                self._vy = 0.0
 
         self._sync_window_position()
 
@@ -10867,6 +11837,64 @@ RULES:
         self._say("* Rebooting the vessel! See you in a flash, mew!!", force=True, record_memory=False)
         QTimer.singleShot(1200, restart_application)
 
+    def _handle_uninstall(self) -> None:
+        """Trigger uninstallation or data cleanup for installed/portable versions."""
+        uninstaller: Path | None = None
+        if getattr(sys, "frozen", False):
+            candidates = list(_exe_dir.glob("unins*.exe"))
+            if candidates:
+                uninstaller = candidates[0]
+
+        if uninstaller and uninstaller.is_file():
+            reply = QMessageBox.question(
+                self,
+                "Uninstall Yellow's Pixel Buddies",
+                "Are you sure you want to uninstall Yellow's Pixel Buddies?\n\n"
+                "This will close Pink and launch the Windows uninstaller.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                flags = 0x00000008 if os.name == "nt" else 0
+                try:
+                    subprocess.Popen([str(uninstaller)], cwd=str(_exe_dir), creationflags=flags)
+                except Exception as err:
+                    log.error("Failed to launch uninstaller: %s", err)
+                    QMessageBox.warning(self, "Uninstall Error", f"Could not launch uninstaller:\n{err}")
+                    return
+                self._do_real_quit()
+        else:
+            reply = QMessageBox.question(
+                self,
+                "Uninstall / Clean Pet Data",
+                "You are running a portable version of Yellow's Pixel Buddies.\n\n"
+                "Would you like to remove all saved memories, facts, settings, "
+                "and disable the Windows auto-start entry from this computer?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                set_run_at_startup(False)
+                target_data = USER_DATA_DIR
+                if target_data.is_dir() and target_data.resolve() != _exe_dir.resolve():
+                    import shutil
+                    try:
+                        shutil.rmtree(target_data, ignore_errors=True)
+                    except Exception as err:
+                        log.warning("Could not completely delete user data dir: %s", err)
+                elif getattr(sys, "frozen", False) and (_exe_dir / "portable.txt").exists():
+                    local_mem = _exe_dir / "memory"
+                    if local_mem.is_dir():
+                        import shutil
+                        shutil.rmtree(local_mem, ignore_errors=True)
+                QMessageBox.information(
+                    self,
+                    "Cleanup Complete",
+                    "All pet settings, memories, and auto-start entries have been removed.\n\n"
+                    "Pink will now close. You can safely delete this application file.",
+                )
+                self._do_real_quit()
+
     def _read_screen_while_in_tray(self) -> None:
         """Periodic 5-minute screen reading while Pink is hidden in tray to maintain active session and context."""
         if not getattr(self, "_hidden_in_tray", False):
@@ -10874,6 +11902,12 @@ RULES:
 
         api_key = self._memory.get_api_key()
         if not api_key:
+            return
+
+        if getattr(self, "_phase", None) in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.DRAG, Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
             return
 
         if hasattr(self, "_gemini_thread") and self._gemini_thread is not None and self._gemini_thread.isRunning():
@@ -11290,6 +12324,7 @@ RULES:
         self._pending_reaction = None
         self._wall_bounced = False
         self._can_catch_cursor = True
+        self._airborne_started_at = time.perf_counter()
         self._shake_trail.clear()
         self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
         log.debug("Jump %s: rise %.0f px (asked %.0f), launch %.0f px/s, apex in %.2f s, "
@@ -11301,6 +12336,18 @@ RULES:
                        bounds: tuple[float, float, float, float]) -> None:
         """One gravity step of a JUMP (rise, apex, fall after a miss) or of a FALL; ends on touchdown."""
         _min_x, _max_x, min_y, ground_y = bounds
+
+        # Failsafe: gravity must be active
+        if self._gravity <= 0.0:
+            self._gravity = JUMP_GRAVITY_PX_S2
+
+        # Failsafe watchdog: buddy airborne for >8.0s continuously
+        if now - getattr(self, "_airborne_started_at", now) > 8.0:
+            log.warning("Airborne watchdog: buddy airborne for >8.0s. Forcing touchdown.")
+            self._y = ground_y
+            self._touch_down()
+            return
+
         vy_before = self._vy
         self._y += self._vy * dt + 0.5 * self._gravity * dt * dt
         self._vy += self._gravity * dt
@@ -11319,7 +12366,7 @@ RULES:
             self._resolve_apex(cursor, now)          # the vertical speed just crossed zero
 
         # Touch-down. NEVER while she is moving upward: a launch starts exactly ON the ground.
-        if self._vy >= 0.0 and self._y >= ground_y:
+        if (self._vy >= 0.0 and self._y >= ground_y) or (self._y >= ground_y + 12.0):
             self._y = ground_y
             self._touch_down()
 
@@ -11448,12 +12495,18 @@ RULES:
         self._phase = Phase.THROW
         self._post_throw_laugh = False
         self._say("throw", force=True)
-        self._bomb_overlay.reset_state()
-        pair = ["near", "beneath"]
-        random.shuffle(pair)
-        self._bomb_target_plan = ["random", "random"] + pair
-        self._hang_bomb_count_remaining = BOMB_COUNT
+        self._bomb_overlay.reset_state(start_round=True)
+        total_bombs = getattr(self, "_bomb_count", BOMB_COUNT)
+        self._hang_bomb_count_remaining = total_bombs
         self._hang_bomb_index = 0
+        if total_bombs <= 1:
+            self._bomb_target_plan = ["beneath"]
+        elif total_bombs == 2:
+            self._bomb_target_plan = ["near", "beneath"]
+        else:
+            mid = ["random"] * (total_bombs - 2) + ["near"]
+            random.shuffle(mid)
+            self._bomb_target_plan = mid + ["beneath"]
         self._throw_pause_ticks = THROW_FRAME_11_HOLD_TICKS
         self._bombs_spawned_for_current_throw = False
         self._throw_started_at = now
@@ -11511,7 +12564,7 @@ RULES:
 
         self._bomb_overlay.spawn_single_bomb(origin_x, origin_y, vx, vy, ground_y, screen_rect, target_mode=target_mode)
         log.debug("Spawned serial bomb %d/%d (%s) below pet at (%.1f, %.1f) vx=%.1f vy=%.1f (fall ~%.2fs)",
-                  bomb_idx + 1, BOMB_COUNT, target_mode, origin_x, origin_y, vx, vy, t_fall)
+                  bomb_idx + 1, getattr(self, "_bomb_count", BOMB_COUNT), target_mode, origin_x, origin_y, vx, vy, t_fall)
 
     def _is_shaking(self) -> bool:
         """The raw cursor path of the last SHAKE_WINDOW_S zig-zags on one axis but goes nowhere."""
@@ -11534,6 +12587,7 @@ RULES:
         self._vx = 0.0
         self._pending_reaction = reaction
         self._can_catch_cursor = False
+        self._airborne_started_at = time.perf_counter()
         self._last_tick = time.perf_counter()
 
     def _fall_after_jump(self, reaction: str | None) -> None:
@@ -11791,11 +12845,13 @@ RULES:
             self._single_click_timer.stop()
 
         is_already_jumping = (self._phase is Phase.JUMP)
+        self._leave_hang()
         self._jump_active = False
         self._brain_timer.stop()
         self._pause_elapsed = False
         self._phase = Phase.JUMP
         self._gravity = JUMP_GRAVITY_PX_S2
+        self._airborne_started_at = time.perf_counter()
 
         if is_already_jumping:
             # Mid-air juggling boost!
@@ -11927,6 +12983,7 @@ RULES:
         update_action = menu.addAction("Check for Updates 🔄")
         menu.addSeparator()
         restart_action = menu.addAction("Restart Pink 🔄")
+        uninstall_action = menu.addAction("Uninstall Pink 🗑️")
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -11936,6 +12993,8 @@ RULES:
             self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
+        elif chosen is uninstall_action:
+            self._handle_uninstall()
         elif chosen is restart_action:
             self._handle_restart_command()
         elif chosen is hide_tray_action:
@@ -12075,7 +13134,8 @@ RULES:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
+        if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+                           Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                            Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
                            Phase.EXIT_OUTRO):
             return
@@ -12188,6 +13248,19 @@ RULES:
         self._bomb_chance_action.setDefaultWidget(self._bomb_chance_widget)
         tray_menu.addAction(self._bomb_chance_action)
 
+        self._bomb_count_action = QWidgetAction(tray_menu)
+        self._bomb_count_widget = CountSliderWidget(
+            initial_val=self._bomb_count,
+            min_val=1,
+            max_val=8,
+            default_val=BOMB_COUNT,
+            on_change=self._set_bomb_count,
+            title_prefix="Bombs Thrown",
+        )
+        self._bomb_count_widget.setEnabled(self._bomb_attack_enabled)
+        self._bomb_count_action.setDefaultWidget(self._bomb_count_widget)
+        tray_menu.addAction(self._bomb_count_action)
+
         tray_menu.addSeparator()
 
         self._dialogue_action = tray_menu.addAction("Dialogue Bubbles")
@@ -12225,6 +13298,8 @@ RULES:
         tray_menu.addSeparator()
         restart_action = tray_menu.addAction("Restart Pink 🔄")
         restart_action.triggered.connect(self._handle_restart_command)
+        uninstall_action = tray_menu.addAction("Uninstall Pink 🗑️")
+        uninstall_action.triggered.connect(self._handle_uninstall)
         exit_action = tray_menu.addAction("Exit")
         exit_action.triggered.connect(self._quit)
 
@@ -12284,6 +13359,9 @@ RULES:
         if self._bomb_chance_widget is not None:
             self._bomb_chance_widget.set_value(self._bomb_chance_percent)
             self._bomb_chance_widget.setEnabled(self._bomb_attack_enabled)
+        if hasattr(self, "_bomb_count_widget") and self._bomb_count_widget is not None:
+            self._bomb_count_widget.set_value(self._bomb_count)
+            self._bomb_count_widget.setEnabled(self._bomb_attack_enabled)
         if self._dialogue_action is not None:
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(self._dialogue_enabled)
@@ -12357,6 +13435,7 @@ RULES:
                 "dialogue_enabled": getattr(self, "_dialogue_enabled", True),
                 "ai_song_comment_enabled": getattr(self, "_ai_song_comment_enabled", True),
                 "bomb_attack_enabled": getattr(self, "_bomb_attack_enabled", False),
+                "bomb_count": getattr(self, "_bomb_count", BOMB_COUNT),
                 "jump_enabled": getattr(self, "_jump_enabled", True),
                 "game_mode": getattr(self, "_game_mode", "AUTO"),
             }
@@ -12383,7 +13462,7 @@ RULES:
             self._jump_action.blockSignals(False)
         if hasattr(self, "_jump_chance_widget") and self._jump_chance_widget is not None:
             self._jump_chance_widget.setEnabled(self._jump_enabled and getattr(self, "_jump_sprites_ready", True))
-        if not self._jump_enabled and self._phase in (Phase.JUMP, Phase.HANG):
+        if not self._jump_enabled and self._phase in (Phase.JUMP, Phase.HANG, Phase.THROW):
             self._fall_after_jump(None)
         log.info("Jump to cursor mode: %s", "ENABLED" if self._jump_enabled else "DISABLED")
 
@@ -12403,8 +13482,22 @@ RULES:
             self._bomb_action.blockSignals(False)
         if self._bomb_chance_widget is not None:
             self._bomb_chance_widget.setEnabled(checked)
+        if hasattr(self, "_bomb_count_widget") and self._bomb_count_widget is not None:
+            self._bomb_count_widget.setEnabled(checked)
         self._save_live_settings()
         log.info("Bomb attack mode: %s", "ENABLED" if checked else "DISABLED")
+
+    @property
+    def bomb_count(self) -> int:
+        return getattr(self, "_bomb_count", BOMB_COUNT)
+
+    def _set_bomb_count(self, count: int) -> None:
+        """Update number of serial bombs thrown (1 to 8)."""
+        self._bomb_count = max(1, min(8, int(count)))
+        if hasattr(self, "_bomb_count_widget") and self._bomb_count_widget is not None:
+            self._bomb_count_widget.set_value(self._bomb_count)
+        self._save_live_settings()
+        log.info("Bomb count set to %d", self._bomb_count)
 
     def _set_bomb_chance_percent(self, pct: int) -> None:
         """Update bomb attack chance percentage (0-100%)."""
