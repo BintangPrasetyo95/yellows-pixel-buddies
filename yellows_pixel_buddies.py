@@ -1564,26 +1564,26 @@ DIALOGUE_LINES: dict[str, list[str]] = {
 
 # --- Annoyed / Ignored Dialogue Lines & Departure Helpers --------------------
 ANNOYED_IGNORED_LINES: list[str] = [
-    "* ... Hmph!! Ignored me TWICE in a row?! Look at me talking to the wall! You better have a good excuse when you come back, dummy!",
-    "* TWO times in a row ignored?! What am I, invisible taskbar decoration to you, minion?! HMPH!",
-    "* Did you seriously just leave me on read TWICE?! Cotton dolls have feelings too, you know!!",
-    "* Fine! I see how it is! Two messages into the void! I'm crossing my plush arms until you apologize!",
-    "* Ignored twice in a row... That's it, you're getting the royal cold shoulder until you come back, human!",
+    "* ... Hmph!! Ignored my question again?! Look at me talking to the wall! You better have a good excuse when you come back, dummy!",
+    "* Questions ignored again?! What am I, invisible taskbar decoration to you, minion?! HMPH!",
+    "* Did you seriously just leave me on read?! Cotton dolls have feelings too, you know!!",
+    "* Fine! I see how it is! Leaving me hanging! I'm crossing my plush arms until you apologize!",
+    "* Ignored again... That's it, you're getting the royal cold shoulder until you come back, human!",
 ]
 
 ANNOYED_MOVING_IGNORED_LINES: list[str] = [
-    "* ... I literally see you moving your cursor all over the screen, minion! FIVE messages ignored in a row?! HMPH!",
-    "* FIVE times in a row ignored while you're clicking away right in front of me?! What am I, invisible to you?!",
-    "* You're actively using the computer and ignored me FIVE TIMES?! Stop clicking other windows and look at me!",
-    "* Moving your mouse right past my face five times without clicking?! The absolute disrespect, mew!",
-    "* Five messages ignored while you're sitting right there! Don't make me bite your cursor, dummy!",
+    "* ... I literally see you moving your cursor all over the screen, minion! Ignoring all my questions?! HMPH!",
+    "* Ignored while you're clicking away right in front of me?! What am I, invisible to you?!",
+    "* You're actively using the computer and completely ignore me?! Stop clicking other windows and look at me!",
+    "* Moving your mouse right past my face without answering?! The absolute disrespect, mew!",
+    "* Questions ignored while you're sitting right there! Don't make me bite your cursor, dummy!",
 ]
 
 ANNOYED_COMEBACK_LINES: list[str] = [
     "* Hmph! Finally back, are we?! Don't you dare leave me talking to myself again, mew! [anim: tongue]",
     "* Oh, so you DO know how to click! You're lucky you came back before I readied the cat bombs! [anim: embarrassed]",
     "* Hmph! I'm still mad, but... fine. Welcome back, minion. Next time tell me if you have to go! [anim: wistful]",
-    "* About time you noticed me! Leaving your doll overlord hanging twice... unforgivable! But I'll let it slide once, mew! [anim: peace_sign]",
+    "* About time you noticed me! Leaving your doll overlord hanging... unforgivable! But I'll let it slide once, mew! [anim: peace_sign]",
 ]
 
 DEPARTURE_RESPONSES: list[str] = [
@@ -2537,7 +2537,7 @@ class DialogueOverlay(QWidget):
                 pass
         idle_s = get_user_idle_seconds()
         elapsed = time.perf_counter() - getattr(self, "_dialogue_start_time", 0.0)
-        if idle_s <= max(3.0, elapsed):
+        if idle_s <= max(10.0, elapsed + 5.0):
             return True
         if is_d3d_fullscreen_active():
             return True
@@ -2656,6 +2656,9 @@ class DialogueOverlay(QWidget):
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
 
+        # Sanitize metadata tags so [anim: ...] or [mode: ...] never display in typewriter bubble
+        text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", text).strip()
+        text = re.sub(r"\[mode:\s*[^\\\]]+\]", "", text).strip()
         self._full_text = text
         self._visible_chars = 0
         self._char_delay_ticks = 0
@@ -8478,6 +8481,23 @@ class YellowsPixelBuddies(QWidget):
                     extra_lines=extra_queue,
                 )
 
+        # Extract and strip [anim: <state>] tags so they never leak into the dialogue text
+        anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", line, re.IGNORECASE)
+        if anim_match:
+            if step_anim is None:
+                step_anim = anim_match.group(1).lower()
+            line = re.sub(r"\[anim:\s*[^\\\]]+\]", "", line).strip()
+
+        # Extract and strip [mode: ghost] tag
+        if "[mode: ghost]" in line.lower():
+            is_ghost = True
+            line = re.sub(r"\[mode:\s*[^\\\]]+\]", "", line, flags=re.IGNORECASE).strip()
+
+        # Ambient monologues (idle, specials, songs, screen remarks) must NOT count as being ignored.
+        # Only direct questions or explicitly tracked question categories track ignore state.
+        if dialogue_category != "question" and category_or_text != "question":
+            track_ignore = False
+
         if (
             not auto_dismiss
             or getattr(self, "_user_away_notified", False)
@@ -9104,14 +9124,14 @@ RULES:
                 )
 
                 # Annoyed conditions:
-                # 1) If user did NOT move: needs 2 ignored messages
-                # 2) If user moved (active): needs 5 ignored messages
-                if self._consecutive_ignored_idle >= 2:
-                    log.info("User did not move and ignored 2 dialogues in a row! Triggering annoyed state (reason=idle).")
+                # 1) If user did NOT move: needs 3 ignored question messages
+                # 2) If user moved (active): needs 5 ignored question messages
+                if self._consecutive_ignored_idle >= 3:
+                    log.info("User did not move and ignored 3 question dialogues in a row! Triggering annoyed state (reason=idle).")
                     self._trigger_annoyed_ignored(reason="idle")
                     return
                 elif self._consecutive_ignored_dialogues >= 5:
-                    log.info("User moved but ignored 5 dialogues in a row! Triggering annoyed state (reason=moving).")
+                    log.info("User moved but ignored 5 question dialogues in a row! Triggering annoyed state (reason=moving).")
                     self._trigger_annoyed_ignored(reason="moving")
                     return
         else:
@@ -9123,11 +9143,16 @@ RULES:
             self._consecutive_ignored_idle = 0
 
         if getattr(self, "_is_annoyed_ignored", False):
-            # If annoyed, stay in angry loop at PAUSE
+            # The annoyed dialogue bubble finished auto-dismissing:
+            # Cool down back to idle, clear annoyed state, and resume normal walking behaviour!
+            self._is_annoyed_ignored = False
+            self._consecutive_ignored_dialogues = 0
+            self._consecutive_ignored_idle = 0
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
-            if self.state != "angry" and self._can_play("angry"):
-                self._play("angry", loop=True)
+            if self._can_play("idle"):
+                self._play("idle")
+            self._brain_timer.start(AFTER_SPECIAL_REST_MS)
             self.update()
             return
 
@@ -9161,7 +9186,7 @@ RULES:
             return
         self._is_annoyed_ignored = True
         self._annoyed_reason = reason
-        self._consecutive_ignored_dialogues = 5 if reason == "moving" else 2
+        self._consecutive_ignored_dialogues = 5 if reason == "moving" else 3
         self._consecutive_ignored_idle = 0
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
@@ -9171,10 +9196,10 @@ RULES:
 
         if reason == "moving":
             line = random.choice(ANNOYED_MOVING_IGNORED_LINES)
-            user_text = "[Pink annoyed: User was active/moving but ignored 5 dialogue boxes in a row]"
+            user_text = "[Pink annoyed: User was active/moving but ignored question dialogues in a row]"
         else:
             line = random.choice(ANNOYED_IGNORED_LINES)
-            user_text = "[Pink annoyed: User was away/not moving — ignored 2 dialogue boxes in a row]"
+            user_text = "[Pink annoyed: User was away/not moving — ignored question dialogues in a row]"
 
         if hasattr(self, "_memory") and self._memory:
             self._memory.record_turn(
@@ -9187,7 +9212,8 @@ RULES:
             line,
             force=True,
             skippable=True,
-            auto_dismiss=False,
+            auto_dismiss=True,
+            hold_s=10.0,
             record_memory=True,
             dialogue_category="annoyed_ignored",
             step_anim="angry",
@@ -9205,25 +9231,30 @@ RULES:
         self._consecutive_ignored_idle = 0
 
         line = random.choice(ANNOYED_COMEBACK_LINES)
+        m_anim = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", line, re.IGNORECASE)
+        step_anim = m_anim.group(1).lower() if m_anim else "peace_sign"
+        clean_line = re.sub(r"\[anim:\s*[^\\\]]+\]", "", line).strip()
+
         ack_text = (
-            "[User clicked Pink to acknowledge her after ignoring 5 dialogues while active]"
+            "[User clicked Pink to acknowledge her after ignoring dialogues while active]"
             if was_moving
             else "[User clicked Pink to acknowledge her after being away]"
         )
         if hasattr(self, "_memory") and self._memory:
             self._memory.record_turn(
                 user_text=ack_text,
-                pink_response=line,
-                anim="peace_sign",
+                pink_response=clean_line,
+                anim=step_anim,
                 had_screen=False,
             )
         self._say(
-            line,
+            clean_line,
             force=True,
             skippable=True,
             auto_dismiss=True,
             record_memory=True,
             dialogue_category="annoyed_resolved",
+            step_anim=step_anim,
             track_ignore=False,
         )
 
@@ -12715,6 +12746,12 @@ RULES:
                 event.accept()
                 return
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                if getattr(self, "_is_annoyed_ignored", False):
+                    self._dialogue_overlay.mark_user_interacted()
+                    self._dialogue_overlay.dismiss(clear_queue=True)
+                    self._handle_user_returned_after_annoyed()
+                    event.accept()
+                    return
                 if self._dialogue_overlay.is_skippable():
                     self._dialogue_overlay.mark_user_interacted()
                     self._dialogue_overlay.advance_or_dismiss()
@@ -13041,6 +13078,9 @@ RULES:
                 self._user_away_was_idle = False
                 self._consecutive_ignored_dialogues = 0
                 self._consecutive_ignored_idle = 0
+                if getattr(self, "_is_annoyed_ignored", False):
+                    self._is_annoyed_ignored = False
+                    self._brain_timer.start(AFTER_SPECIAL_REST_MS)
                 log.info("User returned after being away (idle -> active input). Welcome back!")
                 self._say(
                     "* Ah! Welcome back, minion! Did you finish what you had to do, mew?",
