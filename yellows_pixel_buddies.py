@@ -121,7 +121,7 @@ from PyQt5.QtWidgets import (
 # =============================================================================
 
 # --- Application Metadata & Auto-Update --------------------------------------
-APP_VERSION = "0.9.8.3"
+APP_VERSION = "0.9.8.4"
 GITHUB_REPO = "BintangPrasetyo95/yellows-pixel-buddies"
 
 # --- Paths & Sprites ---------------------------------------------------------
@@ -8265,6 +8265,7 @@ class YellowsPixelBuddies(QWidget):
         self._update_checker_thread: UpdateCheckerThread | None = None
         self._update_downloader_thread: UpdateDownloaderThread | None = None
         self._available_update_info: tuple[str, str, str, str] | None = None
+        self._postponed_update_version: str | None = None
         self._gemini_thread: GeminiWorkerThread | None = None
         self._is_ghost_talking: bool = False
         self._ghost_aura_cache: dict[int, QPixmap] = {}
@@ -10656,7 +10657,15 @@ RULES:
         is_frozen = getattr(sys, "frozen", False)
         is_git = (_exe_dir / ".git").is_dir()
 
+        if not manual and getattr(self, "_postponed_update_version", None) == version:
+            return
+
         if not is_frozen and is_git:
+            if not manual:
+                log.info("Automatic update check: remote version %s available via git pull", version)
+                self._say(f"* Psst! A new update ({version}) is out on GitHub, mew!", force=False, record_memory=False)
+                return
+
             msg = (
                 f"A new version ({version}) of Yellow's Pixel Buddies is available!\n\n"
                 f"Changelog:\n{notes}\n\n"
@@ -10673,6 +10682,7 @@ RULES:
             if reply == QMessageBox.Yes:
                 self._apply_git_update(version)
             else:
+                self._postponed_update_version = version
                 self._say(f"* Update to {version} postponed, mew!", force=True, record_memory=False)
             return
 
@@ -10694,6 +10704,7 @@ RULES:
         if reply == QMessageBox.Yes:
             self._start_update_download(download_url, asset_name)
         else:
+            self._postponed_update_version = version
             self._say(f"* Update to {version} postponed, mew!", force=True, record_memory=False)
 
     def _apply_git_update(self, version: str) -> None:
