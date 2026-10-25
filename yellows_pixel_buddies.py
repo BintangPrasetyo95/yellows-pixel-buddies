@@ -109,7 +109,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtWidgets import (
-    QAction, QApplication, QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QAction, QApplication, QDialog, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QMessageBox,
     QPlainTextEdit, QPushButton, QSlider, QStyle, QStyleOptionSlider,
     QSystemTrayIcon, QVBoxLayout, QWidget, QWidgetAction
@@ -3153,6 +3153,101 @@ class DialogueOverlay(QWidget):
         painter.end()
 
 
+# --- Drag & Drop Image Processing Helpers ------------------------------------
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".jfif", ".tiff"}
+
+
+def qimage_to_base64_jpeg(img: QImage, max_dim: int = 1280, quality: int = 85) -> str:
+    """Downscale a QImage if needed and return base64-encoded JPEG data."""
+    if img.isNull():
+        return ""
+    if img.width() > max_dim or img.height() > max_dim:
+        img = img.scaled(max_dim, max_dim, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+    # Flatten transparent alpha against white background so transparent PNGs/stickers render cleanly in JPEG
+    if img.hasAlphaChannel():
+        flattened = QImage(img.size(), QImage.Format_RGB32)
+        flattened.fill(QColor(255, 255, 255))
+        painter = QPainter(flattened)
+        painter.drawImage(0, 0, img)
+        painter.end()
+        target_img = flattened
+    else:
+        target_img = img
+
+    buffer = QBuffer()
+    buffer.open(QIODevice.WriteOnly)
+    target_img.save(buffer, "JPEG", quality)
+    raw_bytes = bytes(buffer.data())
+    buffer.close()
+    return base64.b64encode(raw_bytes).decode("utf-8")
+
+
+def is_image_in_mime(mime_data) -> bool:
+    """Check if QMimeData contains an image object or a link to a supported image file."""
+    if mime_data is None:
+        return False
+    if mime_data.hasImage():
+        return True
+    if mime_data.hasUrls():
+        for qurl in mime_data.urls():
+            if qurl.isLocalFile():
+                ext = Path(qurl.toLocalFile()).suffix.lower()
+                if ext in SUPPORTED_IMAGE_EXTENSIONS:
+                    return True
+            else:
+                url_str = qurl.toString().lower().split("?")[0]
+                if any(url_str.endswith(ext) for ext in SUPPORTED_IMAGE_EXTENSIONS):
+                    return True
+    return False
+
+
+def process_dropped_image_to_base64(mime_data) -> tuple[str | None, str]:
+    """Extract an image from QMimeData and return (base64_jpeg, display_name)."""
+    if mime_data is None:
+        return None, ""
+
+    # 1. Direct QImage or QPixmap in MIME (e.g. dragged from image viewer / clipboard / some browsers)
+    if mime_data.hasImage():
+        val = mime_data.imageData()
+        if isinstance(val, QImage) and not val.isNull():
+            b64 = qimage_to_base64_jpeg(val)
+            if b64:
+                return b64, "image.png"
+        elif isinstance(val, QPixmap) and not val.isNull():
+            b64 = qimage_to_base64_jpeg(val.toImage())
+            if b64:
+                return b64, "image.png"
+
+    # 2. URLs (files from Explorer or web links)
+    if mime_data.hasUrls():
+        for qurl in mime_data.urls():
+            if qurl.isLocalFile():
+                local_path = Path(qurl.toLocalFile())
+                if local_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS and local_path.is_file():
+                    img = QImage(str(local_path))
+                    if not img.isNull():
+                        b64 = qimage_to_base64_jpeg(img)
+                        if b64:
+                            return b64, local_path.name
+            else:
+                url_str = qurl.toString()
+                if any(url_str.lower().split("?")[0].endswith(ext) for ext in SUPPORTED_IMAGE_EXTENSIONS):
+                    try:
+                        resp = requests.get(url_str, timeout=5)
+                        if resp.status_code == 200:
+                            img = QImage.fromData(resp.content)
+                            if not img.isNull():
+                                b64 = qimage_to_base64_jpeg(img)
+                                if b64:
+                                    name = url_str.split("/")[-1].split("?")[0] or "web_image.jpg"
+                                    return b64, name
+                    except Exception as err:
+                        log.debug("Failed to fetch web image URL %s: %s", url_str, err)
+
+    return None, ""
+
+
 class ChatTextEdit(QPlainTextEdit):
     """A QPlainTextEdit that wraps lines, emits returnPressed on Enter,
     supports Shift+Enter for newlines, and emits escapePressed on Esc."""
@@ -3168,6 +3263,26 @@ class ChatTextEdit(QPlainTextEdit):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.document().setDocumentMargin(0)
+
+    def dragEnterEvent(self, event) -> None:
+        if is_image_in_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if is_image_in_mime(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if is_image_in_mime(event.mimeData()):
+            p = self.parent()
+            if p is not None and hasattr(p, "dropEvent"):
+                p.dropEvent(event)
+                return
+        super().dropEvent(event)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key_Escape:
@@ -3198,13 +3313,14 @@ ChatLineEdit = ChatTextEdit
 class ChatInputOverlay(QWidget):
     """A frameless, translucent text input bar styled after Deltarune dialogue boxes."""
 
-    submitted = pyqtSignal(str, bool)
+    submitted = pyqtSignal(str, bool, str, str)
     cancelled = pyqtSignal()
     timed_out = pyqtSignal()
 
     def __init__(self, font_family: str, box_png_path: Path, parent: QWidget | None = None) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAcceptDrops(True)
 
         self._font_family = font_family
         self._box_src: QImage | None = None
@@ -3227,10 +3343,13 @@ class ChatInputOverlay(QWidget):
         req_inner_h = 24 * 2 + pad_y * 2
         extra_h = max(0, req_inner_h - base_inner_h)
 
-        self._base_w = round(108 * self._scale) + extra_w  # ~308px
+        self._base_w = round(108 * self._scale) + extra_w + round(16 * self._scale)  # ~332px with attach button
         self._base_h = round(33 * self._scale) + extra_h   # ~76px
         self._last_pet_x: float | None = None
         self._last_pet_y: float | None = None
+
+        self._attached_image_b64: str | None = None
+        self._attached_image_name: str = ""
 
         self._eye_off_icon: QIcon | None = None
         self._eye_on_icon: QIcon | None = None
@@ -3309,11 +3428,16 @@ class ChatInputOverlay(QWidget):
         font.setWeight(QFont.Normal)
         font.setStyleStrategy(QFont.PreferDefault)
 
-        layout = QHBoxLayout(self)
+        main_layout = QVBoxLayout(self)
         pad_h = round(14 * self._scale)
         pad_v = round(10 * self._scale)
-        layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
-        layout.setSpacing(5)
+        main_layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
+        main_layout.setSpacing(3)
+
+        # Row 1: Interactive Chat Text Input and Controls
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(5)
 
         # Soul heart indicator
         self._heart_label = QLabel(self)
@@ -3321,19 +3445,19 @@ class ChatInputOverlay(QWidget):
             self._heart_label.setPixmap(self._soul_heart_pix)
             self._heart_label.setFixedSize(self._soul_heart_pix.size())
         self._heart_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._heart_label, 0, Qt.AlignTop)
+        row_layout.addWidget(self._heart_label, 0, Qt.AlignTop)
 
         # Asterisk
         self._star_label = QLabel("*", self)
         self._star_label.setFont(font)
         self._star_label.setStyleSheet("color: #FFFFFF;")
-        layout.addWidget(self._star_label, 0, Qt.AlignTop)
+        row_layout.addWidget(self._star_label, 0, Qt.AlignTop)
 
         # Input text field with line wrapping
         self._text_edit = ChatTextEdit(self)
         self._line_edit = self._text_edit  # alias
         self._text_edit.setFont(font)
-        self._text_edit.setPlaceholderText("Talk to Pink...")
+        self._text_edit.setPlaceholderText("Talk to Pink (or drop image)...")
         self._text_edit.setToolTip("Press Enter to send (Shift+Enter for newline)")
         pal = self._text_edit.palette()
         pal.setColor(QPalette.Active, QPalette.PlaceholderText, QColor(140, 140, 140))
@@ -3366,9 +3490,31 @@ class ChatInputOverlay(QWidget):
         self._text_edit.escapePressed.connect(self.cancel)
         self._text_edit.textChanged.connect(self._on_text_changed)
         self._text_edit.userTyped.connect(self.reset_timeout)
-        layout.addWidget(self._text_edit, stretch=1)
+        row_layout.addWidget(self._text_edit, stretch=1)
 
         btn_h = max(20, round(16 * self._scale))
+        btn_w = max(22, round(18 * self._scale))
+
+        # Attach image button
+        self._attach_btn = QPushButton("📎", self)
+        self._attach_btn.setFont(font)
+        self._attach_btn.setCursor(Qt.PointingHandCursor)
+        self._attach_btn.setToolTip("Attach Image (or drag & drop onto Pink / Chat)")
+        self._attach_btn.setFixedSize(btn_w, btn_h)
+        self._attach_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #000000;"
+            "  color: #888888;"
+            "  border: 1px solid #555555;"
+            "  padding: 0px;"
+            "}"
+            "QPushButton:hover {"
+            "  border: 1px solid #00FFFF;"
+            "  color: #00FFFF;"
+            "}"
+        )
+        self._attach_btn.clicked.connect(self._on_attach_clicked)
+        row_layout.addWidget(self._attach_btn, 0, Qt.AlignBottom)
 
         # Screen vision toggle button
         self._vision_btn = QPushButton(self)
@@ -3377,7 +3523,6 @@ class ChatInputOverlay(QWidget):
         self._vision_btn.setCheckable(True)
         self._vision_btn.setChecked(False)
         self._vision_btn.setToolTip("Screen Vision: OFF (Click to let Pink see your screen)")
-        btn_w = max(22, round(18 * self._scale))
         self._vision_btn.setFixedSize(btn_w, btn_h)
         if self._eye_off_icon and not self._eye_off_icon.isNull():
             self._vision_btn.setIcon(self._eye_off_icon)
@@ -3400,7 +3545,7 @@ class ChatInputOverlay(QWidget):
             "  border: 1px solid #00FFFF;"
             "}"
         )
-        layout.addWidget(self._vision_btn, 0, Qt.AlignBottom)
+        row_layout.addWidget(self._vision_btn, 0, Qt.AlignBottom)
 
         # Send button
         self._send_btn = QPushButton("Send", self)
@@ -3425,7 +3570,7 @@ class ChatInputOverlay(QWidget):
             "}"
         )
         self._send_btn.clicked.connect(self._on_submit)
-        layout.addWidget(self._send_btn, 0, Qt.AlignBottom)
+        row_layout.addWidget(self._send_btn, 0, Qt.AlignBottom)
 
         # Close button
         self._close_btn = QPushButton("×", self)
@@ -3451,10 +3596,106 @@ class ChatInputOverlay(QWidget):
             "}"
         )
         self._close_btn.clicked.connect(self.cancel)
-        layout.addWidget(self._close_btn, 0, Qt.AlignBottom)
+        row_layout.addWidget(self._close_btn, 0, Qt.AlignBottom)
+
+        main_layout.addLayout(row_layout)
+
+        # Row 2: Attachment Preview & Dismiss Badge
+        self._attachment_widget = QWidget(self)
+        att_layout = QHBoxLayout(self._attachment_widget)
+        att_layout.setContentsMargins(round(20 * self._scale), 0, 0, 0)
+        att_layout.setSpacing(6)
+
+        self._attachment_label = QLabel(self._attachment_widget)
+        self._attachment_label.setFont(font)
+        self._attachment_label.setStyleSheet("color: #00FFFF;")
+        att_layout.addWidget(self._attachment_label)
+
+        self._remove_att_btn = QPushButton("×", self._attachment_widget)
+        self._remove_att_btn.setFont(font)
+        self._remove_att_btn.setCursor(Qt.PointingHandCursor)
+        self._remove_att_btn.setFixedSize(round(14 * self._scale), round(14 * self._scale))
+        self._remove_att_btn.setToolTip("Remove attached image")
+        self._remove_att_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: transparent;"
+            "  color: #FF5555;"
+            "  border: 1px solid #FF5555;"
+            "  padding: 0px;"
+            "  font-weight: bold;"
+            "}"
+            "QPushButton:hover {"
+            "  background: #FF5555;"
+            "  color: #000000;"
+            "}"
+        )
+        self._remove_att_btn.clicked.connect(self.clear_attachment)
+        att_layout.addWidget(self._remove_att_btn)
+        att_layout.addStretch(1)
+
+        self._attachment_widget.hide()
+        main_layout.addWidget(self._attachment_widget)
 
         self.setFixedSize(self._base_w, self._base_h)
         self._build_background(self._base_w, self._base_h)
+
+    def attach_image(self, b64_data: str, filename: str) -> None:
+        """Attach an image to this chat turn and show visual attachment indicator."""
+        self._attached_image_b64 = b64_data
+        self._attached_image_name = filename
+        trunc_name = filename if len(filename) <= 24 else filename[:21] + "..."
+        if hasattr(self, "_attachment_label"):
+            self._attachment_label.setText(f"📷 {trunc_name}")
+        if hasattr(self, "_attachment_widget"):
+            self._attachment_widget.show()
+        self._on_text_changed()
+        self.reset_timeout()
+        self.activateWindow()
+        self._text_edit.setFocus()
+
+    def clear_attachment(self) -> None:
+        """Clear currently attached image and restore standard compact dimensions."""
+        self._attached_image_b64 = None
+        self._attached_image_name = ""
+        if hasattr(self, "_attachment_widget"):
+            self._attachment_widget.hide()
+        self._on_text_changed()
+
+    def _on_attach_clicked(self) -> None:
+        self.reset_timeout()
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Image for Pink",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.jfif *.tiff);;All Files (*.*)",
+        )
+        if file_path:
+            p = Path(file_path)
+            loaded = QImage(str(p))
+            if not loaded.isNull():
+                b64 = qimage_to_base64_jpeg(loaded)
+                if b64:
+                    self.attach_image(b64, p.name)
+
+    def dragEnterEvent(self, event) -> None:
+        if is_image_in_mime(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if is_image_in_mime(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:
+        b64, name = process_dropped_image_to_base64(event.mimeData())
+        if b64:
+            self.attach_image(b64, name)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def _get_line_count(self) -> int:
         block = self._text_edit.document().firstBlock()
@@ -3471,9 +3712,11 @@ class ChatInputOverlay(QWidget):
         clamped_lines = min(4, max(1, line_count))
         fm = self._text_edit.fontMetrics()
         line_step = fm.lineSpacing()
-        # _base_h (~76px) comfortably fits up to 2 lines; extra height needed only for 3+ lines
         extra_lines = max(0, clamped_lines - 2)
-        target_h = self._base_h + extra_lines * line_step
+        base_h = self._base_h
+        if hasattr(self, "_attachment_widget") and self._attachment_widget.isVisible():
+            base_h += round(18 * self._scale)
+        target_h = base_h + extra_lines * line_step
         if line_count > 4:
             self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         else:
@@ -3574,6 +3817,7 @@ class ChatInputOverlay(QWidget):
     def _on_timeout(self) -> None:
         """Handle chat input inactivity timeout (no typing for 2 minutes)."""
         self._timeout_timer.stop()
+        self.clear_attachment()
         self.hide()
         self.timed_out.emit()
 
@@ -3583,6 +3827,7 @@ class ChatInputOverlay(QWidget):
         self._text_edit.blockSignals(True)
         self._text_edit.clear()
         self._text_edit.blockSignals(False)
+        self.clear_attachment()
         self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFixedSize(self._base_w, self._base_h)
         self._build_background(self._base_w, self._base_h)
@@ -3596,6 +3841,7 @@ class ChatInputOverlay(QWidget):
 
     def cancel(self) -> None:
         self._timeout_timer.stop()
+        self.clear_attachment()
         self.hide()
         self.cancelled.emit()
 
@@ -3603,15 +3849,20 @@ class ChatInputOverlay(QWidget):
         self._timeout_timer.stop()
         text = self._text_edit.toPlainText().strip()
         see_screen = self._vision_btn.isChecked()
+        b64 = self._attached_image_b64 or ""
+        name = self._attached_image_name or ""
+        self.clear_attachment()
         self.hide()
-        self.submitted.emit(text, see_screen)
+        self.submitted.emit(text, see_screen, b64, name)
 
     def hideEvent(self, event) -> None:
         self._timeout_timer.stop()
+        self.clear_attachment()
         super().hideEvent(event)
 
     def closeEvent(self, event) -> None:
         self._timeout_timer.stop()
+        self.clear_attachment()
         super().closeEvent(event)
 
 
@@ -7969,6 +8220,16 @@ class YellowsPixelBuddies(QWidget):
         self.setFixedSize(SPRITE_SIZE, SPRITE_SIZE)            # window == one sprite
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
+        self.setAcceptDrops(True)
+        try:
+            WM_DROPFILES = 0x0233
+            WM_COPYDATA = 0x004A
+            WM_COPYGLOBALDATA = 0x0049
+            ctypes.windll.user32.ChangeWindowMessageFilterEx(int(self.winId()), WM_DROPFILES, 1, None)
+            ctypes.windll.user32.ChangeWindowMessageFilterEx(int(self.winId()), WM_COPYDATA, 1, None)
+            ctypes.windll.user32.ChangeWindowMessageFilterEx(int(self.winId()), WM_COPYGLOBALDATA, 1, None)
+        except Exception:
+            pass
         self.setWindowTitle("Yellow's Pixel Buddies")
         if ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(ICON_PATH)))
@@ -9338,7 +9599,14 @@ RULES:
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
         self._check_and_play_pending_song()
 
-    def _on_chat_submitted(self, text: str, see_screen: bool = False) -> None:
+    def _on_chat_submitted(
+        self,
+        text: str,
+        see_screen: bool = False,
+        attached_image_b64: str | None = None,
+        attached_image_name: str = "",
+        is_direct_drop: bool = False,
+    ) -> None:
         """Process user text input from the chat overlay and call Gemini AI in background."""
         if hasattr(self, "_chat_input"):
             self._chat_input.hide()
@@ -9347,13 +9615,20 @@ RULES:
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
 
+        if not attached_image_b64:
+            attached_image_b64 = None
+
         if not text:
-            self._phase = Phase.PAUSE
-            self._pause_elapsed = False
-            if self._can_play("angry"):
-                self._play("angry")
-            self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True, record_memory=False)
-            return
+            if attached_image_b64:
+                img_tag = f"'{attached_image_name}'" if attached_image_name else "an image"
+                text = f"[User showed image: {img_tag}] What do you think of this picture?"
+            else:
+                self._phase = Phase.PAUSE
+                self._pause_elapsed = False
+                if self._can_play("angry"):
+                    self._play("angry")
+                self._say("* Did a cat step on your keyboard, mew?! You didn't type anything!", force=True, record_memory=False)
+                return
 
         clean_input = text.strip()
         lower_input = clean_input.lower()
@@ -9730,7 +10005,9 @@ RULES:
             return
 
         screenshot_b64 = None
-        if see_screen:
+        if attached_image_b64:
+            screenshot_b64 = attached_image_b64
+        elif see_screen:
             # Briefly hide Pink and speech bubble so she doesn't screenshot herself
             if hasattr(self, "_dialogue_overlay"):
                 self._dialogue_overlay.hide()
@@ -9756,7 +10033,15 @@ RULES:
         self._pause_elapsed = False
         self._brain_timer.stop()
 
-        if see_screen:
+        if attached_image_b64:
+            if self._can_play("behind"):
+                self._play("behind", loop=True)
+            name_lbl = f" ({attached_image_name})" if attached_image_name else ""
+            if is_direct_drop:
+                self._say(f"* Oho! What did you just toss at me{name_lbl}?! Let me inspect this...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+            else:
+                self._say(f"* Inspecting your picture{name_lbl}...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+        elif see_screen:
             if self._can_play("behind"):
                 self._play("behind", loop=True)
             self._say("* Inspecting your screen...", force=True, skippable=False, auto_dismiss=False, record_memory=False)
@@ -9867,7 +10152,26 @@ RULES:
             # Temporary storage consumed after immediate reaction
             self._memory.recent_ambient_dialogues.clear()
 
-        if see_screen:
+        if attached_image_b64:
+            img_desc = f"'{attached_image_name}'" if attached_image_name else "an image"
+            if is_direct_drop:
+                system_inst += (
+                    f"\n\nCRITICAL CONTEXT - USER DROPPED AN IMAGE DIRECTLY ONTO YOU ({img_desc}):\n"
+                    f"The user just dragged and dropped an image ({img_desc}) directly onto your doll body for you to review!\n"
+                    "- Carefully examine visual details in the image (subject, art style, colors, characters, text, objects, memes, or code).\n"
+                    "- React in your signature sassy, royal, tsundere doll persona ('mew', minion, doll overlord).\n"
+                    "- Give your honest royal commentary, critique, verdict, praise, or witty teasing.\n"
+                    "- Tag your reaction with an appropriate animation like [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: embarrassed], [anim: shocked], or [anim: behind]."
+                )
+            else:
+                system_inst += (
+                    f"\n\nCRITICAL CONTEXT - USER ATTACHED AN IMAGE ({img_desc}):\n"
+                    f"The user attached an image ({img_desc}) to their chat message for you to inspect!\n"
+                    "- Carefully examine visual details in the image (subject, art style, colors, characters, text, objects, memes, or code).\n"
+                    "- Answer the user's question or react in your signature sassy, royal doll persona ('mew', minion, doll overlord).\n"
+                    "- Tag your reaction with an appropriate animation like [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: embarrassed], [anim: shocked], or [anim: behind]."
+                )
+        elif see_screen:
             system_inst += (
                 "\n\nThe user enabled screen vision! The attached image is a screenshot of their current desktop.\n"
                 "- Look carefully at the screenshot. Accurately comment ONLY on what is ACTUALLY visible on their screen.\n"
@@ -9888,6 +10192,7 @@ RULES:
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
 
+        had_visual = bool(see_screen or attached_image_b64)
         # Spawn background worker thread
         self._gemini_thread = GeminiWorkerThread(
             api_key=api_key,
@@ -9900,10 +10205,10 @@ RULES:
             parent=self,
         )
         self._gemini_thread.response_ready.connect(
-            lambda spoken_text, anim, is_ghost, seen="", u=text, s=see_screen: self._on_gemini_response(u, spoken_text, anim, s, is_ghost, seen=seen)
+            lambda spoken_text, anim, is_ghost, seen="", u=text, s=had_visual: self._on_gemini_response(u, spoken_text, anim, s, is_ghost, seen=seen)
         )
         self._gemini_thread.error_occurred.connect(
-            lambda err_msg, u=text, s=see_screen: self._on_gemini_error(u, err_msg, s)
+            lambda err_msg, u=text, s=had_visual: self._on_gemini_error(u, err_msg, s)
         )
         self._is_handling_user_chat = True
         self._gemini_thread.start()
@@ -11870,6 +12175,7 @@ RULES:
 
     def _handle_uninstall(self) -> None:
         """Trigger uninstallation or data cleanup for installed/portable versions."""
+        parent_w = self._shop_window if (hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible()) else self
         uninstaller: Path | None = None
         if getattr(sys, "frozen", False):
             candidates = list(_exe_dir.glob("unins*.exe"))
@@ -11878,7 +12184,7 @@ RULES:
 
         if uninstaller and uninstaller.is_file():
             reply = QMessageBox.question(
-                self,
+                parent_w,
                 "Uninstall Yellow's Pixel Buddies",
                 "Are you sure you want to uninstall Yellow's Pixel Buddies?\n\n"
                 "This will close Pink and launch the Windows uninstaller.",
@@ -11891,12 +12197,12 @@ RULES:
                     subprocess.Popen([str(uninstaller)], cwd=str(_exe_dir), creationflags=flags)
                 except Exception as err:
                     log.error("Failed to launch uninstaller: %s", err)
-                    QMessageBox.warning(self, "Uninstall Error", f"Could not launch uninstaller:\n{err}")
+                    QMessageBox.warning(parent_w, "Uninstall Error", f"Could not launch uninstaller:\n{err}")
                     return
                 self._do_real_quit()
         else:
             reply = QMessageBox.question(
-                self,
+                parent_w,
                 "Uninstall / Clean Pet Data",
                 "You are running a portable version of Yellow's Pixel Buddies.\n\n"
                 "Would you like to remove all saved memories, facts, settings, "
@@ -11919,7 +12225,7 @@ RULES:
                         import shutil
                         shutil.rmtree(local_mem, ignore_errors=True)
                 QMessageBox.information(
-                    self,
+                    parent_w,
                     "Cleanup Complete",
                     "All pet settings, memories, and auto-start entries have been removed.\n\n"
                     "Pink will now close. You can safely delete this application file.",
@@ -12869,6 +13175,73 @@ RULES:
             return
         super().mouseDoubleClickEvent(event)
 
+    def dragEnterEvent(self, event) -> None:
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            event.ignore()
+            return
+        if is_image_in_mime(event.mimeData()):
+            event.acceptProposedAction()
+            if self._can_play("shocked") and self._phase in (Phase.WALK, Phase.PAUSE):
+                self._play("shocked")
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            event.ignore()
+            return
+        if is_image_in_mime(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        if self._can_play("idle") and self.state == "shocked" and self._phase in (Phase.WALK, Phase.PAUSE):
+            self._play("idle")
+        event.accept()
+
+    def dropEvent(self, event) -> None:
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            event.ignore()
+            return
+
+        b64_data, filename = process_dropped_image_to_base64(event.mimeData())
+        if not b64_data:
+            event.ignore()
+            return
+
+        event.acceptProposedAction()
+
+        # If chat input overlay is currently open, attach to it!
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.attach_image(b64_data, filename)
+            self._say(f"* Attached '{filename}' to our chat, mew! What do you want to ask me?", force=True, record_memory=False)
+            return
+
+        # Otherwise, trigger direct instant image commentary!
+        self._on_image_dropped(b64_data, filename)
+
+    def _on_image_dropped(self, b64_data: str, filename: str) -> None:
+        """Inspect and comment directly on an image dropped onto Pink."""
+        if hasattr(self, "_single_click_timer"):
+            self._single_click_timer.stop()
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+            return
+        if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
+            self._say("* Hold your horses, minion! I'm still thinking about your last question!", force=True, record_memory=False)
+            return
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+
+        user_prompt = f"[User dropped an image: '{filename}'] What do you think of this picture?"
+        self._on_chat_submitted(
+            text=user_prompt,
+            see_screen=False,
+            attached_image_b64=b64_data,
+            attached_image_name=filename,
+            is_direct_drop=True,
+        )
+
     def _trigger_spam_click_jump(self) -> bool:
         """Trigger a playful upward hop/jump when the user spams clicks on Pink."""
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.DRAG):
@@ -13020,7 +13393,6 @@ RULES:
         update_action = menu.addAction("Check for Updates 🔄")
         menu.addSeparator()
         restart_action = menu.addAction("Restart Pink 🔄")
-        uninstall_action = menu.addAction("Uninstall Pink 🗑️")
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -13030,8 +13402,6 @@ RULES:
             self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
-        elif chosen is uninstall_action:
-            self._handle_uninstall()
         elif chosen is restart_action:
             self._handle_restart_command()
         elif chosen is hide_tray_action:
@@ -13338,8 +13708,6 @@ RULES:
         tray_menu.addSeparator()
         restart_action = tray_menu.addAction("Restart Pink 🔄")
         restart_action.triggered.connect(self._handle_restart_command)
-        uninstall_action = tray_menu.addAction("Uninstall Pink 🗑️")
-        uninstall_action.triggered.connect(self._handle_uninstall)
         exit_action = tray_menu.addAction("Exit")
         exit_action.triggered.connect(self._quit)
 

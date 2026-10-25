@@ -1616,7 +1616,7 @@ class DeltaruneShopWindow(QWidget):
             elif self._tasks_tab == 3:
                 return len(self._get_timers_menu_items()) + 1  # Presets + Custom + Actives + Back
         elif self.state == ShopState.SETTINGS_MENU:
-            return 3  # Edit Facts, Toggles, Back
+            return 4  # Edit Facts, Toggles, Uninstall Pink, Back
         elif self.state == ShopState.FACTS_EDIT:
             return len(self._get_facts_menu_items()) + 1  # Facts + Back
         elif self.state == ShopState.TOGGLES_MENU:
@@ -1752,6 +1752,7 @@ class DeltaruneShopWindow(QWidget):
             dialogues = [
                 "* Permanent memory fact sheet & nickname manager.",
                 "* Toggle companion autonomous behaviors in real time.",
+                "* Uninstall Pink and cleanly remove settings/data.",
                 "* Return to the main parlour.",
             ]
             if 0 <= self._selected_index < len(dialogues):
@@ -1922,6 +1923,9 @@ class DeltaruneShopWindow(QWidget):
                 self.state = ShopState.TOGGLES_MENU
                 self._selected_index = 0
                 self.set_dialogue("* Toggle companion autonomous behaviors in real time.")
+            elif self._selected_index == 2:  # Uninstall Pink
+                if self._pet and hasattr(self._pet, "_handle_uninstall"):
+                    self._pet._handle_uninstall()
             else:  # Back
                 self.state = ShopState.ROOT
                 self._selected_index = 3
@@ -2460,7 +2464,7 @@ class DeltaruneShopWindow(QWidget):
                     if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TOGGLES_MENU):
                         return row
                     elif self.state == ShopState.SETTINGS_MENU:
-                        return row if row < 3 else None
+                        return row if row < 4 else None
                     elif self.state == ShopState.TASKS:
                         raw_len = self._get_menu_count() - 1
                         if row == 4:
@@ -2726,7 +2730,7 @@ class DeltaruneShopWindow(QWidget):
 
     def _draw_settings_menu_state(self, p: QPainter) -> None:
         p.setFont(self._font_body)
-        options = ["Edit Facts & Nickname", "Companion Toggles", "Back"]
+        options = ["Edit Facts & Nickname", "Companion Toggles", "Uninstall Pink 🗑️", "Back"]
         start_x = 44
         start_y = 283
         line_h = 36
@@ -2748,6 +2752,8 @@ class DeltaruneShopWindow(QWidget):
             desc = f"* Fact Sheet:\n* Notes stored: {len(notes)}\n* Pink remembers your nickname and notes permanently."
         elif self._selected_index == 1:
             desc = "* Companion Toggles:\n* Live toggles for speech, music reactions, and defenses."
+        elif self._selected_index == 2:
+            desc = "* Uninstall Pink:\n* Launch the Windows uninstaller or clean local pet data."
         else:
             desc = "* Return to sanctuary main parlour."
         p.drawText(QRect(430, 269, 185, 175), Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, desc)
