@@ -11837,6 +11837,64 @@ RULES:
         self._say("* Rebooting the vessel! See you in a flash, mew!!", force=True, record_memory=False)
         QTimer.singleShot(1200, restart_application)
 
+    def _handle_uninstall(self) -> None:
+        """Trigger uninstallation or data cleanup for installed/portable versions."""
+        uninstaller: Path | None = None
+        if getattr(sys, "frozen", False):
+            candidates = list(_exe_dir.glob("unins*.exe"))
+            if candidates:
+                uninstaller = candidates[0]
+
+        if uninstaller and uninstaller.is_file():
+            reply = QMessageBox.question(
+                self,
+                "Uninstall Yellow's Pixel Buddies",
+                "Are you sure you want to uninstall Yellow's Pixel Buddies?\n\n"
+                "This will close Pink and launch the Windows uninstaller.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                flags = 0x00000008 if os.name == "nt" else 0
+                try:
+                    subprocess.Popen([str(uninstaller)], cwd=str(_exe_dir), creationflags=flags)
+                except Exception as err:
+                    log.error("Failed to launch uninstaller: %s", err)
+                    QMessageBox.warning(self, "Uninstall Error", f"Could not launch uninstaller:\n{err}")
+                    return
+                self._do_real_quit()
+        else:
+            reply = QMessageBox.question(
+                self,
+                "Uninstall / Clean Pet Data",
+                "You are running a portable version of Yellow's Pixel Buddies.\n\n"
+                "Would you like to remove all saved memories, facts, settings, "
+                "and disable the Windows auto-start entry from this computer?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                set_run_at_startup(False)
+                target_data = USER_DATA_DIR
+                if target_data.is_dir() and target_data.resolve() != _exe_dir.resolve():
+                    import shutil
+                    try:
+                        shutil.rmtree(target_data, ignore_errors=True)
+                    except Exception as err:
+                        log.warning("Could not completely delete user data dir: %s", err)
+                elif getattr(sys, "frozen", False) and (_exe_dir / "portable.txt").exists():
+                    local_mem = _exe_dir / "memory"
+                    if local_mem.is_dir():
+                        import shutil
+                        shutil.rmtree(local_mem, ignore_errors=True)
+                QMessageBox.information(
+                    self,
+                    "Cleanup Complete",
+                    "All pet settings, memories, and auto-start entries have been removed.\n\n"
+                    "Pink will now close. You can safely delete this application file.",
+                )
+                self._do_real_quit()
+
     def _read_screen_while_in_tray(self) -> None:
         """Periodic 5-minute screen reading while Pink is hidden in tray to maintain active session and context."""
         if not getattr(self, "_hidden_in_tray", False):
@@ -12925,6 +12983,7 @@ RULES:
         update_action = menu.addAction("Check for Updates 🔄")
         menu.addSeparator()
         restart_action = menu.addAction("Restart Pink 🔄")
+        uninstall_action = menu.addAction("Uninstall Pink 🗑️")
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -12934,6 +12993,8 @@ RULES:
             self._resume_walk_after_menu()
         if chosen is exit_action:
             self._quit()
+        elif chosen is uninstall_action:
+            self._handle_uninstall()
         elif chosen is restart_action:
             self._handle_restart_command()
         elif chosen is hide_tray_action:
@@ -13237,6 +13298,8 @@ RULES:
         tray_menu.addSeparator()
         restart_action = tray_menu.addAction("Restart Pink 🔄")
         restart_action.triggered.connect(self._handle_restart_command)
+        uninstall_action = tray_menu.addAction("Uninstall Pink 🗑️")
+        uninstall_action.triggered.connect(self._handle_uninstall)
         exit_action = tray_menu.addAction("Exit")
         exit_action.triggered.connect(self._quit)
 
