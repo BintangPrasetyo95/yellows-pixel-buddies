@@ -1616,7 +1616,7 @@ class DeltaruneShopWindow(QWidget):
             elif self._tasks_tab == 3:
                 return len(self._get_timers_menu_items()) + 1  # Presets + Custom + Actives + Back
         elif self.state == ShopState.SETTINGS_MENU:
-            return 4  # Edit Facts, Toggles, Uninstall Pink, Back
+            return 5  # Pet Scale, Companion Toggles, Edit Facts, Uninstall Pink, Back
         elif self.state == ShopState.FACTS_EDIT:
             return len(self._get_facts_menu_items()) + 1  # Facts + Back
         elif self.state == ShopState.TOGGLES_MENU:
@@ -1749,9 +1749,12 @@ class DeltaruneShopWindow(QWidget):
                     self.set_dialogue("* Return to Tasks & Alarms menu.")
 
         elif self.state == ShopState.SETTINGS_MENU:
+            cur_scale = getattr(self._pet, "_scale_modifier", 1.0) if self._pet else 1.0
+            scale_str = f"{cur_scale:.2f}x" if cur_scale != round(cur_scale) else f"{cur_scale:.1f}x"
             dialogues = [
-                "* Permanent memory fact sheet & nickname manager.",
+                f"* Adjust Pink's sprite scale on your desktop ({scale_str}).",
                 "* Toggle companion autonomous behaviors in real time.",
+                "* Permanent memory fact sheet & nickname manager.",
                 "* Uninstall Pink and cleanly remove settings/data.",
                 "* Return to the main parlour.",
             ]
@@ -1914,16 +1917,18 @@ class DeltaruneShopWindow(QWidget):
                     self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
 
         elif self.state == ShopState.SETTINGS_MENU:
-            if self._selected_index == 0:  # Edit Facts
-                self.state = ShopState.FACTS_EDIT
-                self._selected_index = 0
-                self._notes_scroll_offset = 0
-                self.set_dialogue("* Permanent memory fact sheet & nickname manager.")
+            if self._selected_index == 0:  # Pet Scale
+                self._cycle_pet_scale(direction=1)
             elif self._selected_index == 1:  # Companion Toggles
                 self.state = ShopState.TOGGLES_MENU
                 self._selected_index = 0
                 self.set_dialogue("* Toggle companion autonomous behaviors in real time.")
-            elif self._selected_index == 2:  # Uninstall Pink
+            elif self._selected_index == 2:  # Edit Facts
+                self.state = ShopState.FACTS_EDIT
+                self._selected_index = 0
+                self._notes_scroll_offset = 0
+                self.set_dialogue("* Permanent memory fact sheet & nickname manager.")
+            elif self._selected_index == 3:  # Uninstall Pink
                 if self._pet and hasattr(self._pet, "_handle_uninstall"):
                     self._pet._handle_uninstall()
             else:  # Back
@@ -1944,7 +1949,7 @@ class DeltaruneShopWindow(QWidget):
                     self._open_item_action("fact", notes[note_idx])
             else:  # Back
                 self.state = ShopState.SETTINGS_MENU
-                self._selected_index = 0
+                self._selected_index = 2
                 self.set_dialogue("* Back to sanctuary settings.")
 
         elif self.state == ShopState.TOGGLES_MENU:
@@ -2088,6 +2093,24 @@ class DeltaruneShopWindow(QWidget):
 
         self.update()
 
+    def _cycle_pet_scale(self, direction: int = 1) -> None:
+        if not self._pet or not hasattr(self._pet, "cycle_scale_modifier"):
+            return
+        new_scale = self._pet.cycle_scale_modifier(direction=direction)
+        if new_scale <= 0.5:
+            self.set_dialogue("* Tiny mode engaged! I'm smol but mighty, mew!")
+        elif new_scale <= 0.75:
+            self.set_dialogue("* Compact mode! Sleek and stealthy, darling!")
+        elif new_scale <= 1.0:
+            self.set_dialogue("* Standard scale restored! Just right, darling!")
+        elif new_scale <= 1.25:
+            self.set_dialogue("* Comfort mode! Easier on your eyes, mew!")
+        elif new_scale <= 1.5:
+            self.set_dialogue("* Large mode! Can you feel my overwhelming aura?")
+        else:
+            self.set_dialogue("* Giant mode active! Bow before my majestic presence, minion!")
+        self.update()
+
     def _cancel_or_back(self) -> None:
         if self._input_container.isVisible():
             self._on_input_cancelled()
@@ -2102,7 +2125,7 @@ class DeltaruneShopWindow(QWidget):
             self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
         elif self.state in (ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU):
             self.state = ShopState.SETTINGS_MENU
-            self._selected_index = 0
+            self._selected_index = 1 if self.state == ShopState.TOGGLES_MENU else 2
             self.set_dialogue("* Sanctuary settings.")
         elif self.state == ShopState.ITEM_ACTION:
             if self._inspect_item_kind in ("goal", "task", "alarm", "timer"):
@@ -2294,6 +2317,9 @@ class DeltaruneShopWindow(QWidget):
             if self.state == ShopState.CHAT_HISTORY_VIEW:
                 self._prev_history_turn()
                 return
+            elif self.state == ShopState.SETTINGS_MENU and self._selected_index == 0:
+                self._cycle_pet_scale(direction=-1)
+                return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx - 1) % len(self._inspect_options)
                 self.update()
@@ -2305,6 +2331,9 @@ class DeltaruneShopWindow(QWidget):
         elif key in (Qt.Key_Right, Qt.Key_D):
             if self.state == ShopState.CHAT_HISTORY_VIEW:
                 self._next_history_turn()
+                return
+            elif self.state == ShopState.SETTINGS_MENU and self._selected_index == 0:
+                self._cycle_pet_scale(direction=1)
                 return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx + 1) % len(self._inspect_options)
@@ -2464,7 +2493,7 @@ class DeltaruneShopWindow(QWidget):
                     if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TOGGLES_MENU):
                         return row
                     elif self.state == ShopState.SETTINGS_MENU:
-                        return row if row < 4 else None
+                        return row if row < 5 else None
                     elif self.state == ShopState.TASKS:
                         raw_len = self._get_menu_count() - 1
                         if row == 4:
@@ -2730,7 +2759,15 @@ class DeltaruneShopWindow(QWidget):
 
     def _draw_settings_menu_state(self, p: QPainter) -> None:
         p.setFont(self._font_body)
-        options = ["Edit Facts & Nickname", "Companion Toggles", "Uninstall Pink 🗑️", "Back"]
+        cur_scale = getattr(self._pet, "_scale_modifier", 1.0) if self._pet else 1.0
+        scale_str = f"{cur_scale:.2f}x" if cur_scale != round(cur_scale) else f"{cur_scale:.1f}x"
+        options = [
+            f"Pet Scale: [{scale_str}]",
+            "Companion Toggles",
+            "Edit Facts & Nickname",
+            "Uninstall Pink 🗑️",
+            "Back",
+        ]
         start_x = 44
         start_y = 283
         line_h = 36
@@ -2748,11 +2785,17 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_body)
         p.setPen(QColor(255, 255, 255))
         if self._selected_index == 0:
-            notes = self._get_fact_notes()
-            desc = f"* Fact Sheet:\n* Notes stored: {len(notes)}\n* Pink remembers your nickname and notes permanently."
+            desc = (
+                f"* Pet Scale:\n"
+                f"* Current: {scale_str}\n"
+                f"* [Click/Enter or Left/Right arrows to resize Pink]"
+            )
         elif self._selected_index == 1:
             desc = "* Companion Toggles:\n* Live toggles for speech, music reactions, and defenses."
         elif self._selected_index == 2:
+            notes = self._get_fact_notes()
+            desc = f"* Fact Sheet:\n* Notes stored: {len(notes)}\n* Pink remembers your nickname and notes permanently."
+        elif self._selected_index == 3:
             desc = "* Uninstall Pink:\n* Launch the Windows uninstaller or clean local pet data."
         else:
             desc = "* Return to sanctuary main parlour."
