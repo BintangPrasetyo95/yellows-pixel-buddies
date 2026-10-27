@@ -10336,6 +10336,9 @@ RULES:
 
     def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
         """Trigger the burnt state with foreground explosion VFX upon detecting an error."""
+        if getattr(self, "_hidden_in_tray", False):
+            log.warning("Suppressed burnt error visual while hidden in tray: %s", spoken_error)
+            return
         now = time.perf_counter()
         if getattr(self, "_in_error_burnt", False) and (now - getattr(self, "_last_error_burnt_time", 0.0) < 3.0):
             return
@@ -11759,6 +11762,9 @@ RULES:
     # -------------------------------------------------------- overlay / vfx
     def _show_overlay_frame(self, pixmap: QPixmap) -> None:
         """Position and draw the VFX overlay centered above the buddy's feet with matching floor."""
+        if getattr(self, "_hidden_in_tray", False):
+            self._stop_overlay()
+            return
         center_x = self._x + self.width() / 2.0
         bottom_y = self._y + self.height() - (FOOT_PADDING * self._scale_modifier)
         ground_ratio = EFFECT_GROUND_RATIO.get(self._overlay_state, 1.0)
@@ -11766,6 +11772,8 @@ RULES:
 
     def _start_overlay(self, effect: str) -> None:
         """Start playing a one-shot foreground VFX animation."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         frames = self._bank.frames.get(effect, [])
         if not frames:
             return
@@ -11894,6 +11902,8 @@ RULES:
 
     def _on_brain_timeout(self) -> None:
         """Behaviour timer: the current walk / pause time is up."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         if getattr(self, "_is_annoyed_ignored", False):
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
@@ -12201,6 +12211,11 @@ RULES:
             self._stop_overlay()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
+        if hasattr(self, "_window_timer"):
+            self._window_timer.stop()
+        if hasattr(self, "_screen_comment_timer"):
+            self._screen_comment_timer.stop()
+        self._last_foreground_hwnd = None
 
         self._brain_timer.stop()
         self._reset_jump_state()
@@ -12291,6 +12306,10 @@ RULES:
         self._tray_observations = []
 
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        if hasattr(self, "_window_timer") and not self._window_timer.isActive():
+            self._window_timer.start()
+        if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer") and not self._screen_comment_timer.isActive():
+            self._screen_comment_timer.start()
         log.info("Pink restored to screen from system tray.")
 
     def _handle_restart_command(self) -> None:
@@ -13605,6 +13624,8 @@ RULES:
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         # Check user return if user previously notified away
         if getattr(self, "_user_away_notified", False):
             idle_s = get_user_idle_seconds()
@@ -13653,6 +13674,8 @@ RULES:
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
         """Evaluate the newly focused window after it has composited."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         ensure_window_topmost(self)
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             ensure_window_topmost(self._dialogue_overlay)
@@ -13709,6 +13732,8 @@ RULES:
 
     def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             return
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
