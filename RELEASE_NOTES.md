@@ -1,3 +1,39 @@
+# Release Notes - v0.9.8.4 👁️🖼️
+
+**Yellow's Pixel Buddies v0.9.8.4** introduces multimodal Gemini Vision capabilities allowing you to drag-and-drop images directly onto Pink or attach them in the chat box, relocates the uninstallation option to the Sanctuary Shop settings, and resolves updater notification loops for Git development environments.
+
+---
+
+## 🌟 What's New & Major Highlights
+
+### 🖼️ Multimodal Vision & Image Drag-and-Drop
+- **Drop Images Directly onto Pink**: Drag any image (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`) straight from your file manager or browser onto Pink on your desktop!
+- **Playful Inspect Animation**: Pink enters a shocked inspection pose (`behind` animation) while examining the image, and then reacts verbally with her signature personality via Google Gemini Vision.
+- **Chat Box Image Attachments**:
+  - Drag and drop images directly into the chat input box or click the new attachment clip icon (`📎`).
+  - Added visual chip badges (`📷 <filename> [×]`) to preview and remove staged image attachments.
+  - Ask Pink questions about screenshots, drawings, or photos directly in the conversation flow.
+- **Windows UIPI Message Filtering**: Integrated `ChangeWindowMessageFilterEx` for `WM_DROPFILES`, `WM_COPYDATA`, and `WM_COPYGLOBALDATA` to ensure seamless drag-and-drop even across elevated processes and differing Windows integrity levels.
+
+### ⚙️ Clean Context Menus & Sanctuary Shop Uninstallation
+- **Decluttered Menus**: Removed `Uninstall Pink 🗑️` from the daily right-click pet context menu and the system tray menu to prevent accidental misclicks.
+- **Sanctuary Shop Settings**: Relocated the uninstall option cleanly to the bottom of the **Config & Settings** menu inside the Deltarune Sanctuary Parlour (`ShopState.SETTINGS_MENU`).
+- **Safe Confirmation Flow**: Centered confirmation dialogs over the Shop Parlour with clear confirmation prompts and complete memory cleanup.
+
+### 🔄 Auto-Updater Loop & Git Source Polling Fix
+- **Git Repository Auto-Check Silencing**: Prevented blocking modal `QMessageBox` popups on 15-second startup checks when running from Python source in a Git repository.
+- **Postponement Memory**: Dismissing an update notification now remembers the postponed version for the active session, eliminating repetitive update prompts on every restart or login.
+- **Version Alignment**: Correctly synchronized `APP_VERSION` and Inno Setup definitions to `0.9.8.4`.
+
+---
+
+## 📦 Installation & Updating
+- **Windows Setup Installer**: Download and run `Yellows-Pixel-Buddies-Setup.exe` from GitHub Releases.
+- **Portable Version**: Download `Yellows-Pixel-Buddies.exe` and run directly from any folder or USB drive.
+- **In-App Updater**: Right-click Pink or use the tray icon and select **Check for Updates 🔄** to update automatically. All memories, facts, and settings in `%APPDATA%\YellowsPixelBuddies\memory` remain 100% safe!
+
+---
+
 # Release Notes - v0.9.8.3 🐾
 
 **Yellow's Pixel Buddies v0.9.8.3** is a critical stability update focused on bulletproofing the desktop companion's auto-updater engine, eliminating updater crashes and "can't open python" errors on secondary end devices, providing seamless auto-updating for Python/Git development environments, and resolving process restart and pathing errors.
