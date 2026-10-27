@@ -764,9 +764,9 @@ class DeltaruneShopWindow(QWidget):
         self.update()
 
     def _is_dialogue_rect(self, pt: QPoint) -> bool:
-        if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
+        if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW, ShopState.EXITING):
             return 12 <= pt.x() <= 628 and 248 <= pt.y() <= 472
-        elif self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM, ShopState.EXITING):
+        elif self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
             return 12 <= pt.x() <= 403 and 248 <= pt.y() <= 472
         return False
 
@@ -2435,7 +2435,7 @@ class DeltaruneShopWindow(QWidget):
                 if self._is_typing():
                     self._finish_typing()
                     return
-                elif self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
+                elif self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW, ShopState.EXITING):
                     self._confirm_selection()
                     return
 
@@ -2529,7 +2529,7 @@ class DeltaruneShopWindow(QWidget):
         return QPoint(x, y)
 
     def _get_item_at_canvas_pos(self, pt: QPoint) -> int | None:
-        if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
+        if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW, ShopState.EXITING):
             return None
 
         # Check scroll arrows for note enter in ITEM_ACTION (right side at x: 570..610)
@@ -2622,7 +2622,7 @@ class DeltaruneShopWindow(QWidget):
             p.scale(self._scale, self._scale)
 
             state_key = "root"
-            if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
+            if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW, ShopState.EXITING):
                 state_key = "talk"
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 state_key = "talk" 
@@ -2664,17 +2664,7 @@ class DeltaruneShopWindow(QWidget):
             p.end()
 
     def _draw_exiting_state(self, p: QPainter) -> None:
-        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
-        p.setFont(self._font_small)
-        p.setPen(QColor(255, 255, 0))
-        p.drawText(
-            QRect(416, 405, 204, 52),
-            Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap,
-            "[Click dialogue or press Z to Exit]",
-        )
-        p.setFont(self._font_small)
-        p.setPen(QColor(255, 180, 220))
-        p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
+        self._draw_dialogue_text(p, QRect(36, 271, 568, 175))
 
     def _draw_dialogue_text(self, p: QPainter, rect: QRect) -> None:
         p.setFont(self._font_body)
