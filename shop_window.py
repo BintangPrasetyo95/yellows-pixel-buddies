@@ -100,6 +100,7 @@ class ShopState(Enum):
     TASKS_SUBMENU = auto()        # Tasks & Alarms Submenu (Goals, Tasks, Alarms, Timers, Back)
     TASKS = auto()                # Tasks & Alarms list items (Goals, Tasks, Alarms, Timers)
     SETTINGS_MENU = auto()        # Config & Settings (Edit Facts, Toggles, Back)
+    SCALES_MENU = auto()          # Scale Modifiers (Pet Scale, Dialogue Scale, Back)
     FACTS_EDIT = auto()           # Facts & Notes editor
     TOGGLES_MENU = auto()         # Companion Toggles (Live)
     ITEM_ACTION = auto()          # Interactive inspection dialogue & choices
@@ -1616,7 +1617,9 @@ class DeltaruneShopWindow(QWidget):
             elif self._tasks_tab == 3:
                 return len(self._get_timers_menu_items()) + 1  # Presets + Custom + Actives + Back
         elif self.state == ShopState.SETTINGS_MENU:
-            return 5  # Pet Scale, Companion Toggles, Edit Facts, Uninstall Pink, Back
+            return 5  # Scale Modifiers, Companion Toggles, Edit Facts, Uninstall Pink, Back
+        elif self.state == ShopState.SCALES_MENU:
+            return 3  # Pet Scale, Dialogue Scale, Back
         elif self.state == ShopState.FACTS_EDIT:
             return len(self._get_facts_menu_items()) + 1  # Facts + Back
         elif self.state == ShopState.TOGGLES_MENU:
@@ -1749,14 +1752,25 @@ class DeltaruneShopWindow(QWidget):
                     self.set_dialogue("* Return to Tasks & Alarms menu.")
 
         elif self.state == ShopState.SETTINGS_MENU:
-            cur_scale = getattr(self._pet, "_scale_modifier", 1.0) if self._pet else 1.0
-            scale_str = f"{cur_scale:.2f}x" if cur_scale != round(cur_scale) else f"{cur_scale:.1f}x"
             dialogues = [
-                f"* Adjust Pink's sprite scale on your desktop ({scale_str}).",
+                "* Adjust desktop scale modifiers for Pink and dialogue bubbles.",
                 "* Toggle companion autonomous behaviors in real time.",
                 "* Permanent memory fact sheet & nickname manager.",
                 "* Uninstall Pink and cleanly remove settings/data.",
                 "* Return to the main parlour.",
+            ]
+            if 0 <= self._selected_index < len(dialogues):
+                self.set_dialogue(dialogues[self._selected_index])
+
+        elif self.state == ShopState.SCALES_MENU:
+            cur_pet_s = getattr(self._pet, "_scale_modifier", 1.0) if self._pet else 1.0
+            pet_s_str = f"{cur_pet_s:.2f}x" if cur_pet_s != round(cur_pet_s) else f"{cur_pet_s:.1f}x"
+            cur_dlg_s = getattr(self._pet, "_dialogue_scale", 1.5) if self._pet else 1.5
+            dlg_s_str = f"{cur_dlg_s:.2f}x" if cur_dlg_s != round(cur_dlg_s) else f"{cur_dlg_s:.1f}x"
+            dialogues = [
+                f"* Adjust Pink's sprite scale on your desktop ({pet_s_str}).",
+                f"* Adjust speech bubble & input overlay size ({dlg_s_str}).",
+                "* Return to sanctuary settings.",
             ]
             if 0 <= self._selected_index < len(dialogues):
                 self.set_dialogue(dialogues[self._selected_index])
@@ -1917,8 +1931,10 @@ class DeltaruneShopWindow(QWidget):
                     self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
 
         elif self.state == ShopState.SETTINGS_MENU:
-            if self._selected_index == 0:  # Pet Scale
-                self._cycle_pet_scale(direction=1)
+            if self._selected_index == 0:  # Scale Modifiers
+                self.state = ShopState.SCALES_MENU
+                self._selected_index = 0
+                self.set_dialogue("* Adjust desktop scale modifiers for Pink and dialogue bubbles.")
             elif self._selected_index == 1:  # Companion Toggles
                 self.state = ShopState.TOGGLES_MENU
                 self._selected_index = 0
@@ -1935,6 +1951,16 @@ class DeltaruneShopWindow(QWidget):
                 self.state = ShopState.ROOT
                 self._selected_index = 3
                 self.set_dialogue(self._get_root_greeting())
+
+        elif self.state == ShopState.SCALES_MENU:
+            if self._selected_index == 0:  # Pet Scale
+                self._cycle_pet_scale(direction=1)
+            elif self._selected_index == 1:  # Dialogue Scale
+                self._cycle_dialogue_scale(direction=1)
+            else:  # Back
+                self.state = ShopState.SETTINGS_MENU
+                self._selected_index = 0
+                self.set_dialogue("* Back to sanctuary settings.")
 
         elif self.state == ShopState.FACTS_EDIT:
             items = self._get_facts_menu_items()
@@ -2093,6 +2119,22 @@ class DeltaruneShopWindow(QWidget):
 
         self.update()
 
+    def _cycle_dialogue_scale(self, direction: int = 1) -> None:
+        if not self._pet or not hasattr(self._pet, "cycle_dialogue_scale"):
+            return
+        new_scale = self._pet.cycle_dialogue_scale(direction=direction)
+        if new_scale <= 1.0:
+            self.set_dialogue("* Compact speech bubble! Nice and tidy, mew!")
+        elif new_scale <= 1.25:
+            self.set_dialogue("* Small bubble scale set, darling!")
+        elif new_scale <= 1.5:
+            self.set_dialogue("* Standard bubble scale restored! Clear and classic, mew!")
+        elif new_scale <= 1.75:
+            self.set_dialogue("* Large speech bubble active! Plenty of room for my wisdom!")
+        else:
+            self.set_dialogue("* Giant speech bubble active! Loud and clear for the whole room, minion!")
+        self.update()
+
     def _cycle_pet_scale(self, direction: int = 1) -> None:
         if not self._pet or not hasattr(self._pet, "cycle_scale_modifier"):
             return
@@ -2123,9 +2165,9 @@ class DeltaruneShopWindow(QWidget):
             self.state = ShopState.TASKS_SUBMENU
             self._selected_index = self._tasks_tab
             self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
-        elif self.state in (ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU):
+        elif self.state in (ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU, ShopState.SCALES_MENU):
             self.state = ShopState.SETTINGS_MENU
-            self._selected_index = 1 if self.state == ShopState.TOGGLES_MENU else 2
+            self._selected_index = 0 if self.state == ShopState.SCALES_MENU else (1 if self.state == ShopState.TOGGLES_MENU else 2)
             self.set_dialogue("* Sanctuary settings.")
         elif self.state == ShopState.ITEM_ACTION:
             if self._inspect_item_kind in ("goal", "task", "alarm", "timer"):
@@ -2317,9 +2359,13 @@ class DeltaruneShopWindow(QWidget):
             if self.state == ShopState.CHAT_HISTORY_VIEW:
                 self._prev_history_turn()
                 return
-            elif self.state == ShopState.SETTINGS_MENU and self._selected_index == 0:
-                self._cycle_pet_scale(direction=-1)
-                return
+            elif self.state == ShopState.SCALES_MENU:
+                if self._selected_index == 0:
+                    self._cycle_pet_scale(direction=-1)
+                    return
+                elif self._selected_index == 1:
+                    self._cycle_dialogue_scale(direction=-1)
+                    return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx - 1) % len(self._inspect_options)
                 self.update()
@@ -2332,9 +2378,13 @@ class DeltaruneShopWindow(QWidget):
             if self.state == ShopState.CHAT_HISTORY_VIEW:
                 self._next_history_turn()
                 return
-            elif self.state == ShopState.SETTINGS_MENU and self._selected_index == 0:
-                self._cycle_pet_scale(direction=1)
-                return
+            elif self.state == ShopState.SCALES_MENU:
+                if self._selected_index == 0:
+                    self._cycle_pet_scale(direction=1)
+                    return
+                elif self._selected_index == 1:
+                    self._cycle_dialogue_scale(direction=1)
+                    return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx + 1) % len(self._inspect_options)
                 self.update()
@@ -2485,13 +2535,15 @@ class DeltaruneShopWindow(QWidget):
 
         # Left-side submenus: start_x = 44, start_y = 283, line_h = 36
         if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS,
-                          ShopState.SETTINGS_MENU, ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT,
+                          ShopState.SETTINGS_MENU, ShopState.SCALES_MENU, ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT,
                           ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
             if 20 <= pt.x() <= 400 and 265 <= pt.y() <= 465:
                 row = (pt.y() - 265) // 36
                 if 0 <= row < 5:
                     if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TOGGLES_MENU):
                         return row
+                    elif self.state == ShopState.SCALES_MENU:
+                        return row if row < 3 else None
                     elif self.state == ShopState.SETTINGS_MENU:
                         return row if row < 5 else None
                     elif self.state == ShopState.TASKS:
@@ -2563,6 +2615,8 @@ class DeltaruneShopWindow(QWidget):
                 self._draw_tasks_and_alarms_state(p)
             elif self.state == ShopState.SETTINGS_MENU:
                 self._draw_settings_menu_state(p)
+            elif self.state == ShopState.SCALES_MENU:
+                self._draw_scales_menu_state(p)
             elif self.state == ShopState.FACTS_EDIT:
                 self._draw_facts_edit_state(p)
             elif self.state == ShopState.TOGGLES_MENU:
@@ -2757,12 +2811,57 @@ class DeltaruneShopWindow(QWidget):
         p.setPen(QColor(255, 180, 220))
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
+    def _draw_scales_menu_state(self, p: QPainter) -> None:
+        p.setFont(self._font_body)
+        cur_pet_s = getattr(self._pet, "_scale_modifier", 1.0) if self._pet else 1.0
+        pet_s_str = f"{cur_pet_s:.2f}x" if cur_pet_s != round(cur_pet_s) else f"{cur_pet_s:.1f}x"
+        cur_dlg_s = getattr(self._pet, "_dialogue_scale", 1.5) if self._pet else 1.5
+        dlg_s_str = f"{cur_dlg_s:.2f}x" if cur_dlg_s != round(cur_dlg_s) else f"{cur_dlg_s:.1f}x"
+
+        options = [
+            f"Pet Scale: [{pet_s_str}]",
+            f"Dialogue Scale: [{dlg_s_str}]",
+            "Back",
+        ]
+        start_x = 44
+        start_y = 283
+        line_h = 36
+
+        for i, opt in enumerate(options):
+            is_active = (i == self._selected_index)
+            color = QColor(255, 255, 0) if is_active else QColor(255, 255, 255)
+            p.setPen(color)
+            p.drawText(start_x, start_y + i * line_h, opt)
+
+            if is_active and self._soul_heart:
+                p.drawPixmap(start_x - 24, start_y + i * line_h - 13, self._soul_heart)
+
+        p.setFont(self._font_body)
+        p.setPen(QColor(255, 255, 255))
+        if self._selected_index == 0:
+            desc = (
+                f"* Pet Scale:\n"
+                f"* Current: {pet_s_str}\n"
+                f"* [Click/Enter or Left/Right arrows to resize Pink]"
+            )
+        elif self._selected_index == 1:
+            desc = (
+                f"* Dialogue Scale:\n"
+                f"* Current: {dlg_s_str}\n"
+                f"* [Click/Enter or Left/Right arrows to resize speech bubble]"
+            )
+        else:
+            desc = "* Return to sanctuary settings."
+        p.drawText(QRect(430, 269, 185, 175), Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, desc)
+
+        p.setFont(self._font_small)
+        p.setPen(QColor(255, 180, 220))
+        p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
+
     def _draw_settings_menu_state(self, p: QPainter) -> None:
         p.setFont(self._font_body)
-        cur_scale = getattr(self._pet, "_scale_modifier", 1.0) if self._pet else 1.0
-        scale_str = f"{cur_scale:.2f}x" if cur_scale != round(cur_scale) else f"{cur_scale:.1f}x"
         options = [
-            f"Pet Scale: [{scale_str}]",
+            "Scale Modifiers 📏",
             "Companion Toggles",
             "Edit Facts & Nickname",
             "Uninstall Pink 🗑️",
@@ -2785,11 +2884,7 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_body)
         p.setPen(QColor(255, 255, 255))
         if self._selected_index == 0:
-            desc = (
-                f"* Pet Scale:\n"
-                f"* Current: {scale_str}\n"
-                f"* [Click/Enter or Left/Right arrows to resize Pink]"
-            )
+            desc = "* Scale Modifiers:\n* Adjust display sizing for Pink and dialogue speech bubbles."
         elif self._selected_index == 1:
             desc = "* Companion Toggles:\n* Live toggles for speech, music reactions, and defenses."
         elif self._selected_index == 2:

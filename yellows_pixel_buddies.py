@@ -539,6 +539,8 @@ DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per charact
 DIALOGUE_QUESTION_HOLD_S = 18.0       # Seconds to wait for player to answer question choices
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
 DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
+DIALOGUE_SCALE_PRESETS = [1.0, 1.25, 1.5, 1.75, 2.0]
+DEFAULT_DIALOGUE_SCALE = 1.5
 DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on commas, periods, question marks, exclamation marks
 DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
@@ -2580,6 +2582,17 @@ class DialogueOverlay(QWidget):
         """True if a dialogue line is actively being displayed or typed."""
         return self._active
 
+    def set_scale(self, scale: float) -> None:
+        """Update dialogue box scale factor, font size, and soul heart pixmap."""
+        self._scale = scale
+        new_font_size = max(9, round(DIALOGUE_FONT_PIXEL_SIZE * (scale / DIALOGUE_BOX_SCALE)))
+        self._font = QFont(self._font_family)
+        self._font.setPixelSize(new_font_size)
+        self._font.setBold(False)
+        self._font.setWeight(QFont.Normal)
+        self._font.setStyleStrategy(QFont.PreferDefault)
+        self._soul_heart_pix = self._create_soul_heart_pixmap()
+
     def is_skippable(self) -> bool:
         """True if the dialogue bubble can be fast-forwarded or dismissed by clicks."""
         return self._skippable
@@ -2674,13 +2687,14 @@ class DialogueOverlay(QWidget):
         self._line_h = fm.height()
 
         # Wrap text nicely
+        max_wrap_w = round(DIALOGUE_MAX_WIDTH_PX * (self._scale / DIALOGUE_BOX_SCALE))
         self._lines = []
         for para in text.split('\n'):
             words = para.split(' ')
             cur = []
             for w in words:
                 test = ' '.join(cur + [w])
-                if cur and fm.horizontalAdvance(test) > DIALOGUE_MAX_WIDTH_PX:
+                if cur and fm.horizontalAdvance(test) > max_wrap_w:
                     self._lines.append(' '.join(cur))
                     cur = ['  ' + w] if para.startswith('* ') else [w]
                 else:
@@ -2718,7 +2732,7 @@ class DialogueOverlay(QWidget):
             choice_gap = 14
             total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
 
-            if total_inline_w <= DIALOGUE_MAX_WIDTH_PX + 20:
+            if total_inline_w <= max_wrap_w + 20:
                 choices_w = total_inline_w
                 choices_h = self._line_h
             else:
@@ -3375,6 +3389,58 @@ class ChatInputOverlay(QWidget):
 
         self._init_ui()
 
+    def set_scale(self, scale: float) -> None:
+        """Update chat input overlay scale, font size, button metrics, and layout margins."""
+        self._scale = scale
+        self._soul_heart_pix = self._create_soul_heart_pixmap()
+        if hasattr(self, "_heart_label") and self._soul_heart_pix:
+            self._heart_label.setPixmap(self._soul_heart_pix)
+            self._heart_label.setFixedSize(self._soul_heart_pix.size())
+        self._load_eye_icons()
+        if hasattr(self, "_vision_btn") and self._vision_btn.isChecked():
+            if self._eye_on_icon and not self._eye_on_icon.isNull():
+                self._vision_btn.setIcon(self._eye_on_icon)
+        elif hasattr(self, "_vision_btn"):
+            if self._eye_off_icon and not self._eye_off_icon.isNull():
+                self._vision_btn.setIcon(self._eye_off_icon)
+
+        new_font_size = max(9, round(DIALOGUE_FONT_PIXEL_SIZE * (scale / DIALOGUE_BOX_SCALE)))
+        font = QFont(self._font_family)
+        font.setPixelSize(new_font_size)
+        font.setBold(False)
+        font.setWeight(QFont.Normal)
+        font.setStyleStrategy(QFont.PreferDefault)
+
+        if hasattr(self, "_star_label"):
+            self._star_label.setFont(font)
+        if hasattr(self, "_text_edit"):
+            self._text_edit.setFont(font)
+        btn_h = max(20, round(16 * self._scale))
+        btn_w = max(22, round(18 * self._scale))
+        if hasattr(self, "_attach_btn"):
+            self._attach_btn.setFixedSize(btn_w, btn_h)
+            self._attach_btn.setFont(font)
+        if hasattr(self, "_vision_btn"):
+            self._vision_btn.setFixedSize(btn_w, btn_h)
+            self._vision_btn.setFont(font)
+        if hasattr(self, "_main_layout"):
+            pad_h = round(14 * self._scale)
+            pad_v = round(10 * self._scale)
+            self._main_layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
+
+        max_w = round(DIALOGUE_MAX_WIDTH_PX * (self._scale / DIALOGUE_BOX_SCALE))
+        base_inner_w = round(84 * self._scale)
+        base_inner_h = round(19 * self._scale)
+        pad_x = round(4 * self._scale)
+        pad_y = round(2 * self._scale)
+        req_inner_w = max_w + pad_x * 2
+        extra_w = max(0, req_inner_w - base_inner_w)
+        req_inner_h = 24 * 2 + pad_y * 2
+        extra_h = max(0, req_inner_h - base_inner_h)
+
+        self._base_w = round(108 * self._scale) + extra_w + round(16 * self._scale)
+        self._base_h = round(33 * self._scale) + extra_h
+
     def _create_soul_heart_pixmap(self) -> QPixmap:
         """Create a crisp pixel-art Deltarune red soul heart pixmap."""
         grid = [
@@ -3443,6 +3509,7 @@ class ChatInputOverlay(QWidget):
         font.setStyleStrategy(QFont.PreferDefault)
 
         main_layout = QVBoxLayout(self)
+        self._main_layout = main_layout
         pad_h = round(14 * self._scale)
         pad_v = round(10 * self._scale)
         main_layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
@@ -8239,6 +8306,7 @@ class YellowsPixelBuddies(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground, True)   # per-pixel transparency
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)   # don't grab focus when shown
         self._scale_modifier: float = DEFAULT_SCALE_MODIFIER
+        self._dialogue_scale: float = DEFAULT_DIALOGUE_SCALE
         self.setFixedSize(SPRITE_SIZE, SPRITE_SIZE)            # window == one sprite
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
@@ -8416,6 +8484,17 @@ class YellowsPixelBuddies(QWidget):
             self._bank.rebuild(self.devicePixelRatioF(), self._scale_modifier)
         init_size = max(1, round(SPRITE_SIZE * self._scale_modifier))
         self.setFixedSize(init_size, init_size)
+        if "dialogue_scale" in saved_settings:
+            try:
+                ds = float(saved_settings["dialogue_scale"])
+                if ds in DIALOGUE_SCALE_PRESETS or 0.5 <= ds <= 3.0:
+                    self._dialogue_scale = ds
+            except (ValueError, TypeError):
+                self._dialogue_scale = DEFAULT_DIALOGUE_SCALE
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay:
+            self._dialogue_overlay.set_scale(self._dialogue_scale)
+        if hasattr(self, "_chat_input") and self._chat_input:
+            self._chat_input.set_scale(self._dialogue_scale)
         if "dialogue_enabled" in saved_settings:
             self._dialogue_enabled = bool(saved_settings["dialogue_enabled"])
         if "ai_song_comment_enabled" in saved_settings:
@@ -13454,6 +13533,22 @@ RULES:
             act.setChecked(abs(preset - cur_scale) < 0.01)
             act.triggered.connect(lambda checked, s=preset: self.set_scale_modifier(s))
 
+        dlg_scale_menu = menu.addMenu("Dialogue Scale 💬")
+        dlg_preset_labels = {
+            1.0: "100% (Compact)",
+            1.25: "125% (Small)",
+            1.5: "150% (Default)",
+            1.75: "175% (Large)",
+            2.0: "200% (Giant)",
+        }
+        cur_dlg_scale = getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE)
+        for preset in DIALOGUE_SCALE_PRESETS:
+            label = dlg_preset_labels.get(preset, f"{int(preset * 100)}%")
+            act = dlg_scale_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(abs(preset - cur_dlg_scale) < 0.01)
+            act.triggered.connect(lambda checked, s=preset: self.set_dialogue_scale(s))
+
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -13908,6 +14003,36 @@ RULES:
         self._set_game_mode(new_mode)
         return new_mode
 
+    def cycle_dialogue_scale(self, direction: int = 1) -> float:
+        """Cycle through DIALOGUE_SCALE_PRESETS in forward (1) or backward (-1) direction."""
+        current = getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE)
+        closest_idx = 0
+        min_diff = float("inf")
+        for idx, preset in enumerate(DIALOGUE_SCALE_PRESETS):
+            diff = abs(preset - current)
+            if diff < min_diff:
+                min_diff = diff
+                closest_idx = idx
+        next_idx = (closest_idx + direction) % len(DIALOGUE_SCALE_PRESETS)
+        new_scale = DIALOGUE_SCALE_PRESETS[next_idx]
+        self.set_dialogue_scale(new_scale)
+        return new_scale
+
+    def set_dialogue_scale(self, scale: float) -> None:
+        """Update dialogue box scale for both dialogue overlay and chat input."""
+        scale = max(0.5, min(3.0, float(scale)))
+        self._dialogue_scale = scale
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay:
+            self._dialogue_overlay.set_scale(scale)
+            if self._dialogue_overlay.is_active():
+                self._dialogue_overlay.update_position(self._x, self._y, self.width(), self.height())
+        if hasattr(self, "_chat_input") and self._chat_input:
+            self._chat_input.set_scale(scale)
+            if self._chat_input.isVisible():
+                self._chat_input.update_position(self._x, self._y, self.width(), self.height())
+        self._save_live_settings()
+        log.info("Dialogue box scale set to %.2fx", self._dialogue_scale)
+
     def cycle_scale_modifier(self, direction: int = 1) -> float:
         """Cycle through SCALE_PRESETS in forward (1) or backward (-1) direction."""
         current = getattr(self, "_scale_modifier", DEFAULT_SCALE_MODIFIER)
@@ -13973,6 +14098,7 @@ RULES:
                 "jump_enabled": getattr(self, "_jump_enabled", True),
                 "game_mode": getattr(self, "_game_mode", "AUTO"),
                 "scale_modifier": getattr(self, "_scale_modifier", DEFAULT_SCALE_MODIFIER),
+                "dialogue_scale": getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE),
             }
             self._memory.save_settings(settings)
 
