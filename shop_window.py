@@ -110,6 +110,7 @@ class ShopState(Enum):
     TALK_DIALOGUE = auto()        # Serious typewriter dialogue
     CHAT_HISTORY_SESSIONS = auto() # Session selection list (Inside TALK menu)
     CHAT_HISTORY_VIEW = auto()     # Turn-by-turn dialogue inspection
+    EXITING = auto()               # Goodbye dialogue, requires second click to exit
 
 class PinkWallet:
     """Manages Pink Dollars (P$) and unlocked forms persisted in memory/wallet.json."""
@@ -765,7 +766,7 @@ class DeltaruneShopWindow(QWidget):
     def _is_dialogue_rect(self, pt: QPoint) -> bool:
         if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW):
             return 12 <= pt.x() <= 628 and 248 <= pt.y() <= 472
-        elif self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
+        elif self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM, ShopState.EXITING):
             return 12 <= pt.x() <= 403 and 248 <= pt.y() <= 472
         return False
 
@@ -1834,7 +1835,7 @@ class DeltaruneShopWindow(QWidget):
                 self._selected_index = 0
                 self.set_dialogue("* Sanctuary settings & permanent memory fact sheet.")
             elif self._selected_index == 4:  # EXIT
-                self.close_shop()
+                self._start_exit()
 
         elif self.state == ShopState.TASKS_SUBMENU:
             if self._selected_index == 0:  # Goals
@@ -2192,12 +2193,18 @@ class DeltaruneShopWindow(QWidget):
             self.state = ShopState.TALK_MENU
             self.set_dialogue(CANON_TALK_ENTER)
         elif self.state == ShopState.ROOT:
-            self.close_shop()
+            self._start_exit()
+        elif self.state == ShopState.EXITING:
+            if self._is_typing():
+                self._finish_typing()
+            else:
+                self.close_shop()
         self.update()
 
     def _start_exit(self) -> None:
-        """Exit dialogue removed per user request: close shop immediately."""
-        self.close_shop()
+        """Deliver Pink's canon exit dialogue. The user must click again or press Enter/Z to exit."""
+        self.state = ShopState.EXITING
+        self.set_dialogue(self._get_exit_line())
 
     # --- Prompt Input Helpers --------------------------------------------------
 
@@ -2338,6 +2345,14 @@ class DeltaruneShopWindow(QWidget):
             super().keyPressEvent(event)
             return
 
+        # Exit mode: any key exits or finishes typing
+        if self.state == ShopState.EXITING:
+            if self._is_typing():
+                self._finish_typing()
+            else:
+                self.close_shop()
+            return
+
         # Submenu return in TASKS via Tab key
         if key == Qt.Key_Tab and self.state == ShopState.TASKS:
             self.state = ShopState.TASKS_SUBMENU
@@ -2407,7 +2422,15 @@ class DeltaruneShopWindow(QWidget):
         if event.button() == Qt.LeftButton:
             pos_canvas = self._screen_to_canvas(event.pos())
 
-            # 1. Dialogue skip typing without dismissing
+            # 1. Exit Mode: click again to close
+            if self.state == ShopState.EXITING:
+                if self._is_typing():
+                    self._finish_typing()
+                else:
+                    self.close_shop()
+                return
+
+            # 2. Dialogue skip typing without dismissing
             if self._is_dialogue_rect(pos_canvas):
                 if self._is_typing():
                     self._finish_typing()
@@ -2463,6 +2486,10 @@ class DeltaruneShopWindow(QWidget):
         pos_canvas = self._screen_to_canvas(event.pos())
         hover_idx = self._get_item_at_canvas_pos(pos_canvas)
         is_dialogue = self._is_dialogue_rect(pos_canvas)
+
+        if self.state == ShopState.EXITING:
+            self.setCursor(Qt.PointingHandCursor)
+            return
 
         if hover_idx is not None:
             self.setCursor(Qt.PointingHandCursor)
@@ -2629,10 +2656,25 @@ class DeltaruneShopWindow(QWidget):
                 self._draw_task_second_confirm_state(p)
             elif self.state in (ShopState.TALK_MENU, ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_SESSIONS, ShopState.CHAT_HISTORY_VIEW):
                 self._draw_talk_state(p)
+            elif self.state == ShopState.EXITING:
+                self._draw_exiting_state(p)
 
 
         finally:
             p.end()
+
+    def _draw_exiting_state(self, p: QPainter) -> None:
+        self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
+        p.setFont(self._font_small)
+        p.setPen(QColor(255, 255, 0))
+        p.drawText(
+            QRect(416, 405, 204, 52),
+            Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap,
+            "[Click dialogue or press Z to Exit]",
+        )
+        p.setFont(self._font_small)
+        p.setPen(QColor(255, 180, 220))
+        p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
 
     def _draw_dialogue_text(self, p: QPainter, rect: QRect) -> None:
         p.setFont(self._font_body)
