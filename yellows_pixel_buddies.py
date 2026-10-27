@@ -223,6 +223,8 @@ USER_DATA_DIR = _resolve_user_data_dir()
 # PNGs of any size are scaled to fit (aspect ratio kept, anchored bottom-centre).
 # Tip: author PNGs at 2x (e.g. 256 px) so they stay crisp on high-DPI screens.
 SPRITE_SIZE = 128
+SCALE_PRESETS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+DEFAULT_SCALE_MODIFIER = 1.0
 
 SMOOTH_SCALING = False      # False = nearest-neighbour scaling (better for pixel art)
 
@@ -537,6 +539,8 @@ DIALOGUE_HOLD_PER_CHAR_S = 0.04       # Additional seconds to linger per charact
 DIALOGUE_QUESTION_HOLD_S = 18.0       # Seconds to wait for player to answer question choices
 DIALOGUE_CLICK_TO_DISMISS = True      # Left-clicking the dialogue box completes typing or closes it
 DIALOGUE_BOX_SCALE = 1.5              # Pixel scale multiplier for the dialogue box (1.5 = compact medium scale)
+DIALOGUE_SCALE_PRESETS = [1.0, 1.25, 1.5, 1.75, 2.0]
+DEFAULT_DIALOGUE_SCALE = 1.5
 DIALOGUE_FONT_PIXEL_SIZE = 14         # Pixel font size for Determination text
 DIALOGUE_PUNCTUATION_PAUSE_TICKS = 4  # Extra pause ticks on commas, periods, question marks, exclamation marks
 DIALOGUE_MAX_WIDTH_PX = 260           # Maximum inner text wrapping width in pixels
@@ -2222,7 +2226,7 @@ class Frame:
 class SpriteBank:
     """Loads every state's PNGs once and renders them for the current display scale."""
 
-    def __init__(self, sprites_dir: Path, dpr: float) -> None:
+    def __init__(self, sprites_dir: Path, dpr: float, scale_modifier: float = DEFAULT_SCALE_MODIFIER) -> None:
         self._sources: dict[str, list[QImage]] = {}
         self._real: set[str] = set()   # states backed by real PNGs (not placeholders)
         for state in ALL_STATES:
@@ -2279,7 +2283,8 @@ class SpriteBank:
 
         self.frames: dict[str, list[Frame]] = {}
         self.dpr = 0.0
-        self.rebuild(dpr)
+        self.scale_modifier = scale_modifier
+        self.rebuild(dpr, scale_modifier)
 
     def _load_state(self, sprites_dir: Path, state: str) -> list[QImage]:
         """Read sprites/<state>/*.png; original states fall back to a generated placeholder.
@@ -2315,14 +2320,18 @@ class SpriteBank:
         """
         return all(self.has_real_sprites(s) for s in JUMP_STATES)
 
-    def rebuild(self, dpr: float) -> None:
-        """(Re)render all frames for a display scale factor (1.0, 1.25, 1.5, 2.0 ...)."""
+    def rebuild(self, dpr: float, scale_modifier: float | None = None) -> None:
+        """(Re)render all frames for a display scale factor and pet scale modifier."""
+        if scale_modifier is not None:
+            self.scale_modifier = scale_modifier
         for state, images in self._sources.items():
             size_spec = EFFECT_SIZES.get(state, SPRITE_SIZE)
             if isinstance(size_spec, (tuple, list)):
-                log_w, log_h = int(size_spec[0]), int(size_spec[1])
+                base_w, base_h = int(size_spec[0]), int(size_spec[1])
             else:
-                log_w, log_h = int(size_spec), int(size_spec)
+                base_w, base_h = int(size_spec), int(size_spec)
+            log_w = max(1, round(base_w * self.scale_modifier))
+            log_h = max(1, round(base_h * self.scale_modifier))
 
             phys_w = max(1, round(log_w * dpr))
             phys_h = max(1, round(log_h * dpr))
@@ -2573,6 +2582,17 @@ class DialogueOverlay(QWidget):
         """True if a dialogue line is actively being displayed or typed."""
         return self._active
 
+    def set_scale(self, scale: float) -> None:
+        """Update dialogue box scale factor, font size, and soul heart pixmap."""
+        self._scale = scale
+        new_font_size = max(9, round(DIALOGUE_FONT_PIXEL_SIZE * (scale / DIALOGUE_BOX_SCALE)))
+        self._font = QFont(self._font_family)
+        self._font.setPixelSize(new_font_size)
+        self._font.setBold(False)
+        self._font.setWeight(QFont.Normal)
+        self._font.setStyleStrategy(QFont.PreferDefault)
+        self._soul_heart_pix = self._create_soul_heart_pixmap()
+
     def is_skippable(self) -> bool:
         """True if the dialogue bubble can be fast-forwarded or dismissed by clicks."""
         return self._skippable
@@ -2667,13 +2687,14 @@ class DialogueOverlay(QWidget):
         self._line_h = fm.height()
 
         # Wrap text nicely
+        max_wrap_w = round(DIALOGUE_MAX_WIDTH_PX * (self._scale / DIALOGUE_BOX_SCALE))
         self._lines = []
         for para in text.split('\n'):
             words = para.split(' ')
             cur = []
             for w in words:
                 test = ' '.join(cur + [w])
-                if cur and fm.horizontalAdvance(test) > DIALOGUE_MAX_WIDTH_PX:
+                if cur and fm.horizontalAdvance(test) > max_wrap_w:
                     self._lines.append(' '.join(cur))
                     cur = ['  ' + w] if para.startswith('* ') else [w]
                 else:
@@ -2711,7 +2732,7 @@ class DialogueOverlay(QWidget):
             choice_gap = 14
             total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
 
-            if total_inline_w <= DIALOGUE_MAX_WIDTH_PX + 20:
+            if total_inline_w <= max_wrap_w + 20:
                 choices_w = total_inline_w
                 choices_h = self._line_h
             else:
@@ -2795,29 +2816,36 @@ class DialogueOverlay(QWidget):
         ensure_window_topmost(self)
         self._type_timer.start()
 
-    def update_position(self, pet_x: float, pet_y: float) -> None:
+    def update_position(self, pet_x: float, pet_y: float, pet_w: float | None = None, pet_h: float | None = None) -> None:
         """Position the dialogue bubble beside the pet's head (left or right depends on screen half)."""
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
+        if pet_w is not None:
+            self._last_pet_w = pet_w
+        if pet_h is not None:
+            self._last_pet_h = pet_h
         if not self._active:
             return
         area = QApplication.primaryScreen().availableGeometry()
         w = self.width()
         h = self.height()
 
+        cur_pet_w = getattr(self, "_last_pet_w", SPRITE_SIZE)
+        cur_pet_h = getattr(self, "_last_pet_h", SPRITE_SIZE)
+
         screen_mid_x = area.x() + area.width() / 2.0
-        pet_center_x = pet_x + SPRITE_SIZE / 2.0
+        pet_center_x = pet_x + cur_pet_w / 2.0
 
         # Position beside subject's head: left or right depends on which half of the screen she is on
         if pet_center_x < screen_mid_x:
             # On left half -> bubble sits to the right of her head
-            target_x = pet_x + SPRITE_SIZE + DIALOGUE_SIDE_OFFSET_PX
+            target_x = pet_x + cur_pet_w + DIALOGUE_SIDE_OFFSET_PX
         else:
             # On right half -> bubble sits to the left of her head
             target_x = pet_x - w - DIALOGUE_SIDE_OFFSET_PX
 
         # Vertically align beside the head
-        head_center_y = pet_y + (SPRITE_SIZE * DIALOGUE_HEAD_Y_RATIO)
+        head_center_y = pet_y + (cur_pet_h * DIALOGUE_HEAD_Y_RATIO)
         target_y = head_center_y - (h / 2.0)
 
         # Clamp within screen bounds
@@ -3361,6 +3389,58 @@ class ChatInputOverlay(QWidget):
 
         self._init_ui()
 
+    def set_scale(self, scale: float) -> None:
+        """Update chat input overlay scale, font size, button metrics, and layout margins."""
+        self._scale = scale
+        self._soul_heart_pix = self._create_soul_heart_pixmap()
+        if hasattr(self, "_heart_label") and self._soul_heart_pix:
+            self._heart_label.setPixmap(self._soul_heart_pix)
+            self._heart_label.setFixedSize(self._soul_heart_pix.size())
+        self._load_eye_icons()
+        if hasattr(self, "_vision_btn") and self._vision_btn.isChecked():
+            if self._eye_on_icon and not self._eye_on_icon.isNull():
+                self._vision_btn.setIcon(self._eye_on_icon)
+        elif hasattr(self, "_vision_btn"):
+            if self._eye_off_icon and not self._eye_off_icon.isNull():
+                self._vision_btn.setIcon(self._eye_off_icon)
+
+        new_font_size = max(9, round(DIALOGUE_FONT_PIXEL_SIZE * (scale / DIALOGUE_BOX_SCALE)))
+        font = QFont(self._font_family)
+        font.setPixelSize(new_font_size)
+        font.setBold(False)
+        font.setWeight(QFont.Normal)
+        font.setStyleStrategy(QFont.PreferDefault)
+
+        if hasattr(self, "_star_label"):
+            self._star_label.setFont(font)
+        if hasattr(self, "_text_edit"):
+            self._text_edit.setFont(font)
+        btn_h = max(20, round(16 * self._scale))
+        btn_w = max(22, round(18 * self._scale))
+        if hasattr(self, "_attach_btn"):
+            self._attach_btn.setFixedSize(btn_w, btn_h)
+            self._attach_btn.setFont(font)
+        if hasattr(self, "_vision_btn"):
+            self._vision_btn.setFixedSize(btn_w, btn_h)
+            self._vision_btn.setFont(font)
+        if hasattr(self, "_main_layout"):
+            pad_h = round(14 * self._scale)
+            pad_v = round(10 * self._scale)
+            self._main_layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
+
+        max_w = round(DIALOGUE_MAX_WIDTH_PX * (self._scale / DIALOGUE_BOX_SCALE))
+        base_inner_w = round(84 * self._scale)
+        base_inner_h = round(19 * self._scale)
+        pad_x = round(4 * self._scale)
+        pad_y = round(2 * self._scale)
+        req_inner_w = max_w + pad_x * 2
+        extra_w = max(0, req_inner_w - base_inner_w)
+        req_inner_h = 24 * 2 + pad_y * 2
+        extra_h = max(0, req_inner_h - base_inner_h)
+
+        self._base_w = round(108 * self._scale) + extra_w + round(16 * self._scale)
+        self._base_h = round(33 * self._scale) + extra_h
+
     def _create_soul_heart_pixmap(self) -> QPixmap:
         """Create a crisp pixel-art Deltarune red soul heart pixmap."""
         grid = [
@@ -3429,6 +3509,7 @@ class ChatInputOverlay(QWidget):
         font.setStyleStrategy(QFont.PreferDefault)
 
         main_layout = QVBoxLayout(self)
+        self._main_layout = main_layout
         pad_h = round(14 * self._scale)
         pad_v = round(10 * self._scale)
         main_layout.setContentsMargins(pad_h, pad_v, pad_h, pad_v)
@@ -3777,11 +3858,15 @@ class ChatInputOverlay(QWidget):
         painter.drawPixmap(0, 0, self._cached_bg)
         painter.end()
 
-    def update_position(self, pet_x: float | None = None, pet_y: float | None = None) -> None:
+    def update_position(self, pet_x: float | None = None, pet_y: float | None = None, pet_w: float | None = None, pet_h: float | None = None) -> None:
         if pet_x is not None:
             self._last_pet_x = pet_x
         if pet_y is not None:
             self._last_pet_y = pet_y
+        if pet_w is not None:
+            self._last_pet_w = pet_w
+        if pet_h is not None:
+            self._last_pet_h = pet_h
         if self._last_pet_x is None or self._last_pet_y is None:
             return
 
@@ -3789,15 +3874,18 @@ class ChatInputOverlay(QWidget):
         w = self.width()
         h = self.height()
 
+        cur_pet_w = getattr(self, "_last_pet_w", SPRITE_SIZE)
+        cur_pet_h = getattr(self, "_last_pet_h", SPRITE_SIZE)
+
         screen_mid_x = area.x() + area.width() / 2.0
-        pet_center_x = self._last_pet_x + SPRITE_SIZE / 2.0
+        pet_center_x = self._last_pet_x + cur_pet_w / 2.0
 
         if pet_center_x < screen_mid_x:
-            target_x = self._last_pet_x + SPRITE_SIZE + DIALOGUE_SIDE_OFFSET_PX
+            target_x = self._last_pet_x + cur_pet_w + DIALOGUE_SIDE_OFFSET_PX
         else:
             target_x = self._last_pet_x - w - DIALOGUE_SIDE_OFFSET_PX
 
-        head_center_y = self._last_pet_y + (SPRITE_SIZE * DIALOGUE_HEAD_Y_RATIO)
+        head_center_y = self._last_pet_y + (cur_pet_h * DIALOGUE_HEAD_Y_RATIO)
         target_y = head_center_y - (h / 2.0)
 
         min_x = float(area.x() + 4)
@@ -8217,6 +8305,8 @@ class YellowsPixelBuddies(QWidget):
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground, True)   # per-pixel transparency
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)   # don't grab focus when shown
+        self._scale_modifier: float = DEFAULT_SCALE_MODIFIER
+        self._dialogue_scale: float = DEFAULT_DIALOGUE_SCALE
         self.setFixedSize(SPRITE_SIZE, SPRITE_SIZE)            # window == one sprite
         self.setMouseTracking(True)
         self.setCursor(Qt.OpenHandCursor)
@@ -8383,6 +8473,28 @@ class YellowsPixelBuddies(QWidget):
 
         # Apply persistent settings if saved
         saved_settings = self._memory.load_settings() if hasattr(self, "_memory") and self._memory else {}
+        if "scale_modifier" in saved_settings:
+            try:
+                sm = float(saved_settings["scale_modifier"])
+                if sm in SCALE_PRESETS or 0.25 <= sm <= 4.0:
+                    self._scale_modifier = sm
+            except (ValueError, TypeError):
+                self._scale_modifier = DEFAULT_SCALE_MODIFIER
+        if abs(self._scale_modifier - self._bank.scale_modifier) > 0.001:
+            self._bank.rebuild(self.devicePixelRatioF(), self._scale_modifier)
+        init_size = max(1, round(SPRITE_SIZE * self._scale_modifier))
+        self.setFixedSize(init_size, init_size)
+        if "dialogue_scale" in saved_settings:
+            try:
+                ds = float(saved_settings["dialogue_scale"])
+                if ds in DIALOGUE_SCALE_PRESETS or 0.5 <= ds <= 3.0:
+                    self._dialogue_scale = ds
+            except (ValueError, TypeError):
+                self._dialogue_scale = DEFAULT_DIALOGUE_SCALE
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay:
+            self._dialogue_overlay.set_scale(self._dialogue_scale)
+        if hasattr(self, "_chat_input") and self._chat_input:
+            self._chat_input.set_scale(self._dialogue_scale)
         if "dialogue_enabled" in saved_settings:
             self._dialogue_enabled = bool(saved_settings["dialogue_enabled"])
         if "ai_song_comment_enabled" in saved_settings:
@@ -8533,8 +8645,8 @@ class YellowsPixelBuddies(QWidget):
         self._sprite_key = GHOST_STATE
         self._frame_idx = 0
         self._loop = True
-        self._x = float(area.x() + area.width() - self.width() - EAR_PEEK_OFFSET_X)
-        self._y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
+        self._x = float(area.x() + area.width() - self.width() - self._ear_peek_offset_x)
+        self._y = float(area.y() + area.height() - self._ear_peek_height)
         self._set_frame(0)
         self._sync_window_position()
         self.show()
@@ -8555,6 +8667,14 @@ class YellowsPixelBuddies(QWidget):
         if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer"):
             self._screen_comment_timer.start()
 
+    @property
+    def _ear_peek_height(self) -> int:
+        return max(1, round(EAR_PEEK_HEIGHT_PX * self._scale_modifier))
+
+    @property
+    def _ear_peek_offset_x(self) -> float:
+        return EAR_PEEK_OFFSET_X * self._scale_modifier
+
     # --------------------------------------------------------------- geometry
     def _bounds(self) -> tuple[float, float, float, float]:
         """Limits for the window's top-left corner, in logical px.
@@ -8567,7 +8687,7 @@ class YellowsPixelBuddies(QWidget):
         min_x = float(area.x())
         max_x = max(min_x, float(area.x() + area.width() - self.width()))
         min_y = float(area.y())
-        ground_y = float(area.y() + area.height() - self.height() + FOOT_PADDING)
+        ground_y = float(area.y() + area.height() - self.height() + (FOOT_PADDING * self._scale_modifier))
         return min_x, max_x, min_y, ground_y
 
     def _work_area(self):
@@ -8582,9 +8702,9 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_vfx_overlay") and self._overlay_state is not None and self._overlay_pixmap is not None:
             self._show_overlay_frame(self._overlay_pixmap)
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
-            self._dialogue_overlay.update_position(self._x, self._y)
+            self._dialogue_overlay.update_position(self._x, self._y, self.width(), self.height())
         if hasattr(self, "_chat_input") and self._chat_input.isVisible():
-            self._chat_input.update_position(self._x, self._y)
+            self._chat_input.update_position(self._x, self._y, self.width(), self.height())
 
     def _is_dialogue_convo_active(self) -> bool:
         """Returns True if Pink is actively conversing, typing, showing dialogue, or waiting for AI."""
@@ -10216,6 +10336,9 @@ RULES:
 
     def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
         """Trigger the burnt state with foreground explosion VFX upon detecting an error."""
+        if getattr(self, "_hidden_in_tray", False):
+            log.warning("Suppressed burnt error visual while hidden in tray: %s", spoken_error)
+            return
         now = time.perf_counter()
         if getattr(self, "_in_error_burnt", False) and (now - getattr(self, "_last_error_burnt_time", 0.0) < 3.0):
             return
@@ -11325,7 +11448,7 @@ RULES:
         """
         mask = frame.mask
         if self._phase == Phase.HIDE_PEEK:
-            return mask.intersected(QRegion(0, 0, self.width(), EAR_PEEK_HEIGHT_PX))
+            return mask.intersected(QRegion(0, 0, self.width(), self._ear_peek_height))
         if self._phase == Phase.HIDE_OUTRO and getattr(self, "_hide_subphase", "") in ("ghost_rise_from_below", "ghost_sink"):
             area = QApplication.primaryScreen().availableGeometry()
             vis_h = max(0, min(self.height(), round(area.y() + area.height() - self._y)))
@@ -11342,7 +11465,7 @@ RULES:
         # High DPI: if the display scale changed (settings, another monitor), re-render.
         dpr = self.devicePixelRatioF()
         if abs(dpr - self._bank.dpr) > 0.01:
-            self._bank.rebuild(dpr)
+            self._bank.rebuild(dpr, self._scale_modifier)
             self._set_frame(self._frame_idx)
             if self._overlay_state:
                 ov_frames = self._bank.frames.get(self._overlay_state, [])
@@ -11639,13 +11762,18 @@ RULES:
     # -------------------------------------------------------- overlay / vfx
     def _show_overlay_frame(self, pixmap: QPixmap) -> None:
         """Position and draw the VFX overlay centered above the buddy's feet with matching floor."""
-        center_x = self._x + SPRITE_SIZE / 2.0
-        bottom_y = self._y + SPRITE_SIZE - FOOT_PADDING
+        if getattr(self, "_hidden_in_tray", False):
+            self._stop_overlay()
+            return
+        center_x = self._x + self.width() / 2.0
+        bottom_y = self._y + self.height() - (FOOT_PADDING * self._scale_modifier)
         ground_ratio = EFFECT_GROUND_RATIO.get(self._overlay_state, 1.0)
         self._vfx_overlay.show_frame(pixmap, center_x, bottom_y, ground_ratio=ground_ratio)
 
     def _start_overlay(self, effect: str) -> None:
         """Start playing a one-shot foreground VFX animation."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         frames = self._bank.frames.get(effect, [])
         if not frames:
             return
@@ -11774,6 +11902,8 @@ RULES:
 
     def _on_brain_timeout(self) -> None:
         """Behaviour timer: the current walk / pause time is up."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         if getattr(self, "_is_annoyed_ignored", False):
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
@@ -11841,8 +11971,8 @@ RULES:
 
         if self._phase is Phase.HIDE_PEEK:
             area = QApplication.primaryScreen().availableGeometry()
-            self._x = float(area.x() + area.width() - self.width() - EAR_PEEK_OFFSET_X)
-            self._y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
+            self._x = float(area.x() + area.width() - self.width() - self._ear_peek_offset_x)
+            self._y = float(area.y() + area.height() - self._ear_peek_height)
             self._sync_window_position()
             return
 
@@ -11913,7 +12043,7 @@ RULES:
         else:
             velocity = MOVE_VELOCITY_PX_S.get(self.state)   # None while standing
             if velocity is not None:
-                self._x += velocity * dt
+                self._x += (velocity * self._scale_modifier) * dt
                 if self._x <= min_x:
                     self._x = min_x
                     self._turn_around("right")
@@ -11928,7 +12058,7 @@ RULES:
             self._tick_airborne(cursor, now, dt, bounds)
         else:
             if not self._dragging:
-                if self._y < ground_y - 12.0:
+                if self._y < ground_y - (12.0 * self._scale_modifier):
                     log.warning("Mid-air walk/pause watchdog: buddy at y=%.1f (ground=%.1f). Forcing fall.", self._y, ground_y)
                     self._begin_fall(JUMP_GRAVITY_PX_S2, reaction="embarrassed")
                     return
@@ -12081,6 +12211,11 @@ RULES:
             self._stop_overlay()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
+        if hasattr(self, "_window_timer"):
+            self._window_timer.stop()
+        if hasattr(self, "_screen_comment_timer"):
+            self._screen_comment_timer.stop()
+        self._last_foreground_hwnd = None
 
         self._brain_timer.stop()
         self._reset_jump_state()
@@ -12171,6 +12306,10 @@ RULES:
         self._tray_observations = []
 
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+        if hasattr(self, "_window_timer") and not self._window_timer.isActive():
+            self._window_timer.start()
+        if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer") and not self._screen_comment_timer.isActive():
+            self._screen_comment_timer.start()
         log.info("Pink restored to screen from system tray.")
 
     def _handle_restart_command(self) -> None:
@@ -12404,8 +12543,8 @@ RULES:
         _min_x, _max_x, _min_y, ground_y = bounds
         area = QApplication.primaryScreen().availableGeometry()
         screen_right = float(area.x() + area.width())
-        target_hide_x = float(area.x() + area.width() - self.width() - EAR_PEEK_OFFSET_X)
-        target_hide_y = float(area.y() + area.height() - EAR_PEEK_HEIGHT_PX)
+        target_hide_x = float(area.x() + area.width() - self.width() - self._ear_peek_offset_x)
+        target_hide_y = float(area.y() + area.height() - self._ear_peek_height)
 
         if self._hide_subphase == "run_right":
             self._x += self._vx * dt
@@ -12566,11 +12705,11 @@ RULES:
         """
         if self.state == THROW_STATE:
             frac_x = 0.5
-            return frac_x * self.width(), 95.5
+            return frac_x * self.width(), 95.5 * self._scale_modifier
         frac_x, frac_y = HAND_ANCHOR
         if self._hang_mirrored():
             frac_x = 1.0 - frac_x
-        return frac_x * SPRITE_SIZE, frac_y * SPRITE_SIZE
+        return frac_x * self.width(), frac_y * self.height()
 
     def _required_rise(self, cursor: QPoint) -> float:
         """How far her window must climb so that the hands reach `cursor` (negative: it is below).
@@ -12598,7 +12737,7 @@ RULES:
             return False                             # never in the middle of a one-shot special
         if not self._work_area().contains(cursor):
             return False                             # on the taskbar or on another monitor
-        if self._required_rise(cursor) < MIN_JUMP_RISE_PX:
+        if self._required_rise(cursor) < 0.5 * self.width():
             return False                             # too low / too close to the ground to hang below
         return not any_mouse_button_down()           # a held button = a drag or selection somewhere else
 
@@ -12768,19 +12907,20 @@ RULES:
         """True if the cursor touches the pet's sprite or is within reach of her hands."""
         hand_x, hand_y = self._hand_offset()
         gap_hands = math.hypot(cursor.x() - (self._x + hand_x), cursor.y() - (self._y + hand_y))
-        if gap_hands <= GRAB_RADIUS_PX:
+        grab_radius = 0.5 * self.width()
+        if gap_hands <= grab_radius:
             return True
         margin = 4.0
-        return (self._x - margin <= cursor.x() <= self._x + SPRITE_SIZE + margin
-                and self._y - margin <= cursor.y() <= self._y + SPRITE_SIZE + margin)
+        return (self._x - margin <= cursor.x() <= self._x + self.width() + margin
+                and self._y - margin <= cursor.y() <= self._y + self.height() + margin)
 
     def _can_hang_from(self, cursor: QPoint) -> bool:
         """The cursor is on the work area and high enough for her to dangle below it."""
         if not self._work_area().contains(cursor):
             return False
         area = self._work_area()
-        normal_ground_y = float(area.y() + area.height() - SPRITE_SIZE + FOOT_PADDING)
-        normal_hand_y = HAND_ANCHOR[1] * SPRITE_SIZE
+        normal_ground_y = float(area.y() + area.height() - self.height() + (FOOT_PADDING * self._scale_modifier))
+        normal_hand_y = HAND_ANCHOR[1] * self.height()
         return cursor.y() - normal_hand_y < normal_ground_y
 
     def _begin_hang(self, now: float) -> None:
@@ -12920,9 +13060,9 @@ RULES:
             return False
         xs = [x for _t, x, _y in self._shake_trail]
         ys = [y for _t, _x, y in self._shake_trail]
-        if math.hypot(xs[-1] - xs[0], ys[-1] - ys[0]) >= SHAKE_MAX_NET:
+        if math.hypot(xs[-1] - xs[0], ys[-1] - ys[0]) >= 0.5 * self.width():
             return False                             # she is being carried somewhere, not shaken
-        reversals = max(count_reversals(xs, SHAKE_MIN_SWING), count_reversals(ys, SHAKE_MIN_SWING))
+        reversals = max(count_reversals(xs, 0.3 * self.width()), count_reversals(ys, 0.3 * self.width()))
         return reversals >= SHAKE_REVERSALS
 
     # ----------------------------------------------------- jump: ending it
@@ -13394,6 +13534,41 @@ RULES:
         shop_action = menu.addAction("Visit Shop 🏪")
         alarms_action = menu.addAction("Alarms & Timers (COMING SOON)")
         menu.addSeparator()
+
+        scale_menu = menu.addMenu("Pet Scale 🔍")
+        preset_labels = {
+            0.5: "50% (Tiny)",
+            0.75: "75% (Compact)",
+            1.0: "100% (Default)",
+            1.25: "125% (Medium)",
+            1.5: "150% (Large)",
+            2.0: "200% (Giant)",
+        }
+        cur_scale = getattr(self, "_scale_modifier", DEFAULT_SCALE_MODIFIER)
+        for preset in SCALE_PRESETS:
+            label = preset_labels.get(preset, f"{int(preset * 100)}%")
+            act = scale_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(abs(preset - cur_scale) < 0.01)
+            act.triggered.connect(lambda checked, s=preset: self.set_scale_modifier(s))
+
+        dlg_scale_menu = menu.addMenu("Dialogue Scale 💬")
+        dlg_preset_labels = {
+            1.0: "100% (Compact)",
+            1.25: "125% (Small)",
+            1.5: "150% (Default)",
+            1.75: "175% (Large)",
+            2.0: "200% (Giant)",
+        }
+        cur_dlg_scale = getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE)
+        for preset in DIALOGUE_SCALE_PRESETS:
+            label = dlg_preset_labels.get(preset, f"{int(preset * 100)}%")
+            act = dlg_scale_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(abs(preset - cur_dlg_scale) < 0.01)
+            act.triggered.connect(lambda checked, s=preset: self.set_dialogue_scale(s))
+
+        menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
@@ -13449,6 +13624,8 @@ RULES:
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         # Check user return if user previously notified away
         if getattr(self, "_user_away_notified", False):
             idle_s = get_user_idle_seconds()
@@ -13497,6 +13674,8 @@ RULES:
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
         """Evaluate the newly focused window after it has composited."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         ensure_window_topmost(self)
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             ensure_window_topmost(self._dialogue_overlay)
@@ -13553,6 +13732,8 @@ RULES:
 
     def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
+        if getattr(self, "_hidden_in_tray", False):
+            return
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             return
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
@@ -13847,6 +14028,90 @@ RULES:
         self._set_game_mode(new_mode)
         return new_mode
 
+    def cycle_dialogue_scale(self, direction: int = 1) -> float:
+        """Cycle through DIALOGUE_SCALE_PRESETS in forward (1) or backward (-1) direction."""
+        current = getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE)
+        closest_idx = 0
+        min_diff = float("inf")
+        for idx, preset in enumerate(DIALOGUE_SCALE_PRESETS):
+            diff = abs(preset - current)
+            if diff < min_diff:
+                min_diff = diff
+                closest_idx = idx
+        next_idx = (closest_idx + direction) % len(DIALOGUE_SCALE_PRESETS)
+        new_scale = DIALOGUE_SCALE_PRESETS[next_idx]
+        self.set_dialogue_scale(new_scale)
+        return new_scale
+
+    def set_dialogue_scale(self, scale: float) -> None:
+        """Update dialogue box scale for both dialogue overlay and chat input."""
+        scale = max(0.5, min(3.0, float(scale)))
+        self._dialogue_scale = scale
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay:
+            self._dialogue_overlay.set_scale(scale)
+            if self._dialogue_overlay.is_active():
+                self._dialogue_overlay.update_position(self._x, self._y, self.width(), self.height())
+        if hasattr(self, "_chat_input") and self._chat_input:
+            self._chat_input.set_scale(scale)
+            if self._chat_input.isVisible():
+                self._chat_input.update_position(self._x, self._y, self.width(), self.height())
+        self._save_live_settings()
+        log.info("Dialogue box scale set to %.2fx", self._dialogue_scale)
+
+    def cycle_scale_modifier(self, direction: int = 1) -> float:
+        """Cycle through SCALE_PRESETS in forward (1) or backward (-1) direction."""
+        current = getattr(self, "_scale_modifier", DEFAULT_SCALE_MODIFIER)
+        closest_idx = 0
+        min_diff = float("inf")
+        for idx, preset in enumerate(SCALE_PRESETS):
+            diff = abs(preset - current)
+            if diff < min_diff:
+                min_diff = diff
+                closest_idx = idx
+        next_idx = (closest_idx + direction) % len(SCALE_PRESETS)
+        new_scale = SCALE_PRESETS[next_idx]
+        self.set_scale_modifier(new_scale)
+        return new_scale
+
+    def set_scale_modifier(self, scale: float) -> None:
+        """Change the pet sprite scale modifier, rebuild sprite bank, and adjust window position."""
+        scale = max(0.25, min(4.0, float(scale)))
+        self._scale_modifier = scale
+        dpr = self.devicePixelRatioF()
+        self._bank.rebuild(dpr, self._scale_modifier)
+        self._set_frame(self._frame_idx)
+
+        if hasattr(self, "_ghost_aura_cache"):
+            self._ghost_aura_cache.clear()
+
+        area = QApplication.primaryScreen().availableGeometry()
+        min_x, max_x, min_y, ground_y = self._bounds()
+
+        if self._phase == Phase.HIDE_PEEK:
+            self._x = float(area.x() + area.width() - self.width() - self._ear_peek_offset_x)
+            self._y = float(area.y() + area.height() - self._ear_peek_height)
+        elif self._phase in (Phase.WALK, Phase.PAUSE):
+            self._y = ground_y
+            self._x = max(min_x, min(self._x, max_x))
+        else:
+            self._y = min(self._y, ground_y)
+            self._x = max(min_x, min(self._x, max_x))
+
+        self._sync_window_position()
+
+        if self._overlay_state:
+            ov_frames = self._bank.frames.get(self._overlay_state, [])
+            if ov_frames and self._overlay_frame_idx < len(ov_frames):
+                self._show_overlay_frame(ov_frames[self._overlay_frame_idx].pixmap)
+
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.update_position(self._x, self._y, self.width(), self.height())
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.update_position(self._x, self._y, self.width(), self.height())
+
+        self._save_live_settings()
+        log.info("Pet scale modifier set to %.2fx (window: %dx%d)", self._scale_modifier, self.width(), self.height())
+
     def _save_live_settings(self) -> None:
         """Persist live toggles to config.json."""
         if hasattr(self, "_memory") and self._memory:
@@ -13857,6 +14122,8 @@ RULES:
                 "bomb_count": getattr(self, "_bomb_count", BOMB_COUNT),
                 "jump_enabled": getattr(self, "_jump_enabled", True),
                 "game_mode": getattr(self, "_game_mode", "AUTO"),
+                "scale_modifier": getattr(self, "_scale_modifier", DEFAULT_SCALE_MODIFIER),
+                "dialogue_scale": getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE),
             }
             self._memory.save_settings(settings)
 
@@ -14099,7 +14366,7 @@ RULES:
                 self._paint_ghost_talking(painter)
             elif self._phase == Phase.HIDE_PEEK:
                 painter.save()
-                painter.setClipRect(0, 0, self.width(), EAR_PEEK_HEIGHT_PX)
+                painter.setClipRect(0, 0, self.width(), self._ear_peek_height)
                 painter.drawPixmap(0, 0, self._pixmap)
                 painter.restore()
             elif self._phase == Phase.HIDE_OUTRO and getattr(self, "_hide_subphase", "") in ("ghost_rise_from_below", "ghost_sink"):
