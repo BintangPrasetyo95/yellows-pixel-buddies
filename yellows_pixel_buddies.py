@@ -11029,7 +11029,8 @@ RULES:
             self._play("wistful")
         else:
             self._play("idle")
-        self._say("* Treasure this world, won't you?", force=True, record_memory=False)
+        exit_line = getattr(self._shop_window, "_dialogue_text", "* Treasure this world, won't you?") if hasattr(self, "_shop_window") and self._shop_window else "* Treasure this world, won't you?"
+        self._say(exit_line, force=True, record_memory=False)
         self._resume_walk_after_menu()
 
     def _cancel_previous_song_loading(self) -> None:
