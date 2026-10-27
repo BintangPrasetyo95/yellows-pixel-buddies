@@ -414,6 +414,7 @@ ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_S
 # --- Startup Hiding & Summoning ----------------------------------------------
 EAR_PEEK_HEIGHT_PX = 34   # height (px) of ghost ears poking above the taskbar (lowered slightly)
 EAR_PEEK_OFFSET_X = 24.0  # distance (px) from right screen edge where ears peek
+PEEK_SPAM_BURNT_CHANCE = 0.50  # chance of landing burnt when spam-launched from peeking ears
 SUMMON_OPENING_LINES: list[str] = [
     "* Whoa!!",
     "* MEW!?",
@@ -11029,8 +11030,6 @@ RULES:
             self._play("wistful")
         else:
             self._play("idle")
-        exit_line = getattr(self._shop_window, "_dialogue_text", "* Treasure this world, won't you?") if hasattr(self, "_shop_window") and self._shop_window else "* Treasure this world, won't you?"
-        self._say(exit_line, force=True, record_memory=False)
         self._resume_walk_after_menu()
 
     def _cancel_previous_song_loading(self) -> None:
@@ -12090,6 +12089,49 @@ RULES:
         else:
             QTimer.singleShot(600, self._start_summon_intro)
 
+    def _trigger_peek_ears_launch(self) -> None:
+        """Spam-clicking peeking ears: launch Pink upward into airborne flight.
+
+        Mid-air: cursor can catch her (Phase.HANG).
+        Landing: random chance of landing in BURNT_STATE or shocked/laughing.
+        """
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            self._dialogue_overlay.dismiss(clear_queue=True)
+        if hasattr(self, "_single_click_timer") and self._single_click_timer.isActive():
+            self._single_click_timer.stop()
+        if hasattr(self, "_chat_input") and self._chat_input.isVisible():
+            self._chat_input.cancel()
+
+        self._leave_hang()
+        self._jump_active = False
+        self._brain_timer.stop()
+        self._pause_elapsed = False
+        self._phase = Phase.JUMP
+        self._gravity = JUMP_GRAVITY_PX_S2
+        self._airborne_started_at = time.perf_counter()
+
+        _min_x, _max_x, _min_y, ground_y = self._bounds()
+        self._y = ground_y
+        self._vy = -750.0
+        self._vx = random.uniform(-130.0, -80.0)
+        self._facing = "left"
+
+        self._can_catch_cursor = True
+        self._wall_bounced = False
+        self._shake_trail.clear()
+
+        self._pending_reaction = (
+            BURNT_STATE if random.random() < PEEK_SPAM_BURNT_CHANCE
+            else random.choice(["shocked", "laughing"])
+        )
+
+        self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        self._sync_window_position()
+        log.info(
+            "Spam-click peeking ears launch triggered: vy=%.1f, vx=%.1f, reaction=%s",
+            self._vy, self._vx, self._pending_reaction
+        )
+
     def _start_summon_intro(self) -> None:
         """Ghost goes up FAST, pauses looking right & left, flies off right, then shocked pops in."""
         if self._phase == Phase.SUMMON_INTRO:
@@ -12854,7 +12896,7 @@ RULES:
             self._resolve_apex(cursor, now)          # the vertical speed just crossed zero
 
         # Touch-down. NEVER while she is moving upward: a launch starts exactly ON the ground.
-        if (self._vy >= 0.0 and self._y >= ground_y) or (self._y >= ground_y + 12.0):
+        if self._vy >= 0.0 and self._y >= ground_y:
             self._y = ground_y
             self._touch_down()
 
@@ -12863,7 +12905,8 @@ RULES:
         log.debug("Apex: top of arc -> MISS%s",
                   " (wall bounce)" if self._wall_bounced else "")
         self._vx *= JUMP_MISS_HSPEED_KEEP        # (nearly) straight down from here
-        self._pending_reaction = MISS_REACTION   # played on touchdown
+        if self._pending_reaction is None:
+            self._pending_reaction = MISS_REACTION   # played on touchdown
 
     def _update_airborne_facing(self) -> None:
         """Update sprite mirroring and mask to match the current heading while airborne."""
@@ -13194,12 +13237,18 @@ RULES:
             event.accept()
             return
         if event.button() == Qt.LeftButton:
-            if self._phase == Phase.HIDE_PEEK:
-                self._on_peek_ears_clicked()
-                event.accept()
-                return
-            if self._phase in (Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
-                if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+            if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
+                now = time.perf_counter()
+                self._click_times.append(now)
+                self._click_times = [t for t in self._click_times if now - t <= 0.8]
+                if len(self._click_times) >= 3:
+                    self._click_times.clear()
+                    self._trigger_peek_ears_launch()
+                    event.accept()
+                    return
+                if self._phase == Phase.HIDE_PEEK:
+                    self._on_peek_ears_clicked()
+                elif hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
                     self._dialogue_overlay.advance_or_dismiss()
                 event.accept()
                 return
