@@ -8568,6 +8568,7 @@ class YellowsPixelBuddies(QWidget):
 
         # --- window switch monitoring ------------------------------------------
         self._last_foreground_hwnd: int | None = None
+        self._last_foreground_is_maximized: bool = False
         self._last_luminance: float = 128.0
         self._last_switch_shock_time: float = -9999.0   # allows immediate shock on first switch
         self._last_switch_burnt_time: float = -9999.0   # allows immediate burnt on first switch
@@ -8680,6 +8681,7 @@ class YellowsPixelBuddies(QWidget):
                 fg = dll.GetForegroundWindow()
                 if fg and fg != int(self.winId()):
                     self._last_foreground_hwnd = fg
+                    self._last_foreground_is_maximized = bool(dll.IsZoomed(fg))
                     self._last_luminance = sample_screen_luminance()
             self._window_timer.start()
 
@@ -14069,14 +14071,22 @@ RULES:
             return
 
         if hwnd != self._last_foreground_hwnd:
+            prev_hwnd = self._last_foreground_hwnd
+            prev_maximized = getattr(self, "_last_foreground_is_maximized", False)
+            if prev_hwnd and dll.IsWindow(prev_hwnd):
+                prev_maximized = bool(dll.IsZoomed(prev_hwnd))
+
             self._last_foreground_hwnd = hwnd
             prev_lum = self._last_luminance
 
             # Give DWM time to finish drawing the new window before sampling luminance
             QTimer.singleShot(WINDOW_SWITCH_SETTLE_MS,
-                              lambda h=hwnd, pl=prev_lum: self._handle_window_switch(h, pl))
+                              lambda h=hwnd, pl=prev_lum, pm=prev_maximized: self._handle_window_switch(h, pl, pm))
+        else:
+            # Keep maximized tracking up-to-date in case user maximized/restored the current window
+            self._last_foreground_is_maximized = bool(dll.IsZoomed(hwnd))
 
-    def _handle_window_switch(self, target_hwnd: int, prev_lum: float) -> None:
+    def _handle_window_switch(self, target_hwnd: int, prev_lum: float, prev_maximized: bool = False) -> None:
         """Evaluate the newly focused window after it has composited."""
         if getattr(self, "_hidden_in_tray", False):
             return
@@ -14099,6 +14109,7 @@ RULES:
             return
 
         is_maximized = bool(dll.IsZoomed(target_hwnd))
+        self._last_foreground_is_maximized = is_maximized
         curr_lum = sample_screen_luminance()
         self._last_luminance = curr_lum
 
@@ -14125,13 +14136,19 @@ RULES:
                      prev_lum, curr_lum)
             self._interrupt_with_reaction("burnt", dialogue_category="burnt_switch")
         else:
+            # Only trigger shocked if switching from a maximized window to another maximized window!
+            if not prev_maximized:
+                log.info("Switched to maximized app, but previous window was not maximized (prev_maximized=%s) -> skipping shocked reaction",
+                         prev_maximized)
+                return
+
             now = time.perf_counter()
             if now - self._last_switch_shock_time < SWITCH_SHOCK_COOLDOWN_S:
-                log.info("Switched to maximized app, but shocked is on cooldown (%.1fs remaining)",
+                log.info("Switched between maximized apps, but shocked is on cooldown (%.1fs remaining)",
                          SWITCH_SHOCK_COOLDOWN_S - (now - self._last_switch_shock_time))
                 return
             self._last_switch_shock_time = now
-            log.info("Switched to maximized app -> shocked")
+            log.info("Switched from maximized to another maximized app -> shocked")
             self._interrupt_with_reaction("shocked", dialogue_category="window_switch_shock")
 
     def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
