@@ -1095,7 +1095,8 @@ class DeltaruneShopWindow(QWidget):
             "finish", "complete", "publish", "ship", "launch", "exam", "thesis",
             "marathon", "project", "degree", "clean", "build", "develop", "refactor",
             "gym", "workout", "fitness", "run", "exercise", "learn", "study",
-            "write", "chapter", "release", "portfolio", "presentation", "assignment"
+            "write", "chapter", "release", "portfolio", "presentation", "assignment",
+            "win", "champion", "nationals", "#1", "first"
         ]
         score += sum(1 for kw in major_kws if kw in clean)
         if len(clean.split()) >= 6:

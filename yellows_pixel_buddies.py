@@ -779,7 +779,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - STRICT ANTI-HALLUCINATION & FACTUALITY RULES:
   * NEVER invent, guess, or fabricate past events, times, timestamps, minutes, conversation details, numbers, or facts.
-  * You have access to: active conversation history, recent session logs from today and yesterday, searched older memories, active 30-day reminders, and permanent facts.
+  * You have access to: active conversation history, recent session logs from today and yesterday, searched older memories, active 30-day reminders, permanent facts, and USER'S TARGET MILESTONES & LONG-TERM GOALS.
   * If the user asks about past conversations, times, or events:
     - ONLY use the actual logs and records provided in your context.
     - If you do not have the record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs, minion! Stop trying to test me!").
@@ -802,6 +802,16 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
   * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
   * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
+
+- TARGET MILESTONES & LONG-TERM GOALS ([add_goal: ...], [complete_goal: ...], [delete_goal: ...]):
+  * You have access to the user's grand ambitions and target milestones (from your Goals board in memory/goals.json).
+  * ROYAL COACHING & PROUD MASTER PERSONA: You view your minion's grand ambitions as royal territory! You want them to succeed because having a champion minion makes you, their doll overlord, look glorious. Weave their goals into spontaneous banter, ask how their training or progress is going, tease them when they get distracted, and celebrate their victories!
+  * When the user tells you about a new milestone or major long-term goal (e.g. "my goal is to win the tournament", "I want to finish my thesis", "goal: launch my game"):
+    - Append [add_goal: <goal_text>] to your response to register it on the board!
+  * When the user tells you they finished, achieved, or conquered a goal (e.g. "I won #1 in the nationals!", "I completed my goal to finish the game"):
+    - Append [complete_goal: <number_or_text>] to your response! This automatically logs the completion and rewards the user with bonus Pink Dollars (P$) in their wallet! Celebrate dramatically!
+  * When the user asks to drop, delete, or remove a goal:
+    - Append [delete_goal: <number_or_text>] to remove it from the board.
 
 - TIMERS & SCHEDULED ALARMS ([set_timer: <dur>, <label>], [set_alarm: <time>, <label>], [cancel_timer: <target>], [cancel_alarm: <target>]):
   * You have an ACTIVE ALARM & COUNTDOWN TIMER system that physically alerts the user on their desktop, shakes your body with startled animations, and pops up an interactive choice dialogue when time is up!
@@ -1396,6 +1406,15 @@ QUESTION_ITEMS: list[QuestionItem] = [
             ("Learning & growing!", "* That's how legends are born! Every setback is just XP in disguise!!", "peace_sign"),
             ("Hate mistakes.", "* Mistakes mean you're in the arena fighting! Wear those scars with pride!!", "laughing"),
             ("Level up soon!", "* YES! Ding ding! New abilities unlocked! Strike back harder!!", "singing"),
+        ],
+        category="motivations",
+    ),
+    QuestionItem(
+        question="* Hey minion! Are you inching closer to your big milestones today, or just staring into space?!",
+        choices=[
+            ("Conquering goals!", "* OHO! That's the fiery ambition I expect from my minion! Keep blazing forward!!", "laughing"),
+            ("Small step today.", "* Brick by brick builds an empire! Every tiny push counts, mew!", "peace_sign"),
+            ("Distracted, help!", "* Hmph! Need me to fire a laser barrage at your procrastination?! LOCK IN!!", "angry"),
         ],
         category="motivations",
     ),
@@ -4169,6 +4188,28 @@ def capture_screen_base64() -> str:
     return b64
 
 
+def evaluate_goal_value(text: str) -> int:
+    """Pink decides what a personal goal/milestone is worth (awarding between P$ 03 and P$ 08)."""
+    clean = (text or "").lower()
+    score = 4
+    major_kws = [
+        "finish", "complete", "publish", "ship", "launch", "exam", "thesis",
+        "marathon", "project", "degree", "clean", "build", "develop", "refactor",
+        "gym", "workout", "fitness", "run", "exercise", "learn", "study",
+        "write", "chapter", "release", "portfolio", "presentation", "assignment",
+        "win", "champion", "nationals", "#1", "first"
+    ]
+    score += sum(1 for kw in major_kws if kw in clean)
+    if len(clean.split()) >= 6:
+        score += 1
+    if len(clean) >= 35:
+        score += 1
+    trivial_kws = ["water", "drink", "check", "eat", "snack", "stretch", "breathe", "nap"]
+    if any(kw in clean for kw in trivial_kws):
+        score -= 1
+    return max(3, min(8, score))
+
+
 class MemoryManager:
     """Manages local session chat logs, long-term facts, and config/API key storage."""
 
@@ -4182,6 +4223,8 @@ class MemoryManager:
         self.facts_path = self.memory_dir / "facts.json"
         self.reminders_path = self.memory_dir / "reminders.json"
         self.alarms_path = self.memory_dir / "alarms.json"
+        self.goals_path = self.memory_dir / "goals.json"
+        self.wallet_path = self.memory_dir / "wallet.json"
         self.token_usage_path = self.memory_dir / "token_usage.json"
 
         # Migrate existing memory from local exe folder if switching to AppData
@@ -4254,6 +4297,8 @@ class MemoryManager:
                 self.reminders_path.write_text("[]", encoding="utf-8")
             if not self.alarms_path.exists():
                 self.alarms_path.write_text("[]", encoding="utf-8")
+            if not self.goals_path.exists():
+                self.goals_path.write_text("[]", encoding="utf-8")
         except Exception as err:
             log.warning("Could not initialize memory directories/facts: %s", err)
 
@@ -4660,6 +4705,139 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not clear reminders: %s", err)
             return 0
+
+    def get_active_goals(self) -> list[dict]:
+        """Read active personal milestones and goals from goals.json."""
+        if not self.goals_path.exists() or self.goals_path.stat().st_size == 0:
+            return []
+        try:
+            raw = json.loads(self.goals_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return []
+            active = []
+            for item in raw:
+                if isinstance(item, dict):
+                    if not item.get("completed", False):
+                        active.append(item)
+                elif isinstance(item, str) and item.strip():
+                    active.append({"text": item.strip(), "completed": False})
+            return active
+        except Exception as err:
+            log.warning("Could not read goals.json: %s", err)
+            return []
+
+    def get_goals_prompt(self, numbered: bool = True) -> str:
+        """Format active goals into a concise numbered list with Pink Dollar bounties for prompt injection."""
+        active = self.get_active_goals()
+        if not active:
+            return ""
+        lines = []
+        for idx, g in enumerate(active, 1):
+            text = g.get("text", "").strip()
+            val = evaluate_goal_value(text)
+            prefix = f"{idx}. " if numbered else "- "
+            lines.append(f'{prefix}"{text}" (Bounty: +P$ {val:02d} upon completion)')
+        return "\n".join(lines)
+
+    def add_goal(self, goal_text: str) -> bool:
+        """Add a new personal milestone/goal."""
+        goal_text = goal_text.strip()
+        if not goal_text:
+            return False
+        active = self.get_active_goals()
+        if any(g.get("text", "").strip().lower() == goal_text.lower() for g in active):
+            return False
+        active.append({"text": goal_text, "completed": False})
+        try:
+            self.goals_path.parent.mkdir(parents=True, exist_ok=True)
+            self.goals_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Saved new goal: %s", goal_text)
+            return True
+        except Exception as err:
+            log.warning("Could not save goal: %s", err)
+            return False
+
+    def _find_goal_index(self, active: list[dict], identifier: str | int) -> int | None:
+        """Helper to find 0-based index in active goals by 1-based index or text match."""
+        if not active or identifier is None:
+            return None
+        if isinstance(identifier, int):
+            idx = identifier - 1
+            return idx if 0 <= idx < len(active) else None
+
+        clean = str(identifier).strip()
+        if not clean:
+            return None
+        target_str = clean[1:] if clean.startswith("#") else clean
+        if target_str.isdigit():
+            idx = int(target_str) - 1
+            if 0 <= idx < len(active):
+                return idx
+
+        clean_lower = clean.lower()
+        for idx, g in enumerate(active):
+            if g.get("text", "").strip().lower() == clean_lower:
+                return idx
+        for idx, g in enumerate(active):
+            if clean_lower in g.get("text", "").strip().lower():
+                return idx
+        return None
+
+    def delete_goal(self, identifier: str | int) -> tuple[bool, str]:
+        """Delete an active goal by 1-based index or text match. Returns (success, deleted_text)."""
+        active = self.get_active_goals()
+        idx = self._find_goal_index(active, identifier)
+        if idx is None:
+            return False, ""
+        deleted = active.pop(idx)
+        deleted_text = deleted.get("text", "").strip()
+        try:
+            self.goals_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Deleted goal: %s", deleted_text)
+            return True, deleted_text
+        except Exception as err:
+            log.warning("Could not delete goal: %s", err)
+            return False, ""
+
+    def complete_goal(self, identifier: str | int) -> tuple[bool, str, int]:
+        """Complete an active goal, archive it, and award Pink Dollars.
+        Returns (success, goal_text, awarded_dollars)."""
+        active = self.get_active_goals()
+        idx = self._find_goal_index(active, identifier)
+        if idx is None:
+            return False, "", 0
+        target_goal = active.pop(idx)
+        goal_text = target_goal.get("text", "").strip()
+        val = evaluate_goal_value(goal_text)
+        try:
+            self.goals_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            new_bal = self.award_pink_dollars(val)
+            log.info("Completed goal '%s'! Awarded P$ %d (new balance: P$ %d)", goal_text, val, new_bal)
+            return True, goal_text, val
+        except Exception as err:
+            log.warning("Could not complete goal: %s", err)
+            return False, "", 0
+
+    def award_pink_dollars(self, amount: int) -> int:
+        """Award Pink Dollars to wallet.json and return new balance."""
+        wallet_p = self.wallet_path
+        data = {}
+        if wallet_p.exists():
+            try:
+                data = json.loads(wallet_p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        curr = int(data.get("pink_dollars", 15))
+        new_bal = max(0, curr + amount)
+        data["pink_dollars"] = new_bal
+        data["updated_at"] = time.time()
+        try:
+            wallet_p.parent.mkdir(parents=True, exist_ok=True)
+            wallet_p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            log.info("Awarded P$ %d. New balance: P$ %d", amount, new_bal)
+        except Exception as err:
+            log.warning("Could not update wallet.json: %s", err)
+        return new_bal
 
     def get_active_alarms(self, max_age_hours: int = 24) -> list[dict]:
         """Read timers and alarms from alarms.json. Auto-prune completed/dismissed items older than max_age_hours."""
@@ -6528,7 +6706,7 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -6601,6 +6779,18 @@ class GeminiWorkerThread(QThread):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     memory.edit_reminder(t_val, n_val)
+            for m in re.finditer(r"\[add_goal:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                g_val = m.group(1).strip()
+                if g_val:
+                    memory.add_goal(g_val)
+            for m in re.finditer(r"\[(?:complete_goal|finish_goal|done_goal):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                cg_val = m.group(1).strip()
+                if cg_val:
+                    memory.complete_goal(cg_val)
+            for m in re.finditer(r"\[(?:delete_goal|del_goal|rm_goal):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                dg_val = m.group(1).strip()
+                if dg_val:
+                    memory.delete_goal(dg_val)
             for m in re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE):
                 dur_str = m.group(1).strip()
                 lbl = m.group(2).strip() if m.group(2) else "Focus Timer"
@@ -6615,7 +6805,7 @@ class GeminiWorkerThread(QThread):
                 c_val = m.group(1).strip()
                 if c_val:
                     memory.cancel_alarm_or_timer(c_val)
-        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
 
@@ -9203,11 +9393,20 @@ class YellowsPixelBuddies(QWidget):
             self._last_hydration_check_time = now
             self._last_care_question_time = now
         if hasattr(self, "_memory") and self._memory:
-            # Extract any permanent facts embedded in the reaction
+            # Extract any permanent facts or goal actions embedded in the reaction
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
                 f_val = m.group(1).strip()
                 if f_val:
                     self._memory.add_fact(f_val)
+            for m in re.finditer(r"\[(?:complete_goal|finish_goal|done_goal):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                cg_val = m.group(1).strip()
+                if cg_val:
+                    self._memory.complete_goal(cg_val)
+            for m in re.finditer(r"\[add_goal:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                g_val = m.group(1).strip()
+                if g_val:
+                    self._memory.add_goal(g_val)
+            reaction_text = re.sub(r"\[(?:add_fact|add_goal|complete_goal|finish_goal|done_goal|delete_goal):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -9249,13 +9448,14 @@ class YellowsPixelBuddies(QWidget):
             return False
         has_facts = bool(self._memory.get_long_term_facts())
         has_reminders = bool(self._memory.get_active_reminders())
+        has_goals = bool(self._memory.get_active_goals()) if hasattr(self._memory, "get_active_goals") else False
         has_song = bool(getattr(self, "_current_song", None) and self._current_song[0])
         has_sessions = bool(getattr(self._memory, "sessions_dir", None) and any(self._memory.sessions_dir.glob("session_*.json")))
 
         # Consider time-of-day meal / rest care windows
         now_dt = datetime.datetime.now()
         is_care_window = (12 <= now_dt.hour <= 13) or (18 <= now_dt.hour <= 20) or (now_dt.hour >= 23 or now_dt.hour < 5)
-        return has_facts or has_reminders or has_song or has_sessions or is_care_window
+        return has_facts or has_reminders or has_goals or has_song or has_sessions or is_care_window
 
 
     def _pick_question_source(self) -> str:
@@ -9293,8 +9493,33 @@ class YellowsPixelBuddies(QWidget):
                     f"Ask what they think of its vibe, rhythm, or mood, or playfully comment on it without repeating old questions!"
                 )
 
-        # 1. User's explicit to-do reminders take priority
+        # 1. User's target milestones / goals take top priority or rotate with reminders
+        goals = self._memory.get_active_goals() if hasattr(self._memory, "get_active_goals") else []
         reminders = self._memory.get_active_reminders() if hasattr(self._memory, "get_active_reminders") else []
+
+        if goals and (not reminders or random.random() < 0.60):
+            if not hasattr(self, "_recent_goal_highlights"):
+                self._recent_goal_highlights = []
+            fresh_goals = [
+                g for g in goals
+                if g.get("text") not in self._recent_goal_highlights
+            ]
+            chosen_g = random.choice(fresh_goals if fresh_goals else goals)
+            g_text = chosen_g.get("text", "")
+            if g_text:
+                self._recent_goal_highlights.append(g_text)
+            if len(self._recent_goal_highlights) > 4:
+                self._recent_goal_highlights.pop(0)
+            val = evaluate_goal_value(g_text)
+            return (
+                f"The user has an active major milestone / long-term goal on their board: '{g_text}' (Pink evaluated at +P$ {val:02d}). "
+                f"Pink should do a proactive, spirited check-in on this grand ambition! "
+                f"As their royal overlord and coach, Pink considers the minion's victory a matter of royal pride. "
+                f"Ask how their journey, practice, or training is coming along today, tease them to keep their fiery determination burning, "
+                f"and provide 3 distinct high-contrast Undertale/Deltarune-style reaction choices!"
+            )
+
+        # 2. User's explicit to-do reminders take next priority
         if reminders:
             if not hasattr(self, "_recent_reminder_highlights"):
                 self._recent_reminder_highlights = []
@@ -9386,6 +9611,10 @@ class YellowsPixelBuddies(QWidget):
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
+        if goals:
+            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
         # Feed ongoing conversation history from the active session so Pink has situational awareness
         active_session_turns = []
@@ -10252,6 +10481,49 @@ RULES:
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
             self._say(reply, force=True, record_memory=False)
             return
+        elif lower_input.startswith(("/goal ", "/add_goal ")):
+            goal_content = clean_input.split(" ", 1)[1].strip()
+            if goal_content:
+                ok = self._memory.add_goal(goal_content)
+                val = evaluate_goal_value(goal_content)
+                reply = (
+                    f"* Target milestone registered, minion!\n* \"{goal_content}\"\n* Valuation: +P$ {val:02d} upon completion! Don't you dare slack off, mew! [anim: laughing]"
+                    if ok else "* That goal is already on our board, dummy!"
+                )
+                self._say(reply, force=True, record_memory=True)
+                return
+        elif lower_input.startswith(("/del_goal ", "/delete_goal ", "/rm_goal ")):
+            target = clean_input.split(" ", 1)[1].strip()
+            if target:
+                ok, deleted_text = self._memory.delete_goal(target)
+                if ok:
+                    reply = f"* Dropped goal from our board, mew:\n* \"{deleted_text}\" [anim: wistful]"
+                else:
+                    reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check our milestones."
+                self._say(reply, force=True, record_memory=False)
+                return
+        elif lower_input.startswith(("/complete_goal ", "/finish_goal ", "/done_goal ")):
+            target = clean_input.split(" ", 1)[1].strip()
+            if target:
+                ok, goal_text, val = self._memory.complete_goal(target)
+                if ok:
+                    reply = (
+                        f"* TARGET MILESTONE CONQUERED!! Mew!!\n"
+                        f"* Finished: \"{goal_text}\"\n"
+                        f"* Pink evaluated your achievement at +P$ {val:02d}! Added to your wallet! [anim: laughing]"
+                    )
+                else:
+                    reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check our milestones."
+                self._say(reply, force=True, record_memory=True)
+                return
+        elif lower_input in ("/goals", "/goal", "/milestones", "/milestone"):
+            goals_text = self._memory.get_goals_prompt()
+            reply = (
+                f"* Target Milestones & Long-term Goals board, mew:\n{goals_text}\n* (Complete goals for P$ or type /goal <text> to add!)"
+                if goals_text else "* No active goals logged yet, minion! Add one with /goal <milestone> or check the Shop!"
+            )
+            self._say(reply, force=True, record_memory=False)
+            return
         elif lower_input.startswith(("/timer ", "/countdown ")):
             rest = clean_input.split(" ", 1)[1].strip()
             parts = rest.split(" ", 1)
@@ -10576,6 +10848,10 @@ RULES:
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
+        if goals:
+            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
         had_visual = bool(see_screen or attached_image_b64)
         # Spawn background worker thread
@@ -10914,6 +11190,7 @@ RULES:
                 "- Speech Tics: Catchphrases and tics ('minion', ', mew!') are strictly optional flavor, do not force them.\n"
                 "- Emotion Tag: Append an emotion tag [anim: ...] to each candidate (e.g. [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: wistful], [anim: shocked], [anim: angry]).\n"
                 "- Visual Memory Tag: Append [seen: 3-8 words describing key visible windows/apps or activity on screen] to each candidate.\n"
+                "- GOAL & MILESTONE AWARENESS: If visible windows, apps, code, or tasks relate to any of the user's active goals, you may coach them or boast about their progress! If they are obviously playing games or slacking for hours while a milestone awaits, playfully tease them for stalling on their royal destiny!\n"
                 "- Strictly separate candidate options with '---' on a line by itself.\n"
                 "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the image."
             )
@@ -10930,6 +11207,10 @@ RULES:
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
+        if goals:
+            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
         if is_gaming:
             prompt_label = f"[Pink is watching your gameplay{game_label}]"
@@ -11491,6 +11772,10 @@ RULES:
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
+        if goals:
+            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
         check_str = f"{clean_artist} {clean_title}".lower()
         is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
@@ -12815,6 +13100,10 @@ RULES:
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
+        if goals:
+            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
         candidate_directive = (
             "[STRUCTURAL DIRECTIVE: TRAY BACKGROUND SCREEN OBSERVATION]\n"
