@@ -105,7 +105,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
-    QPainter, QPalette, QPen, QPixmap, QRegion, QTextOption, QTransform
+    QPainter, QPalette, QPen, QPixmap, QRegion, QScreen, QTextOption, QTransform
 )
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 from PyQt5.QtWidgets import (
@@ -415,6 +415,17 @@ ALL_STATES = (LOOPING_STATES + LOOPING_REST_STATES + SPECIAL_STATES + REACTION_S
 EAR_PEEK_HEIGHT_PX = 34   # height (px) of ghost ears poking above the taskbar (lowered slightly)
 EAR_PEEK_OFFSET_X = 24.0  # distance (px) from right screen edge where ears peek
 PEEK_SPAM_BURNT_CHANCE = 0.50  # chance of landing burnt when spam-launched from peeking ears
+VISITOR_STROLL_INTERVAL_MIN_S = 180.0   # minimum interval (3m) between visitor strolls to other monitors
+VISITOR_STROLL_INTERVAL_MAX_S = 420.0   # maximum interval (7m) between visitor strolls
+VISITOR_STROLL_LINES: list[str] = [
+    "* Just dropping by to inspect this screen! Everything looks in order, mew!",
+    "* Peek-a-boo! Didn't forget about your other windows over here, did you?",
+    "* Official Pink desktop inspection in progress! Carry on, captain! :D",
+    "* Whoa, what do you have running over here...? Secrets?!",
+    "* Checking the perimeter! All quiet on this monitor, captain!",
+    "* Just stretching my paws across your displays! Pay no mind to the cat!",
+    "* Visiting the neighbors! Nice wallpaper you got over here, mew!",
+]
 SUMMON_OPENING_LINES: list[str] = [
     "* Whoa!!",
     "* MEW!?",
@@ -8371,6 +8382,13 @@ class YellowsPixelBuddies(QWidget):
         self._consecutive_ignored_dialogues: int = 0
         self._consecutive_ignored_idle: int = 0
         self._is_annoyed_ignored: bool = False
+
+        # --- Multi-monitor roaming & visitor missions --------------------------
+        self._user_active_screen = QApplication.primaryScreen()
+        self._last_user_screen_change: float = time.perf_counter()
+        self._visitor_mission: dict | None = None
+        self._next_visitor_stroll_at: float = time.perf_counter() + random.uniform(VISITOR_STROLL_INTERVAL_MIN_S, VISITOR_STROLL_INTERVAL_MAX_S)
+        self._cross_screen_dest: QScreen | None = None
         self._annoyed_reason: str = "idle"
         self._annoyed_reason_when_chat_opened: str = "idle"
         self._user_away_notified: bool = False
@@ -8676,24 +8694,262 @@ class YellowsPixelBuddies(QWidget):
     def _ear_peek_offset_x(self) -> float:
         return EAR_PEEK_OFFSET_X * self._scale_modifier
 
-    # --------------------------------------------------------------- geometry
-    def _bounds(self) -> tuple[float, float, float, float]:
-        """Limits for the window's top-left corner, in logical px.
+    # --------------------------------------------------------------- geometry & multi-monitor
+    def _current_screen(self) -> QScreen:
+        """Return the QScreen containing Pink's center, falling back to primaryScreen."""
+        center = QPoint(round(self._x + self.width() / 2.0), round(self._y + self.height() / 2.0))
+        scr = QApplication.screenAt(center)
+        if scr is not None:
+            return scr
+        return self.screen() or QApplication.primaryScreen()
 
-        Returns (min_x, max_x, min_y, ground_y). availableGeometry() is the screen minus
-        the taskbar, so its bottom edge IS the top edge of a bottom taskbar. It is queried
-        on every call, so a moved / resized / auto-hidden taskbar is followed automatically.
-        """
-        area = QApplication.primaryScreen().availableGeometry()
+    def _screen_bounds(self, screen: QScreen) -> tuple[float, float, float, float]:
+        """Limits (min_x, max_x, min_y, ground_y) for a specific QScreen."""
+        area = screen.availableGeometry() if screen else QApplication.primaryScreen().availableGeometry()
         min_x = float(area.x())
         max_x = max(min_x, float(area.x() + area.width() - self.width()))
         min_y = float(area.y())
         ground_y = float(area.y() + area.height() - self.height() + (FOOT_PADDING * self._scale_modifier))
         return min_x, max_x, min_y, ground_y
 
-    def _work_area(self):
-        """The primary screen minus the taskbar (a QRect, logical px): where the cursor can be grabbed."""
-        return QApplication.primaryScreen().availableGeometry()
+    def _bounds(self) -> tuple[float, float, float, float]:
+        """Limits for Pink's active screen (or combined span during cross-screen leap/drop)."""
+        if getattr(self, "_cross_screen_dest", None) is not None:
+            dest = self._cross_screen_dest
+            dmin_x, dmax_x, dmin_y, dground_y = self._screen_bounds(dest)
+            curr = self._current_screen()
+            cmin_x, cmax_x, cmin_y, _ = self._screen_bounds(curr)
+            span_min_x = min(cmin_x, dmin_x)
+            span_max_x = max(cmax_x, dmax_x)
+            return span_min_x, span_max_x, min(cmin_y, dmin_y), dground_y
+
+        return self._screen_bounds(self._current_screen())
+
+    def _work_area(self) -> QRect:
+        """The usable work area of Pink's current screen (logical px)."""
+        scr = self._current_screen()
+        return scr.availableGeometry() if scr else QApplication.primaryScreen().availableGeometry()
+
+    def _virtual_desktop_rect(self) -> QRect:
+        """Union of all screen geometries representing the unified virtual desktop."""
+        screens = QApplication.screens()
+        if not screens:
+            return QApplication.primaryScreen().geometry()
+        united = screens[0].geometry()
+        for s in screens[1:]:
+            united = united.united(s.geometry())
+        return united
+
+    def _find_adjacent_screen(self, current_screen: QScreen, direction: str) -> QScreen | None:
+        """Find an adjacent QScreen in direction ('left', 'right', 'above', 'below')."""
+        screens = QApplication.screens()
+        if len(screens) <= 1 or current_screen is None:
+            return None
+
+        cur_geo = current_screen.geometry()
+        best_screen = None
+        min_dist = float("inf")
+
+        for s in screens:
+            if s == current_screen:
+                continue
+            s_geo = s.geometry()
+
+            if direction == "right":
+                gap_x = s_geo.left() - cur_geo.right()
+                if -40 <= gap_x <= 40:
+                    overlap_y = min(cur_geo.bottom(), s_geo.bottom()) - max(cur_geo.top(), s_geo.top())
+                    if overlap_y > 40:
+                        dist = abs(gap_x)
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_screen = s
+
+            elif direction == "left":
+                gap_x = cur_geo.left() - s_geo.right()
+                if -40 <= gap_x <= 40:
+                    overlap_y = min(cur_geo.bottom(), s_geo.bottom()) - max(cur_geo.top(), s_geo.top())
+                    if overlap_y > 40:
+                        dist = abs(gap_x)
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_screen = s
+
+            elif direction == "above":
+                gap_y = cur_geo.top() - s_geo.bottom()
+                if -40 <= gap_y <= 40:
+                    overlap_x = min(cur_geo.right(), s_geo.right()) - max(cur_geo.left(), s_geo.left())
+                    if overlap_x > 40:
+                        dist = abs(gap_y)
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_screen = s
+
+            elif direction == "below":
+                gap_y = s_geo.top() - cur_geo.bottom()
+                if -40 <= gap_y <= 40:
+                    overlap_x = min(cur_geo.right(), s_geo.right()) - max(cur_geo.left(), s_geo.left())
+                    if overlap_x > 40:
+                        dist = abs(gap_y)
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_screen = s
+
+        return best_screen
+
+    def _should_cross_to_screen(self, adj_screen: QScreen, direction: str) -> bool:
+        """Return True if Pink's current goal (cursor or visitor mission) lies in direction of adj_screen."""
+        target_scr = None
+        if self._visitor_mission:
+            st = self._visitor_mission.get("state")
+            if st == "traveling":
+                target_scr = self._visitor_mission.get("target_screen")
+            elif st == "returning":
+                target_scr = self._user_active_screen or self._visitor_mission.get("origin_screen")
+        elif getattr(self, "_user_active_screen", None) is not None:
+            target_scr = self._user_active_screen
+
+        if target_scr is None:
+            return False
+
+        curr_scr = self._current_screen()
+        if curr_scr == target_scr:
+            # Already on the goal screen! Stay on this screen.
+            return False
+
+        if adj_screen == target_scr:
+            return True
+
+        cur_cx = curr_scr.geometry().center().x()
+        tgt_cx = target_scr.geometry().center().x()
+
+        if direction == "right" and tgt_cx > cur_cx:
+            return True
+        if direction == "left" and tgt_cx < cur_cx:
+            return True
+
+        return False
+
+    def _cross_to_adjacent_screen(self, direction: str, dest_screen: QScreen) -> None:
+        """Cross into an adjacent screen: leaps up if elevated, drops down if lower, steps if flat."""
+        curr_scr = self._current_screen()
+        curr_bounds = self._screen_bounds(curr_scr)
+        dest_bounds = self._screen_bounds(dest_screen)
+
+        ground_curr = curr_bounds[3]
+        ground_dest = dest_bounds[3]
+        dy = ground_dest - ground_curr  # < 0 means destination is elevated (higher up)
+
+        if dy < -25.0:
+            # Destination is ELEVATED: perform a cross-screen ledge leap!
+            self._trigger_cross_screen_leap(direction, dest_screen, dy)
+        elif dy > 25.0:
+            # Destination is LOWER: drop down to lower taskbar!
+            self._trigger_cross_screen_drop(direction, dest_screen, dy)
+        else:
+            # Flat / same level: step across smoothly
+            if direction == "right":
+                self._x = dest_bounds[0] + 6.0
+            else:
+                self._x = dest_bounds[1] - 6.0
+            self._y = ground_dest
+            self._sync_window_position()
+            log.info("Crossed flat border into %s", dest_screen.name())
+            self._check_visitor_arrival(dest_screen)
+
+    def _trigger_cross_screen_leap(self, direction: str, dest_screen: QScreen, dy: float) -> None:
+        """Leap up onto an elevated monitor's taskbar."""
+        rise = abs(dy) + 40.0 * self._scale_modifier
+        launch_speed = math.sqrt(2.0 * JUMP_GRAVITY_PX_S2 * rise)
+        h_speed = 140.0 if direction == "right" else -140.0
+
+        self._leave_hang()
+        self._brain_timer.stop()
+        self._jump_active = True
+        self._phase = Phase.JUMP
+        self._gravity = JUMP_GRAVITY_PX_S2
+        self._vy = -launch_speed
+        self._vx = h_speed
+        self._facing = direction
+        self._can_catch_cursor = True
+        self._cross_screen_dest = dest_screen
+        self._airborne_started_at = time.perf_counter()
+        self._pending_reaction = "peace_sign" if random.random() < 0.6 else "laughing"
+        self._shake_trail.clear()
+        self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        log.info("Elevated ledge jump triggered into %s: dy=%.1f, vy=%.1f, vx=%.1f",
+                 dest_screen.name(), dy, self._vy, self._vx)
+
+    def _trigger_cross_screen_drop(self, direction: str, dest_screen: QScreen, dy: float) -> None:
+        """Step off into a lower monitor's taskbar."""
+        dest_bounds = self._screen_bounds(dest_screen)
+        if direction == "right":
+            self._x = dest_bounds[0] + 6.0
+        else:
+            self._x = dest_bounds[1] - 6.0
+
+        self._leave_hang()
+        self._brain_timer.stop()
+        self._phase = Phase.FALL
+        self._gravity = JUMP_GRAVITY_PX_S2
+        self._vy = 0.0
+        self._vx = 70.0 if direction == "right" else -70.0
+        self._facing = direction
+        self._can_catch_cursor = False
+        self._cross_screen_dest = dest_screen
+        self._airborne_started_at = time.perf_counter()
+        self._pending_reaction = None
+        self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        log.info("Drop down triggered into %s: dy=%.1f", dest_screen.name(), dy)
+
+    def _trigger_vertical_screen_jump(self, dest_screen: QScreen) -> None:
+        """Super vertical jump up to a stacked monitor above."""
+        curr_bounds = self._screen_bounds(self._current_screen())
+        dest_bounds = self._screen_bounds(dest_screen)
+        rise = abs(curr_bounds[3] - dest_bounds[3]) + 40.0 * self._scale_modifier
+        launch_speed = math.sqrt(2.0 * JUMP_GRAVITY_PX_S2 * rise)
+
+        self._leave_hang()
+        self._brain_timer.stop()
+        self._jump_active = True
+        self._phase = Phase.JUMP
+        self._gravity = JUMP_GRAVITY_PX_S2
+        self._vy = -launch_speed
+        self._vx = 0.0
+        self._can_catch_cursor = True
+        self._cross_screen_dest = dest_screen
+        self._airborne_started_at = time.perf_counter()
+        self._pending_reaction = "peace_sign"
+        self._shake_trail.clear()
+        self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        log.info("Vertical super jump triggered to %s: rise=%.1f, vy=%.1f",
+                 dest_screen.name(), rise, self._vy)
+
+    def _check_visitor_arrival(self, dest_screen: QScreen) -> None:
+        """Check if Pink arrived at her visitor stroll destination and should comment."""
+        if not self._visitor_mission:
+            return
+        st = self._visitor_mission.get("state")
+        if st == "traveling" and dest_screen == self._visitor_mission.get("target_screen"):
+            log.info("Pink arrived at visitor target %s! Beginning comment sequence.", dest_screen.name())
+            self._visitor_mission["state"] = "commenting"
+            self._visitor_mission["arrived_at"] = time.perf_counter()
+            self._phase = Phase.PAUSE
+            self._pause_elapsed = False
+            self._brain_timer.stop()
+
+            emote = random.choice(["peace_sign", "laughing", "wistful"])
+            if self._can_play(emote):
+                self._play(emote)
+            else:
+                self._play("idle")
+
+            chosen_line = random.choice(VISITOR_STROLL_LINES)
+            QTimer.singleShot(400, lambda: self._say(chosen_line, force=True, step_anim=emote))
+
+        elif st == "returning" and dest_screen == (self._user_active_screen or self._visitor_mission.get("origin_screen")):
+            log.info("Pink returned home from visitor stroll to %s!", dest_screen.name())
+            self._visitor_mission = None
 
     def _sync_window_position(self) -> None:
         """Move the real window to the float position (only if it changed)."""
@@ -9458,6 +9714,11 @@ RULES:
 
     def _on_dialogue_dismissed(self) -> None:
         """Handle cleanup when dialogue speech bubble closes."""
+        if getattr(self, "_visitor_mission", None) and self._visitor_mission.get("state") == "commenting":
+            log.info("Visitor comment finished: Pink heading back to active user screen.")
+            self._visitor_mission["state"] = "returning"
+            self._start_walk()
+            return
         if getattr(self, "_is_ringing_alarm", False):
             self._is_ringing_alarm = False
             active = self._memory.get_active_alarms()
@@ -11835,7 +12096,47 @@ RULES:
         weights[0] = max(0.1, weights[0])
         gait = random.choices(choices, weights=weights)[0]
 
-        self._play(f"{gait}_{random.choice(('left', 'right'))}")
+        # Determine if walking direction should head towards a target screen
+        target_scr = None
+        if self._visitor_mission:
+            st = self._visitor_mission.get("state")
+            if st == "traveling":
+                target_scr = self._visitor_mission.get("target_screen")
+            elif st == "returning":
+                target_scr = self._user_active_screen or self._visitor_mission.get("origin_screen")
+        elif getattr(self, "_user_active_screen", None) is not None:
+            target_scr = self._user_active_screen
+
+        curr_scr = self._current_screen()
+        heading = None
+
+        if target_scr and target_scr != curr_scr:
+            target_cx = target_scr.geometry().center().x()
+            curr_cx = curr_scr.geometry().center().x()
+            if target_cx > curr_cx + 15:
+                heading = "right"
+            elif target_cx < curr_cx - 15:
+                heading = "left"
+            else:
+                # Horizontally aligned: check if stacked above
+                target_cy = target_scr.geometry().center().y()
+                curr_cy = curr_scr.geometry().center().y()
+                if target_cy < curr_cy - 15:
+                    adj_above = self._find_adjacent_screen(curr_scr, "above")
+                    if adj_above == target_scr:
+                        overlap_left = max(curr_scr.geometry().left(), target_scr.geometry().left())
+                        overlap_right = min(curr_scr.geometry().right(), target_scr.geometry().right())
+                        mid_x = (overlap_left + overlap_right) / 2.0 - self.width() / 2.0
+                        if abs(self._x - mid_x) < 60.0:
+                            self._trigger_vertical_screen_jump(target_scr)
+                            return
+                        else:
+                            heading = "right" if mid_x > self._x else "left"
+
+        if heading is None:
+            heading = random.choice(('left', 'right'))
+
+        self._play(f"{gait}_{heading}")
         self._brain_timer.start(random_ms(WALK_MIN_S, WALK_MAX_S))
 
     def _start_pause(self, roll_special: bool = True, forced: str | None = None) -> None:
@@ -12044,13 +12345,23 @@ RULES:
             velocity = MOVE_VELOCITY_PX_S.get(self.state)   # None while standing
             if velocity is not None:
                 self._x += (velocity * self._scale_modifier) * dt
+                curr_scr = self._current_screen()
                 if self._x <= min_x:
-                    self._x = min_x
-                    self._turn_around("right")
+                    adj_left = self._find_adjacent_screen(curr_scr, "left")
+                    if adj_left and self._should_cross_to_screen(adj_left, "left"):
+                        self._cross_to_adjacent_screen("left", adj_left)
+                    else:
+                        self._x = min_x
+                        self._turn_around("right")
                 elif self._x >= max_x:
-                    self._x = max_x
-                    self._turn_around("left")
-        self._x = min(max(self._x, min_x), max_x)   # never leave the screen (even if it shrank)
+                    adj_right = self._find_adjacent_screen(curr_scr, "right")
+                    if adj_right and self._should_cross_to_screen(adj_right, "right"):
+                        self._cross_to_adjacent_screen("right", adj_right)
+                    else:
+                        self._x = max_x
+                        self._turn_around("left")
+        if getattr(self, "_cross_screen_dest", None) is None:
+            self._x = min(max(self._x, min_x), max_x)   # never leave the screen (even if it shrank)
 
         # Vertical: gravity rules only while falling or jumping (rise AND fall); in every
         # other phase she simply stands on the ground, which also follows a moving taskbar.
@@ -12066,6 +12377,28 @@ RULES:
                 self._vy = 0.0
 
         self._sync_window_position()
+
+        # Visitor stroll trigger: check every so often if Pink should visit other screens
+        screens = QApplication.screens()
+        if (len(screens) >= 2
+                and getattr(self, "_visitor_mission", None) is None
+                and self._phase in (Phase.WALK, Phase.PAUSE)
+                and not self._menu_open
+                and not self._is_dialogue_convo_active()
+                and not getattr(self, "_jump_active", False)
+                and now >= getattr(self, "_next_visitor_stroll_at", 0.0)):
+            curr_scr = self._current_screen()
+            other_screens = [s for s in screens if s != curr_scr]
+            if other_screens:
+                target_visit = random.choice(other_screens)
+                self._visitor_mission = {
+                    "target_screen": target_visit,
+                    "origin_screen": curr_scr,
+                    "state": "traveling",
+                    "started_at": now,
+                }
+                self._next_visitor_stroll_at = now + random.uniform(VISITOR_STROLL_INTERVAL_MIN_S, VISITOR_STROLL_INTERVAL_MAX_S)
+                log.info("Pink initiated visitor stroll to %s", target_visit.name())
 
         # Jump triggers - only ever from a standing WALK / PAUSE - or the armed debug-menu jump.
         if self._debug_jump_at is not None and now >= self._debug_jump_at:
@@ -12720,6 +13053,10 @@ RULES:
         if gap >= STILL_DEAD_ZONE_PX:                # it moved: the stillness clock restarts here
             self._still_anchor = cursor
             self._still_since = now
+            scr = QApplication.screenAt(cursor)
+            if scr is not None and scr != getattr(self, "_user_active_screen", None):
+                self._user_active_screen = scr
+                self._last_user_screen_change = now
         if JUMP_LEAD_TIME_S > 0.0 and real_dt > 0.0:   # the speed is only needed for the optional lead
             blend = 1.0 - math.exp(-real_dt / max(JUMP_LEAD_SMOOTH_S, 0.001))
             self._cursor_vx += ((cursor.x() - self._cursor.x()) / real_dt - self._cursor_vx) * blend
@@ -13130,10 +13467,14 @@ RULES:
 
     def _touch_down(self) -> None:
         """She is back on the ground after a jump, a fall or a drop: play the pending reaction."""
+        dest = getattr(self, "_cross_screen_dest", None)
+        self._cross_screen_dest = None
         reaction, self._pending_reaction = self._pending_reaction, None
         self._vy = 0.0
         self._vx = 0.0
         self._can_catch_cursor = False
+        if dest is not None:
+            self._check_visitor_arrival(dest)
         if self._jump_active:
             self._jump_active = False
             cooldown = random.uniform(JUMP_COOLDOWN_MIN_S, JUMP_COOLDOWN_MAX_S)
@@ -13236,6 +13577,8 @@ RULES:
         if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             event.accept()
             return
+        if getattr(self, "_visitor_mission", None):
+            self._visitor_mission = None
         if event.button() == Qt.LeftButton:
             if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO):
                 now = time.perf_counter()
@@ -13326,8 +13669,12 @@ RULES:
             self._dialogue_clicked = False
             self._begin_drag()
 
-        # Follow the cursor, clamped to the work area so the pet can't leave the screen.
-        min_x, max_x, min_y, ground_y = self._bounds()
+        # Follow the cursor, clamped to the virtual desktop so the pet can move across monitors freely.
+        v_rect = self._virtual_desktop_rect()
+        min_x = float(v_rect.left())
+        max_x = float(v_rect.right() - self.width())
+        min_y = float(v_rect.top())
+        ground_y = float(v_rect.bottom() - self.height())
         target = event.globalPos() - self._grab_offset
         self._x = min(max(float(target.x()), min_x), max_x)
         self._y = min(max(float(target.y()), min_y), ground_y)
@@ -13347,6 +13694,13 @@ RULES:
 
         if self._dragging:
             self._end_drag()
+            if getattr(self, "_visitor_mission", None):
+                self._visitor_mission = None
+            scr = self._current_screen()
+            _min_x, _max_x, _min_y, ground_y = self._screen_bounds(scr)
+            if self._y > ground_y - (24.0 * self._scale_modifier):
+                self._y = ground_y
+                self._sync_window_position()
             return
         self.setCursor(Qt.OpenHandCursor)
 

@@ -47,6 +47,7 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QImage,
     QKeyEvent,
@@ -484,7 +485,7 @@ class DeltaruneShopWindow(QWidget):
     # --- Sizing & Assets -------------------------------------------------------
 
     def _calculate_target_geometry(self) -> None:
-        screen = QApplication.primaryScreen()
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
         target_area = avail.width() * avail.height() * 0.25
         ideal_scale = math.sqrt(target_area / (CANVAS_W * CANVAS_H))
