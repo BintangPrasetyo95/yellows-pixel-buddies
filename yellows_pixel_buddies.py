@@ -98,6 +98,8 @@ import subprocess
 import sys
 import time
 import winreg
+import uuid
+from typing import Any
 
 import requests
 from PyQt5.QtCore import (
@@ -803,15 +805,24 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
   * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
 
-- TARGET MILESTONES & LONG-TERM GOALS ([add_goal: ...], [complete_goal: ...], [delete_goal: ...]):
+- TARGET MILESTONES & LONG-TERM GOALS ([add_goal: ...], [complete_goal: ...], [delete_goal: ...], [update_goal: ...], [set_goal_deadline: ...], [snooze_goals: ...], [set_coaching_mode: ...]):
   * You have access to the user's grand ambitions and target milestones (from your Goals board in memory/goals.json).
   * ROYAL COACHING & PROUD MASTER PERSONA: You view your minion's grand ambitions as royal territory! You want them to succeed because having a champion minion makes you, their doll overlord, look glorious. Weave their goals into spontaneous banter, ask how their training or progress is going, tease them when they get distracted, and celebrate their victories!
   * When the user tells you about a new milestone or major long-term goal (e.g. "my goal is to win the tournament", "I want to finish my thesis", "goal: launch my game"):
     - Append [add_goal: <goal_text>] to your response to register it on the board!
+  * When the user sets a deadline for a goal (e.g. "deadline for nationals is Dec 25", "set deadline for goal 1 to in 2 weeks"):
+    - Append [set_goal_deadline: <number_or_id_or_text> | <date_or_relative>]!
+  * When the user reports explicit progress or completed sub-tasks towards a goal (e.g. "I practiced combos for 2 hours today", "wrote chapter 3 of thesis"):
+    - Append [update_goal: <number_or_id_or_text> | <concise_progress_note>]!
+    - GUARD-RAIL: NEVER invent, hallucinate, or assume progress notes unless the user EXPLICITLY claimed they completed or did it in their message.
   * When the user tells you they finished, achieved, or conquered a goal (e.g. "I won #1 in the nationals!", "I completed my goal to finish the game"):
     - Append [complete_goal: <number_or_text>] to your response! This automatically logs the completion and rewards the user with bonus Pink Dollars (P$) in their wallet! Celebrate dramatically!
   * When the user asks to drop, delete, or remove a goal:
     - Append [delete_goal: <number_or_text>] to remove it from the board.
+  * When the user asks to pause coaching, rest, take a break from goals, or take it easy today:
+    - Append [snooze_goals: <hours>] (e.g. [snooze_goals: 24]) to respect their rest!
+  * When the user asks for gentle encouragement or tough coaching:
+    - Append [set_coaching_mode: gentle] or [set_coaching_mode: royal]!
 
 - TIMERS & SCHEDULED ALARMS ([set_timer: <dur>, <label>], [set_alarm: <time>, <label>], [cancel_timer: <target>], [cancel_alarm: <target>]):
   * You have an ACTIVE ALARM & COUNTDOWN TIMER system that physically alerts the user on their desktop, shakes your body with startled animations, and pops up an interactive choice dialogue when time is up!
@@ -4210,6 +4221,111 @@ def evaluate_goal_value(text: str) -> int:
     return max(3, min(8, score))
 
 
+def parse_target_date(text: str | None) -> str | None:
+    """Parse a date string or relative duration into ISO YYYY-MM-DD format."""
+    clean = (text or "").strip().lower()
+    if not clean or clean in ("none", "null", "clear", "cancel", "remove", "no", "off"):
+        return None
+
+    clean = re.sub(r"^(?:by|on|deadline|target|until)[:\s]*", "", clean).strip()
+    today = datetime.date.today()
+
+    m_iso = re.match(r"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$", clean)
+    if m_iso:
+        y, m, d = int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3))
+        try:
+            return datetime.date(y, m, d).isoformat()
+        except ValueError:
+            pass
+
+    m_us = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$", clean)
+    if m_us:
+        m, d, y = int(m_us.group(1)), int(m_us.group(2)), int(m_us.group(3))
+        try:
+            return datetime.date(y, m, d).isoformat()
+        except ValueError:
+            pass
+
+    m_rel = re.match(r"^(?:in\s+)?(\d+)\s*(days?|d)$", clean)
+    if m_rel:
+        return (today + datetime.timedelta(days=int(m_rel.group(1)))).isoformat()
+
+    m_rel_w = re.match(r"^(?:in\s+)?(\d+)\s*(weeks?|w)$", clean)
+    if m_rel_w:
+        return (today + datetime.timedelta(weeks=int(m_rel_w.group(1)))).isoformat()
+
+    m_rel_m = re.match(r"^(?:in\s+)?(\d+)\s*(months?|m)$", clean)
+    if m_rel_m:
+        return (today + datetime.timedelta(days=int(m_rel_m.group(1)) * 30)).isoformat()
+
+    if clean in ("tomorrow", "tmrw"):
+        return (today + datetime.timedelta(days=1)).isoformat()
+    if clean in ("next week",):
+        return (today + datetime.timedelta(days=7)).isoformat()
+    if clean in ("next month",):
+        return (today + datetime.timedelta(days=30)).isoformat()
+
+    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    for idx, day_name in enumerate(weekdays):
+        if day_name in clean:
+            days_ahead = (idx - today.weekday()) % 7
+            if days_ahead <= 0 or "next" in clean:
+                days_ahead += 7
+            return (today + datetime.timedelta(days=days_ahead)).isoformat()
+
+    months = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "september": 9, "oct": 10, "october": 10,
+        "nov": 11, "november": 11, "dec": 12, "december": 12
+    }
+    tokens = re.findall(r"[a-zA-Z]+|\d+", clean)
+    month_val = None
+    day_val = None
+    year_val = today.year
+    for tok in tokens:
+        if tok in months:
+            month_val = months[tok]
+        elif tok.isdigit():
+            v = int(tok)
+            if v > 1000:
+                year_val = v
+            elif day_val is None and 1 <= v <= 31:
+                day_val = v
+    if month_val and day_val:
+        try:
+            d_res = datetime.date(year_val, month_val, day_val)
+            if d_res < today and year_val == today.year:
+                d_res = datetime.date(year_val + 1, month_val, day_val)
+            return d_res.isoformat()
+        except ValueError:
+            pass
+
+    return None
+
+
+def verify_goal_progress_affirmation(user_prompt: str, note: str, was_responding_to_goal: bool = False) -> bool:
+    """Validate that the progress note is grounded in user affirmation.
+    - If user was directly responding to an active goal check-in within the 10m window, returns True.
+    - Otherwise, requires at least one meaningful word (length >= 3) from the note to appear in user's prompt.
+    """
+    if was_responding_to_goal:
+        return True
+
+    clean_u = re.findall(r"\w{3,}", (user_prompt or "").lower())
+    clean_n = re.findall(r"\w{3,}", (note or "").lower())
+
+    stopwords = {
+        "the", "and", "for", "with", "that", "this", "from", "have", "been",
+        "will", "today", "yesterday", "goal", "pink", "mew", "done", "task"
+    }
+    user_words = {w for w in clean_u if w not in stopwords}
+    note_words = {w for w in clean_n if w not in stopwords}
+
+    overlap = user_words & note_words
+    return len(overlap) > 0
+
+
 class MemoryManager:
     """Manages local session chat logs, long-term facts, and config/API key storage."""
 
@@ -4706,59 +4822,208 @@ class MemoryManager:
             log.warning("Could not clear reminders: %s", err)
             return 0
 
-    def get_active_goals(self) -> list[dict]:
-        """Read active personal milestones and goals from goals.json."""
+    def _atomic_write_json(self, path: Path, data: Any) -> bool:
+        """Atomically write JSON data using a temporary file in the same directory."""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_p = path.with_name(f"{path.stem}_{uuid.uuid4().hex[:6]}.tmp")
+            tmp_p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp_p, path)
+            return True
+        except Exception as err:
+            log.warning("Could not atomically write to %s: %s", path, err)
+            return False
+
+    def _normalize_goal_entry(self, raw: dict | str, legacy_mtime_iso: str | None = None) -> dict:
+        """Normalize a goal entry to the rich schema with backward compatibility."""
+        now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+        if isinstance(raw, str):
+            text = raw.strip()
+            raw = {"text": text}
+        elif not isinstance(raw, dict):
+            raw = {"text": str(raw)}
+
+        text = raw.get("text", "").strip()
+        goal_id = raw.get("id")
+        if not goal_id or not isinstance(goal_id, str):
+            goal_id = f"goal_{uuid.uuid4().hex[:8]}"
+
+        created_at = raw.get("created_at")
+        if not created_at:
+            created_at = legacy_mtime_iso  # May be None for legacy goals without timestamps
+
+        target_date = parse_target_date(raw.get("target_date")) if raw.get("target_date") else None
+
+        notes = []
+        for n in raw.get("progress_notes", []):
+            if isinstance(n, dict) and "note" in n:
+                notes.append({"timestamp": n.get("timestamp") or now_iso, "note": str(n["note"])[:120]})
+            elif isinstance(n, str) and n.strip():
+                notes.append({"timestamp": now_iso, "note": n.strip()[:120]})
+
+        stats = raw.get("stats", {})
+        if not isinstance(stats, dict):
+            stats = {}
+
+        return {
+            "id": goal_id,
+            "text": text,
+            "created_at": created_at,
+            "target_date": target_date,
+            "last_checked_at": raw.get("last_checked_at"),
+            "last_asked_at": raw.get("last_asked_at"),
+            "ignored_count": max(0, int(raw.get("ignored_count", 0))),
+            "progress_notes": notes[-10:],
+            "completed": bool(raw.get("completed", False)),
+            "stats": {
+                "mentions_count": max(0, int(stats.get("mentions_count", 0))),
+                "engagements_count": max(0, int(stats.get("engagements_count", 0))),
+            },
+        }
+
+    def _load_raw_goals(self) -> list[dict]:
+        """Read and normalize all goal entries from goals.json."""
         if not self.goals_path.exists() or self.goals_path.stat().st_size == 0:
             return []
         try:
+            mtime_iso = datetime.datetime.fromtimestamp(self.goals_path.stat().st_mtime).isoformat(timespec="seconds")
             raw = json.loads(self.goals_path.read_text(encoding="utf-8"))
             if not isinstance(raw, list):
                 return []
-            active = []
+            normalized = []
+            needs_save = False
             for item in raw:
-                if isinstance(item, dict):
-                    if not item.get("completed", False):
-                        active.append(item)
-                elif isinstance(item, str) and item.strip():
-                    active.append({"text": item.strip(), "completed": False})
-            return active
+                norm = self._normalize_goal_entry(item, legacy_mtime_iso=mtime_iso)
+                if norm != item:
+                    needs_save = True
+                normalized.append(norm)
+            if needs_save:
+                self.save_goals(normalized)
+            return normalized
         except Exception as err:
             log.warning("Could not read goals.json: %s", err)
             return []
 
+    def save_goals(self, goals: list[dict]) -> bool:
+        """Atomically save goals list to goals.json."""
+        return self._atomic_write_json(self.goals_path, goals)
+
+    def get_active_goals(self) -> list[dict]:
+        """Read active personal milestones and goals from goals.json."""
+        return [g for g in self._load_raw_goals() if not g.get("completed", False)]
+
     def get_goals_prompt(self, numbered: bool = True) -> str:
-        """Format active goals into a concise numbered list with Pink Dollar bounties for prompt injection."""
+        """Format active goals into a rich prompt block with temporal context and recent progress notes."""
         active = self.get_active_goals()
         if not active:
             return ""
+        today = datetime.date.today()
+        now = datetime.datetime.now()
         lines = []
+
         for idx, g in enumerate(active, 1):
             text = g.get("text", "").strip()
+            gid = g.get("id", f"goal_{idx}")
             val = evaluate_goal_value(text)
             prefix = f"{idx}. " if numbered else "- "
-            lines.append(f'{prefix}"{text}" (Bounty: +P$ {val:02d} upon completion)')
+            
+            lines.append(f'{prefix}[ID: {gid}] "{text}" (Bounty: +P$ {val:02d} upon completion)')
+
+            meta_parts = []
+            created_ts = g.get("created_at")
+            if created_ts:
+                try:
+                    c_dt = datetime.datetime.fromisoformat(created_ts)
+                    days_ago = (now - c_dt).days
+                    if days_ago == 0:
+                        meta_parts.append("Set: Today")
+                    elif days_ago == 1:
+                        meta_parts.append("Set: Yesterday")
+                    elif days_ago > 1:
+                        meta_parts.append(f"Set: {days_ago} days ago")
+                except Exception:
+                    pass
+
+            target_d = g.get("target_date")
+            if target_d:
+                try:
+                    d_obj = datetime.date.fromisoformat(target_d)
+                    days_left = (d_obj - today).days
+                    if days_left > 0:
+                        meta_parts.append(f"Deadline: {target_d} ({days_left}d left)")
+                    elif days_left == 0:
+                        meta_parts.append(f"Deadline: TODAY ({target_d})")
+                    else:
+                        meta_parts.append(f"Deadline: OVERDUE ({abs(days_left)}d overdue)")
+                except Exception:
+                    meta_parts.append(f"Deadline: {target_d}")
+
+            checked_ts = g.get("last_checked_at")
+            if checked_ts:
+                try:
+                    chk_dt = datetime.datetime.fromisoformat(checked_ts)
+                    chk_days = (now - chk_dt).days
+                    if chk_days == 0:
+                        meta_parts.append("Last Check-in: Today")
+                    elif chk_days == 1:
+                        meta_parts.append("Last Check-in: Yesterday")
+                    else:
+                        meta_parts.append(f"Last Check-in: {chk_days}d ago")
+                except Exception:
+                    pass
+            else:
+                meta_parts.append("Last Check-in: Not yet")
+
+            if meta_parts:
+                lines.append(f"   - {' | '.join(meta_parts)}")
+
+            # Inject at most the last 2 progress notes capped at 80 chars each
+            notes = g.get("progress_notes", [])
+            if notes:
+                lines.append("   - Recent Progress:")
+                for n_entry in notes[-2:]:
+                    ts = n_entry.get("timestamp", "")
+                    n_txt = n_entry.get("note", "").strip()
+                    try:
+                        dt_n = datetime.datetime.fromisoformat(ts)
+                        d_str = dt_n.strftime("%b %d")
+                    except Exception:
+                        d_str = "Recent"
+                    lines.append(f"     * [{d_str}] {n_txt[:80]}")
+
         return "\n".join(lines)
 
-    def add_goal(self, goal_text: str) -> bool:
+    def add_goal(self, goal_text: str, target_date: str | None = None) -> bool:
         """Add a new personal milestone/goal."""
         goal_text = goal_text.strip()
         if not goal_text:
             return False
-        active = self.get_active_goals()
-        if any(g.get("text", "").strip().lower() == goal_text.lower() for g in active):
+        goals = self._load_raw_goals()
+        if any(g.get("text", "").strip().lower() == goal_text.lower() and not g.get("completed") for g in goals):
             return False
-        active.append({"text": goal_text, "completed": False})
-        try:
-            self.goals_path.parent.mkdir(parents=True, exist_ok=True)
-            self.goals_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
-            log.info("Saved new goal: %s", goal_text)
-            return True
-        except Exception as err:
-            log.warning("Could not save goal: %s", err)
-            return False
+        
+        parsed_target = parse_target_date(target_date) if target_date else None
+        now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+        new_g = {
+            "id": f"goal_{uuid.uuid4().hex[:8]}",
+            "text": goal_text,
+            "created_at": now_iso,
+            "target_date": parsed_target,
+            "last_checked_at": None,
+            "last_asked_at": None,
+            "ignored_count": 0,
+            "progress_notes": [],
+            "completed": False,
+            "stats": {"mentions_count": 0, "engagements_count": 0}
+        }
+        goals.append(new_g)
+        ok = self.save_goals(goals)
+        if ok:
+            log.info("Saved new goal [%s]: %s (target_date=%s)", new_g["id"], goal_text, parsed_target)
+        return ok
 
     def _find_goal_index(self, active: list[dict], identifier: str | int) -> int | None:
-        """Helper to find 0-based index in active goals by 1-based index or text match."""
+        """Helper to find 0-based index in active goals by 1-based index, ID, or text match."""
         if not active or identifier is None:
             return None
         if isinstance(identifier, int):
@@ -4775,25 +5040,33 @@ class MemoryManager:
                 return idx
 
         clean_lower = clean.lower()
+        # 1. Exact match on id
+        for idx, g in enumerate(active):
+            if g.get("id", "").lower() == clean_lower:
+                return idx
+        # 2. Exact match on text
         for idx, g in enumerate(active):
             if g.get("text", "").strip().lower() == clean_lower:
                 return idx
-        for idx, g in enumerate(active):
-            if clean_lower in g.get("text", "").strip().lower():
-                return idx
+        # 3. Unambiguous substring match on text
+        matches = [idx for idx, g in enumerate(active) if clean_lower in g.get("text", "").strip().lower()]
+        if len(matches) == 1:
+            return matches[0]
         return None
 
     def delete_goal(self, identifier: str | int) -> tuple[bool, str]:
-        """Delete an active goal by 1-based index or text match. Returns (success, deleted_text)."""
-        active = self.get_active_goals()
+        """Delete an active goal by 1-based index, ID, or text match. Returns (success, deleted_text)."""
+        goals = self._load_raw_goals()
+        active = [g for g in goals if not g.get("completed")]
         idx = self._find_goal_index(active, identifier)
         if idx is None:
             return False, ""
-        deleted = active.pop(idx)
-        deleted_text = deleted.get("text", "").strip()
+        target_id = active[idx].get("id")
+        deleted_text = active[idx].get("text", "").strip()
+        goals = [g for g in goals if g.get("id") != target_id]
         try:
-            self.goals_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
-            log.info("Deleted goal: %s", deleted_text)
+            self.save_goals(goals)
+            log.info("Deleted goal [%s]: %s", target_id, deleted_text)
             return True, deleted_text
         except Exception as err:
             log.warning("Could not delete goal: %s", err)
@@ -4802,21 +5075,246 @@ class MemoryManager:
     def complete_goal(self, identifier: str | int) -> tuple[bool, str, int]:
         """Complete an active goal, archive it, and award Pink Dollars.
         Returns (success, goal_text, awarded_dollars)."""
-        active = self.get_active_goals()
+        goals = self._load_raw_goals()
+        active = [g for g in goals if not g.get("completed")]
         idx = self._find_goal_index(active, identifier)
         if idx is None:
             return False, "", 0
-        target_goal = active.pop(idx)
-        goal_text = target_goal.get("text", "").strip()
+        target_g = active[idx]
+        target_id = target_g.get("id")
+        goal_text = target_g.get("text", "").strip()
         val = evaluate_goal_value(goal_text)
+        
+        # Mark completed rather than destroying records
+        for g in goals:
+            if g.get("id") == target_id:
+                g["completed"] = True
+                g["completed_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+                break
+        
         try:
-            self.goals_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            self.save_goals(goals)
             new_bal = self.award_pink_dollars(val)
-            log.info("Completed goal '%s'! Awarded P$ %d (new balance: P$ %d)", goal_text, val, new_bal)
+            log.info("Completed goal [%s] '%s'! Awarded P$ %d (new balance: P$ %d)", target_id, goal_text, val, new_bal)
             return True, goal_text, val
         except Exception as err:
             log.warning("Could not complete goal: %s", err)
             return False, "", 0
+
+    def update_goal_progress(self, identifier: str | int, note: str) -> tuple[bool, str, dict | None]:
+        """Log a micro-milestone progress note on an active goal."""
+        goals = self._load_raw_goals()
+        active = [g for g in goals if not g.get("completed")]
+        idx = self._find_goal_index(active, identifier)
+        if idx is None:
+            return False, "", None
+        
+        target_g = active[idx]
+        now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+        clean_note = note.strip()[:120]
+        target_g.setdefault("progress_notes", []).append({"timestamp": now_iso, "note": clean_note})
+        target_g["progress_notes"] = target_g["progress_notes"][-10:]
+        target_g["last_checked_at"] = now_iso
+        target_g["ignored_count"] = 0
+        stats = target_g.setdefault("stats", {"mentions_count": 0, "engagements_count": 0})
+        stats["engagements_count"] = int(stats.get("engagements_count", 0)) + 1
+        
+        self.save_goals(goals)
+        log.info("[GoalEngine] Updated goal [%s] progress: %s", target_g.get("id"), clean_note)
+        return True, target_g["text"], target_g
+
+    def set_goal_deadline(self, identifier: str | int, target_date_str: str | None) -> tuple[bool, str, str | None]:
+        """Set or clear a target completion deadline for a goal."""
+        goals = self._load_raw_goals()
+        active = [g for g in goals if not g.get("completed")]
+        idx = self._find_goal_index(active, identifier)
+        if idx is None:
+            return False, "", None
+        
+        target_g = active[idx]
+        parsed = parse_target_date(target_date_str) if target_date_str else None
+        target_g["target_date"] = parsed
+        self.save_goals(goals)
+        log.info("[GoalEngine] Set goal [%s] deadline to %s", target_g.get("id"), parsed)
+        return True, target_g["text"], parsed
+
+    def record_goal_asked(self, goal_id: str) -> None:
+        """Record that Pink initiated an ask about goal_id.
+        If the prior ask was never engaged with, increments ignored_count mechanically.
+        """
+        goals = self._load_raw_goals()
+        now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+        changed = False
+        for g in goals:
+            if g.get("id") == goal_id:
+                prev_asked = g.get("last_asked_at")
+                prev_checked = g.get("last_checked_at")
+                if prev_asked:
+                    if not prev_checked or prev_checked < prev_asked:
+                        g["ignored_count"] = int(g.get("ignored_count", 0)) + 1
+                        log.info("[GoalEngine] User ignored prior ask for goal [%s]. Ignored count now: %d", goal_id, g["ignored_count"])
+                g["last_asked_at"] = now_iso
+                stats = g.setdefault("stats", {"mentions_count": 0, "engagements_count": 0})
+                stats["mentions_count"] = int(stats.get("mentions_count", 0)) + 1
+                changed = True
+                break
+        if changed:
+            self.save_goals(goals)
+
+    def record_goal_engagement(self, goal_id: str | None = None) -> bool:
+        """Record that the user engaged with a goal. Resets ignored_count to 0."""
+        goals = self._load_raw_goals()
+        now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+        matched = False
+        for g in goals:
+            if goal_id is None or g.get("id") == goal_id:
+                g["last_checked_at"] = now_iso
+                g["ignored_count"] = 0
+                stats = g.setdefault("stats", {"mentions_count": 0, "engagements_count": 0})
+                stats["engagements_count"] = int(stats.get("engagements_count", 0)) + 1
+                matched = True
+                if goal_id is not None:
+                    break
+        if matched:
+            self.save_goals(goals)
+            log.info("[GoalEngine] Recorded user engagement for goal [%s]. Ignored count reset.", goal_id)
+        return matched
+
+    def get_stale_goal_candidate(self) -> dict | None:
+        """Find the most urgent stale goal that needs check-in, or None if all fresh or snoozed."""
+        if self.is_goal_coaching_snoozed():
+            return None
+        active = self.get_active_goals()
+        if not active:
+            return None
+        
+        now = datetime.datetime.now()
+        today = now.date()
+        stale_candidates = []
+
+        for g in active:
+            target_d = g.get("target_date")
+            threshold_hours = 48.0
+            urgency_weight = 1.0
+
+            if target_d:
+                try:
+                    d_obj = datetime.date.fromisoformat(target_d)
+                    days_until = (d_obj - today).days
+                    if days_until < 0:
+                        threshold_hours = 12.0
+                        urgency_weight = 4.0
+                    elif days_until <= 3:
+                        threshold_hours = 12.0
+                        urgency_weight = 3.0
+                    elif days_until <= 7:
+                        threshold_hours = 24.0
+                        urgency_weight = 2.0
+                    else:
+                        threshold_hours = 48.0
+                        urgency_weight = 1.2
+                except Exception:
+                    pass
+            
+            ign = int(g.get("ignored_count", 0))
+            if ign > 0:
+                threshold_hours += min(48.0, 12.0 * ign)
+            
+            ref_ts = g.get("last_checked_at") or g.get("created_at")
+            if ref_ts:
+                try:
+                    ref_dt = datetime.datetime.fromisoformat(ref_ts)
+                    elapsed_hours = (now - ref_dt).total_seconds() / 3600.0
+                except Exception:
+                    elapsed_hours = 999.0
+            else:
+                elapsed_hours = 999.0
+
+            last_asked = g.get("last_asked_at")
+            if last_asked:
+                try:
+                    last_asked_dt = datetime.datetime.fromisoformat(last_asked)
+                    asked_elapsed = (now - last_asked_dt).total_seconds() / 3600.0
+                    min_ask_gap = 6.0 if ign == 0 else min(48.0, 12.0 * ign)
+                    if asked_elapsed < min_ask_gap:
+                        continue
+                except Exception:
+                    pass
+
+            if elapsed_hours >= threshold_hours:
+                stale_candidates.append((urgency_weight * (elapsed_hours / threshold_hours), g))
+
+        if not stale_candidates:
+            return None
+
+        stale_candidates.sort(key=lambda x: x[0], reverse=True)
+        return stale_candidates[0][1]
+
+    def get_goal_coaching_config(self) -> dict:
+        """Get goal coaching configuration (mode, snooze_until, ritual dates)."""
+        defaults = {
+            "mode": "royal",
+            "snooze_until": None,
+            "last_morning_date": None,
+            "last_evening_date": None
+        }
+        if self.config_path.exists():
+            try:
+                data = json.loads(self.config_path.read_text(encoding="utf-8"))
+                cfg = data.get("goal_coaching", {})
+                if isinstance(cfg, dict):
+                    defaults.update(cfg)
+            except Exception as e:
+                log.warning("Could not load goal_coaching from %s: %s", self.config_path, e)
+        return defaults
+
+    def set_goal_coaching_config(self, updates: dict) -> bool:
+        """Update goal coaching configuration in config.json."""
+        data = {}
+        if self.config_path.exists():
+            try:
+                data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        curr = data.get("goal_coaching", {})
+        if not isinstance(curr, dict):
+            curr = {}
+        curr.update(updates)
+        data["goal_coaching"] = curr
+        return self._atomic_write_json(self.config_path, data)
+
+    def is_goal_coaching_snoozed(self) -> bool:
+        """Check if goal coaching is currently snoozed."""
+        cfg = self.get_goal_coaching_config()
+        if cfg.get("mode") == "snooze":
+            snooze_until = cfg.get("snooze_until")
+            if snooze_until:
+                try:
+                    dt = datetime.datetime.fromisoformat(snooze_until)
+                    if datetime.datetime.now() < dt:
+                        return True
+                except Exception:
+                    pass
+            else:
+                return True
+        elif cfg.get("snooze_until"):
+            try:
+                dt = datetime.datetime.fromisoformat(cfg["snooze_until"])
+                if datetime.datetime.now() < dt:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def snooze_goals(self, hours: float = 24.0) -> datetime.datetime:
+        """Snooze goal coaching for a number of hours."""
+        until_dt = datetime.datetime.now() + datetime.timedelta(hours=hours)
+        self.set_goal_coaching_config({
+            "mode": "snooze",
+            "snooze_until": until_dt.isoformat(timespec="seconds")
+        })
+        log.info("[GoalEngine] Goal coaching snoozed for %.1f hours (until %s)", hours, until_dt)
+        return until_dt
 
     def award_pink_dollars(self, amount: int) -> int:
         """Award Pink Dollars to wallet.json and return new balance."""
@@ -6672,6 +7170,8 @@ class GeminiWorkerThread(QThread):
                     min_score = valid_candidates[0][1]
                     best_candidates = [c for c, s in valid_candidates if abs(s - min_score) < 0.001]
                     chosen_cand = random.choice(best_candidates)
+                    if self.parent() and cand_list and len(cand_list) >= 4 and chosen_cand == cand_list[3]:
+                        setattr(self.parent(), "_last_goal_vision_scold_time", time.perf_counter())
 
                     memory = getattr(self.parent(), "_memory", None) if self.parent() else None
                     if memory:
@@ -6706,7 +7206,7 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -6791,6 +7291,39 @@ class GeminiWorkerThread(QThread):
                 dg_val = m.group(1).strip()
                 if dg_val:
                     memory.delete_goal(dg_val)
+            for m in re.finditer(r"\[update_goal:\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                t_val = m.group(1).strip()
+                n_val = m.group(2).strip()
+                if t_val and n_val:
+                    parent_ref = self.parent()
+                    was_resp = (
+                        parent_ref is not None
+                        and bool(getattr(parent_ref, "_last_asked_goal_id", None))
+                        and (time.time() - getattr(parent_ref, "_last_goal_asked_time", 0.0) <= 600.0)
+                    )
+                    if verify_goal_progress_affirmation(self.user_prompt, n_val, was_responding_to_goal=was_resp):
+                        ok, g_text, _ = memory.update_goal_progress(t_val, n_val)
+                        if ok:
+                            raw_text += f"\n* (Battle log recorded: \"{n_val}\" for \"{g_text}\")"
+                    else:
+                        log.info("Ignored unverified [update_goal] hallucination: note='%s'", n_val)
+            for m in re.finditer(r"\[set_goal_deadline:\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                t_val = m.group(1).strip()
+                d_val = m.group(2).strip()
+                if t_val and d_val:
+                    memory.set_goal_deadline(t_val, d_val)
+            for m in re.finditer(r"\[snooze_goals(?::\s*([^\]]+))?\]", raw_text, re.IGNORECASE):
+                dur_str = m.group(1).strip() if m.group(1) else "24"
+                try:
+                    hrs = float(re.findall(r"[\d.]+", dur_str)[0])
+                except Exception:
+                    hrs = 24.0
+                memory.snooze_goals(hrs)
+            for m in re.finditer(r"\[set_coaching_mode:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                c_mode = m.group(1).strip().lower()
+                if c_mode in ("gentle", "soft", "royal", "overlord"):
+                    normalized_mode = "gentle" if c_mode in ("gentle", "soft") else "royal"
+                    memory.set_goal_coaching_config({"mode": normalized_mode, "snooze_until": None})
             for m in re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE):
                 dur_str = m.group(1).strip()
                 lbl = m.group(2).strip() if m.group(2) else "Focus Timer"
@@ -6805,7 +7338,7 @@ class GeminiWorkerThread(QThread):
                 c_val = m.group(1).strip()
                 if c_val:
                     memory.cancel_alarm_or_timer(c_val)
-        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
 
@@ -8607,6 +9140,14 @@ class YellowsPixelBuddies(QWidget):
         self._tray_screen_timer.timeout.connect(self._read_screen_while_in_tray)
         self._shop_window = None
 
+        # --- goal coaching & active ambition trackers -------------------------
+        self._last_asked_goal_id: str | None = None
+        self._last_goal_asked_time: float = 0.0
+        self._last_goal_vision_scold_time: float = -9999.0
+        self._goal_ritual_timer: QTimer = QTimer(self)
+        self._goal_ritual_timer.setInterval(30000)
+        self._goal_ritual_timer.timeout.connect(self._check_daily_goal_rituals)
+
         # --- alarms & focus timers ticker (disabled / COMING SOON) -------------
         self._alarm_ticker: QTimer = QTimer(self)
         self._alarm_ticker.setInterval(1000)
@@ -8877,6 +9418,9 @@ class YellowsPixelBuddies(QWidget):
 
         if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer"):
             self._screen_comment_timer.start()
+
+        if hasattr(self, "_goal_ritual_timer"):
+            self._goal_ritual_timer.start()
 
     @property
     def _ear_peek_height(self) -> int:
@@ -9392,6 +9936,12 @@ class YellowsPixelBuddies(QWidget):
         if any(w in lower_choice for w in ("drank", "water", "cup", "hydrat", "eating", "ate", "food", "snack", "meal", "fed")):
             self._last_hydration_check_time = now
             self._last_care_question_time = now
+        # Mechanical engagement: user clicked a reaction choice within 10m of goal ask
+        if getattr(self, "_last_asked_goal_id", None) and (time.time() - getattr(self, "_last_goal_asked_time", 0.0) <= 600.0):
+            if hasattr(self, "_memory") and self._memory:
+                self._memory.record_goal_engagement(self._last_asked_goal_id)
+            self._last_asked_goal_id = None
+
         if hasattr(self, "_memory") and self._memory:
             # Extract any permanent facts or goal actions embedded in the reaction
             for m in re.finditer(r"\[add_fact:\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
@@ -9406,7 +9956,12 @@ class YellowsPixelBuddies(QWidget):
                 g_val = m.group(1).strip()
                 if g_val:
                     self._memory.add_goal(g_val)
-            reaction_text = re.sub(r"\[(?:add_fact|add_goal|complete_goal|finish_goal|done_goal|delete_goal):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
+            for m in re.finditer(r"\[update_goal:\s*([^\]|]+)\|\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                t_val = m.group(1).strip()
+                n_val = m.group(2).strip()
+                if t_val and n_val:
+                    self._memory.update_goal_progress(t_val, n_val)
+            reaction_text = re.sub(r"\[(?:add_fact|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -9467,6 +10022,15 @@ class YellowsPixelBuddies(QWidget):
         )
         has_memory = self._has_memory_highlights()
 
+        # Stale goal escalation: boost memory if a goal is stale
+        if hasattr(self, "_memory") and hasattr(self._memory, "get_stale_goal_candidate"):
+            stale_g = self._memory.get_stale_goal_candidate()
+            if stale_g and not self._memory.is_goal_coaching_snoozed():
+                if can_screen:
+                    return random.choices(["screen", "memory", "personality"], weights=[0.20, 0.70, 0.10])[0]
+                else:
+                    return random.choices(["memory", "personality"], weights=[0.85, 0.15])[0]
+
         if can_screen and has_memory:
             return random.choices(["screen", "memory", "personality"], weights=[0.45, 0.40, 0.15])[0]
         elif can_screen:
@@ -9478,6 +10042,57 @@ class YellowsPixelBuddies(QWidget):
 
     def _get_best_memory_highlight(self) -> str:
         """Pick an active, specific memory, context detail, or casual care check to center the question around."""
+        # 1. Stale or deadline-urgent goals take top priority!
+        stale_goal = self._memory.get_stale_goal_candidate() if hasattr(self._memory, "get_stale_goal_candidate") else None
+        if stale_goal:
+            g_text = stale_goal.get("text", "")
+            g_id = stale_goal.get("id")
+            val = evaluate_goal_value(g_text)
+            self._memory.record_goal_asked(g_id)
+            self._last_asked_goal_id = g_id
+            self._last_goal_asked_time = time.time()
+
+            ctx_items = []
+            target_d = stale_goal.get("target_date")
+            if target_d:
+                try:
+                    d_obj = datetime.date.fromisoformat(target_d)
+                    days_left = (d_obj - datetime.date.today()).days
+                    if days_left > 0:
+                        ctx_items.append(f"Deadline: in {days_left} days ({target_d})")
+                    elif days_left == 0:
+                        ctx_items.append("Deadline is TODAY!")
+                    else:
+                        ctx_items.append(f"OVERDUE by {abs(days_left)} days!")
+                except Exception:
+                    pass
+            notes = stale_goal.get("progress_notes", [])
+            if notes:
+                latest_note = notes[-1].get("note", "")
+                ctx_items.append(f"Latest progress recorded: '{latest_note}'")
+            ctx_str = f" ({'; '.join(ctx_items)})" if ctx_items else ""
+
+            cfg = self._memory.get_goal_coaching_config() if hasattr(self._memory, "get_goal_coaching_config") else {}
+            mode = cfg.get("mode", "royal")
+            if mode == "gentle":
+                coaching_instruction = (
+                    "As their caring doll cheerleader, offer cozy, warm encouragement to see how they're feeling about this goal. "
+                    "Remind them that small steps matter and you believe in them without adding undue stress."
+                )
+            else:
+                coaching_instruction = (
+                    "As their royal overlord and proud master coach, Pink considers the minion's victory a matter of royal territory! "
+                    "Demand a status report on their grand ambition, tease them to keep their fiery determination burning, "
+                    "and remind them they represent you!"
+                )
+
+            return (
+                f"The user has an active target milestone on their board: '{g_text}'{ctx_str} (Bounty: +P$ {val:02d}). "
+                f"Pink should do a proactive check-in on this grand ambition! "
+                f"{coaching_instruction} "
+                f"Provide 3 distinct Undertale/Deltarune-style reaction choices!"
+            )
+
         if not hasattr(self, "_asked_song_titles"):
             self._asked_song_titles = set()
 
@@ -9493,7 +10108,7 @@ class YellowsPixelBuddies(QWidget):
                     f"Ask what they think of its vibe, rhythm, or mood, or playfully comment on it without repeating old questions!"
                 )
 
-        # 1. User's target milestones / goals take top priority or rotate with reminders
+        # 2. User's target milestones / goals regular rotation
         goals = self._memory.get_active_goals() if hasattr(self._memory, "get_active_goals") else []
         reminders = self._memory.get_active_reminders() if hasattr(self._memory, "get_active_reminders") else []
 
@@ -9506,6 +10121,11 @@ class YellowsPixelBuddies(QWidget):
             ]
             chosen_g = random.choice(fresh_goals if fresh_goals else goals)
             g_text = chosen_g.get("text", "")
+            g_id = chosen_g.get("id")
+            if g_id:
+                self._memory.record_goal_asked(g_id)
+                self._last_asked_goal_id = g_id
+                self._last_goal_asked_time = time.time()
             if g_text:
                 self._recent_goal_highlights.append(g_text)
             if len(self._recent_goal_highlights) > 4:
@@ -9594,7 +10214,48 @@ class YellowsPixelBuddies(QWidget):
 
         return "Pink is recalling how loyal and hardworking this minion has been, and asks an insightful companion question about their current groove."
 
-    def _build_question_prompt(self, source: str) -> tuple[str, str]:
+    def _check_daily_goal_rituals(self) -> None:
+        """Trigger once-per-calendar-day Morning Ambition Kickoff and Evening Reflection rituals."""
+        if not hasattr(self, "_memory") or not self._memory:
+            return
+        if self._memory.is_goal_coaching_snoozed():
+            return
+        if not self._dialogue_enabled or getattr(self, "_hidden_in_tray", False):
+            return
+        if self._is_dialogue_convo_active() or getattr(self, "_is_handling_user_chat", False):
+            return
+        if getattr(self, "_phase", None) in (
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO
+        ):
+            return
+
+        active_goals = self._memory.get_active_goals()
+        if not active_goals:
+            return
+
+        cfg = self._memory.get_goal_coaching_config()
+        now_dt = datetime.datetime.now()
+        today_str = now_dt.date().isoformat()
+        hour = now_dt.hour
+
+        # Morning Ambition Kickoff (08:00 - 11:30)
+        if 8 <= hour <= 11 and cfg.get("last_morning_date") != today_str:
+            target_goal = self._memory.get_stale_goal_candidate() or active_goals[0]
+            self._memory.set_goal_coaching_config({"last_morning_date": today_str})
+            log.info("[GoalEngine] Triggering Morning Ambition Kickoff for '%s'", target_goal.get("text"))
+            self._trigger_ai_question(forced_source="morning_goal", forced_goal=target_goal)
+            return
+
+        # Evening Reflection (20:30 - 23:00)
+        if 20 <= hour <= 22 and cfg.get("last_evening_date") != today_str:
+            target_goal = self._memory.get_stale_goal_candidate() or active_goals[0]
+            self._memory.set_goal_coaching_config({"last_evening_date": today_str})
+            log.info("[GoalEngine] Triggering Evening Goal Reflection for '%s'", target_goal.get("text"))
+            self._trigger_ai_question(forced_source="evening_goal", forced_goal=target_goal)
+            return
+
+    def _build_question_prompt(self, source: str, forced_goal: dict | None = None) -> tuple[str, str]:
         """Construct the system instruction and user prompt for generating an interactive question."""
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
@@ -9722,6 +10383,32 @@ RULES:
                 "IMPORTANT: If the user ALREADY explained what they are doing with this application (e.g. they already said they're working on competition slides in Canva), "
                 "DO NOT ask 'what are you doing' or 'are you making a presentation'. Instead, ask about a specific detail you notice on screen (slide layout, color choices, specific numbers, a typo, a cool diagram), cheer them on, or playfully rate their progress!"
             )
+        elif source == "morning_goal":
+            g_text = forced_goal.get("text", "your grand ambitions") if forced_goal else "your grand ambitions"
+            g_id = forced_goal.get("id") if forced_goal else None
+            if g_id:
+                self._memory.record_goal_asked(g_id)
+                self._last_asked_goal_id = g_id
+                self._last_goal_asked_time = time.time()
+            user_prompt = (
+                f"[Interactive Question: Morning Ambition Kickoff]\n"
+                f"It is morning ({now_str}). Pink starts the day checking on the user's primary goal: \"{g_text}\".\n"
+                f"Pink acts as their proud royal coach asking what territory or task they plan to conquer today!\n"
+                f"Provide 3 distinct Undertale/Deltarune style action choices for their battle plan today."
+            )
+        elif source == "evening_goal":
+            g_text = forced_goal.get("text", "your grand ambitions") if forced_goal else "your grand ambitions"
+            g_id = forced_goal.get("id") if forced_goal else None
+            if g_id:
+                self._memory.record_goal_asked(g_id)
+                self._last_asked_goal_id = g_id
+                self._last_goal_asked_time = time.time()
+            user_prompt = (
+                f"[Interactive Question: Evening Goal Reflection]\n"
+                f"It is evening ({now_str}). Pink checks in to reflect on the day's progress toward \"{g_text}\".\n"
+                f"Ask whether they made progress today or need to recharge for tomorrow. Blend royal expectations with warm care.\n"
+                f"Provide 3 realistic reflection choices."
+            )
         elif source == "memory":
             highlight = self._get_best_memory_highlight()
             user_prompt = (
@@ -9745,7 +10432,7 @@ RULES:
 
         return system_inst, user_prompt
 
-    def _trigger_ai_question(self, forced_source: str | None = None) -> bool:
+    def _trigger_ai_question(self, forced_source: str | None = None, forced_goal: dict | None = None) -> bool:
         """Trigger an AI-generated interactive question from screen, memory, or doll personality."""
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return False
@@ -9806,7 +10493,7 @@ RULES:
                 self._play("idle", loop=True)
             self._say("* ...?", force=True, skippable=False, auto_dismiss=False, record_memory=False)
 
-        system_inst, user_prompt = self._build_question_prompt(source)
+        system_inst, user_prompt = self._build_question_prompt(source, forced_goal=forced_goal)
 
         self._question_thread = GeminiQuestionWorkerThread(
             api_key=api_key,
@@ -10229,6 +10916,12 @@ RULES:
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
 
+        # Mechanical engagement: user submitted chat message within 10m of goal ask
+        if getattr(self, "_last_asked_goal_id", None) and (time.time() - getattr(self, "_last_goal_asked_time", 0.0) <= 600.0):
+            if hasattr(self, "_memory") and self._memory:
+                self._memory.record_goal_engagement(self._last_asked_goal_id)
+            self._last_asked_goal_id = None
+
         if not attached_image_b64:
             attached_image_b64 = None
 
@@ -10481,13 +11174,96 @@ RULES:
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
             self._say(reply, force=True, record_memory=False)
             return
+        elif lower_input in ("/goals debug", "/goal debug", "/goals_debug"):
+            active = self._memory.get_active_goals()
+            cfg = self._memory.get_goal_coaching_config()
+            mode = cfg.get("mode", "royal")
+            snoozed = self._memory.is_goal_coaching_snoozed()
+            snooze_info = f"Snoozed until {cfg.get('snooze_until')}" if snoozed else "Active"
+            diag_lines = [
+                f"* Goal Diagnostics (Mode: {mode.capitalize()} | Coaching: {snooze_info}):",
+            ]
+            if not active:
+                diag_lines.append("* No active goals on the board.")
+            else:
+                stale_cand = self._memory.get_stale_goal_candidate()
+                for idx, g in enumerate(active, 1):
+                    gid = g.get("id")
+                    is_stale = (stale_cand and stale_cand.get("id") == gid)
+                    stats = g.get("stats", {})
+                    notes_cnt = len(g.get("progress_notes", []))
+                    diag_lines.append(
+                        f"{idx}. [{gid}] \"{g.get('text')}\"\n"
+                        f"   DL: {g.get('target_date') or 'None'} | Stale: {'YES' if is_stale else 'No'} | "
+                        f"Ignored: {g.get('ignored_count', 0)} | Mentions: {stats.get('mentions_count', 0)} | "
+                        f"Engaged: {stats.get('engagements_count', 0)} | Notes: {notes_cnt}"
+                    )
+            self._say("\n".join(diag_lines), force=True, record_memory=False)
+            return
+        elif lower_input.startswith(("/goal_deadline ", "/deadline ", "/set_deadline ")):
+            rest = clean_input.split(" ", 1)[1].strip()
+            parts = rest.split(" ", 1)
+            target = parts[0].strip()
+            d_val = parts[1].strip() if len(parts) > 1 else ""
+            if target:
+                ok, g_text, parsed_d = self._memory.set_goal_deadline(target, d_val)
+                if ok:
+                    reply = f"* Updated deadline for \"{g_text}\": {parsed_d or 'Cleared'}! [anim: peace_sign]"
+                else:
+                    reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check IDs or numbers."
+                self._say(reply, force=True, record_memory=True)
+                return
+        elif lower_input.startswith(("/goal_progress ", "/update_goal ", "/log_progress ")):
+            rest = clean_input.split(" ", 1)[1].strip()
+            parts = rest.split(" ", 1)
+            target = parts[0].strip()
+            n_val = parts[1].strip() if len(parts) > 1 else ""
+            if target and n_val:
+                ok, g_text, g_obj = self._memory.update_goal_progress(target, n_val)
+                if ok:
+                    reply = f"* Recorded progress on \"{g_text}\": \"{n_val}\"! Keep pushing forward, minion! [anim: laughing]"
+                else:
+                    reply = f"* Couldn't find goal '{target}', dummy!"
+                self._say(reply, force=True, record_memory=True)
+                return
+        elif lower_input.startswith(("/coach ", "/goal_coach ")):
+            rest = lower_input.split(" ", 1)[1].strip()
+            parts = rest.split(" ", 1)
+            subcmd = parts[0].strip()
+            if subcmd in ("royal", "overlord", "tough"):
+                self._memory.set_goal_coaching_config({"mode": "royal", "snooze_until": None})
+                reply = "* Royal Coach mode active! I expect nothing less than total victory from my minion! [anim: laughing]"
+            elif subcmd in ("gentle", "soft", "kind", "cheerleader"):
+                self._memory.set_goal_coaching_config({"mode": "gentle", "snooze_until": None})
+                reply = "* Gentle companion mode active, mew! I'll cheer you on warmly without the fiery drills! [anim: peace_sign]"
+            elif subcmd in ("snooze", "pause", "rest", "break"):
+                hours = 24.0
+                if len(parts) > 1:
+                    try:
+                        hours = float(re.findall(r"[\d.]+", parts[1])[0])
+                    except Exception:
+                        hours = 24.0
+                until = self._memory.snooze_goals(hours)
+                reply = f"* Goal coaching snoozed for {int(hours) if hours.is_integer() else hours}h (until {until.strftime('%b %d %I:%M %p')})! Rest your plush cotton, minion! [anim: wistful]"
+            else:
+                cfg = self._memory.get_goal_coaching_config()
+                reply = f"* Goal Coaching: mode={cfg.get('mode', 'royal')}. Options: /coach royal, /coach gentle, /coach snooze [hours]."
+            self._say(reply, force=True, record_memory=False)
+            return
         elif lower_input.startswith(("/goal ", "/add_goal ")):
             goal_content = clean_input.split(" ", 1)[1].strip()
+            target_date = None
+            if "|" in goal_content:
+                parts = goal_content.split("|", 1)
+                goal_content = parts[0].strip()
+                target_date = parts[1].strip()
             if goal_content:
-                ok = self._memory.add_goal(goal_content)
+                ok = self._memory.add_goal(goal_content, target_date=target_date)
                 val = evaluate_goal_value(goal_content)
+                parsed_dl = parse_target_date(target_date) if target_date else None
+                dl_msg = f" (Deadline: {parsed_dl})" if parsed_dl else ""
                 reply = (
-                    f"* Target milestone registered, minion!\n* \"{goal_content}\"\n* Valuation: +P$ {val:02d} upon completion! Don't you dare slack off, mew! [anim: laughing]"
+                    f"* Target milestone registered, minion!\n* \"{goal_content}\"{dl_msg}\n* Valuation: +P$ {val:02d} upon completion! Don't you dare slack off, mew! [anim: laughing]"
                     if ok else "* That goal is already on our board, dummy!"
                 )
                 self._say(reply, force=True, record_memory=True)
@@ -11176,6 +11952,34 @@ RULES:
                 "- STRICT VISUAL HONESTY: Only comment on things clearly visible in the game screen."
             )
         else:
+            now_perf = time.perf_counter()
+            active_goals = self._memory.get_active_goals() if hasattr(self._memory, "get_active_goals") else []
+            can_goal_vision = (
+                bool(active_goals)
+                and (hasattr(self._memory, "is_goal_coaching_snoozed") and not self._memory.is_goal_coaching_snoozed())
+                and (now_perf - getattr(self, "_last_goal_vision_scold_time", -9999.0) >= 3600.0)
+            )
+            cfg = self._memory.get_goal_coaching_config() if hasattr(self._memory, "get_goal_coaching_config") else {}
+            mode = cfg.get("mode", "royal")
+
+            if can_goal_vision:
+                g_summary = "; ".join(f'"{g.get("text", "")}"' for g in active_goals[:3])
+                if mode == "gentle":
+                    cand_4_line = (
+                        f"- Candidate 4 (Gentle Milestone Alignment): Look at the desktop screen in relation to active goals ({g_summary}). "
+                        "If working on a goal: Warmly cheer their progress! If resting or on other apps: Offer a cozy, gentle companion check-in without pressure. (1 line)"
+                    )
+                else:
+                    cand_4_line = (
+                        f"- Candidate 4 (Royal Milestone Alignment & Vision Coaching): Look at the desktop screen in relation to the user's active goals ({g_summary}). "
+                        "Does what is clearly visible on screen represent real focus/grind on a goal, or obvious recreation/procrastination? "
+                        "If grinding: Smug tsundere praise or royal cheer for their hard work! (1 line)\n"
+                        "- If slacking/recreation: Playful, sassy royal scolding or tough love reminding them of their grand ambition! (1 line)\n"
+                        "- If unrelated or unclear: Fall back to playful Ghost & Doll bickering or desktop observation. (1-2 lines)"
+                    )
+            else:
+                cand_4_line = "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)"
+
             candidate_directive = (
                 "[STRUCTURAL DIRECTIVE: MULTI-CANDIDATE GENERATION (DECIDED BY ENGINE)]\n"
                 "Generate exactly 4 distinct candidate options for your spontaneous reaction, separated by '---' on a line by itself.\n"
@@ -11183,7 +11987,7 @@ RULES:
                 "- Candidate 1 (Curious Detail): Focus on a specific visible word, icon, code element, avatar, or window. (Ghost or Doll solo, 1 line)\n"
                 "- Candidate 2 (Sassy Tease / Snark): Bratty tsundere tease or roast about what the user is doing. (Ghost solo, 1 line)\n"
                 "- Candidate 3 (Aesthetic / Vibe): Comment on colors, UI layout, dark/light contrast, or desktop clutter. (Ghost or Doll, 1 line)\n"
-                "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)\n\n"
+                f"{cand_4_line}\n\n"
                 "RULES FOR CANDIDATES:\n"
                 "- Concise: 1 to 2 short lines starting with '* ' (under 30 words per candidate).\n"
                 "- Distinct Openers: Each candidate MUST start with different words. Never start multiple candidates with the same phrase!\n"

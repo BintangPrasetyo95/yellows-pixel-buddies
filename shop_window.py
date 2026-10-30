@@ -358,7 +358,8 @@ class DeltaruneShopWindow(QWidget):
         self._pet = pet_ref
         self._memory = memory
         self._font_family = font_family
-        self._wallet = PinkWallet(WALLET_PATH)
+        wallet_path = self._memory.wallet_path if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "wallet_path") else WALLET_PATH
+        self._wallet = PinkWallet(wallet_path)
 
         # Scale factor & Geometry
         self._scale = 1.0
@@ -1109,12 +1110,14 @@ class DeltaruneShopWindow(QWidget):
         return max(3, min(8, score))
 
     def _get_goals(self) -> list[str]:
+        if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "get_active_goals"):
+            return [g.get("text", "") for g in self._memory.get_active_goals()]
         p = self._get_goals_file_path()
         if p.exists():
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
                 if isinstance(data, list):
-                    return [g.get("text", "") if isinstance(g, dict) else str(g) for g in data if g]
+                    return [g.get("text", "") if isinstance(g, dict) else str(g) for g in data if g and not (isinstance(g, dict) and g.get("completed"))]
             except Exception as e:
                 log.warning("Could not read goals from %s: %s", p, e)
         return []
@@ -1123,6 +1126,8 @@ class DeltaruneShopWindow(QWidget):
         text = text.strip()
         if not text:
             return False
+        if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "add_goal"):
+            return self._memory.add_goal(text)
         goals = self._get_goals()
         if text not in goals:
             goals.append(text)
@@ -1136,6 +1141,9 @@ class DeltaruneShopWindow(QWidget):
         return False
 
     def _delete_goal(self, text: str) -> bool:
+        if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "delete_goal"):
+            ok, _ = self._memory.delete_goal(text)
+            return ok
         goals = self._get_goals()
         if text in goals:
             goals.remove(text)
@@ -1149,6 +1157,17 @@ class DeltaruneShopWindow(QWidget):
 
     def _complete_goal(self, text: str) -> None:
         val = self.evaluate_goal_value(text)
+        if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "complete_goal"):
+            ok, goal_text, awarded = self._memory.complete_goal(text)
+            if ok:
+                self._wallet._load()
+                self.set_dialogue(
+                    f"* TARGET MILESTONE CONQUERED!!\n* You finished: \"{goal_text}\"\n* Pink evaluated your achievement at +P$ {awarded:06d}!"
+                )
+                return
+            else:
+                self.set_dialogue("* Couldn't find that goal, silly!")
+                return
         if self._delete_goal(text):
             self._wallet.add(val)
             self.set_dialogue(
