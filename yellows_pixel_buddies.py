@@ -96,6 +96,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import winreg
 import uuid
@@ -5307,13 +5308,57 @@ class MemoryManager:
         return False
 
     def snooze_goals(self, hours: float = 24.0) -> datetime.datetime:
-        """Snooze goal coaching for a number of hours."""
+        """Snooze all goal-related check-ins and coaching for N hours."""
         until_dt = datetime.datetime.now() + datetime.timedelta(hours=hours)
         self.set_goal_coaching_config({
-            "mode": "snooze",
             "snooze_until": until_dt.isoformat(timespec="seconds")
         })
         log.info("[GoalEngine] Goal coaching snoozed for %.1f hours (until %s)", hours, until_dt)
+        return until_dt
+
+    def get_hardware_coaching_config(self) -> dict:
+        """Read hardware monitoring / coaching configuration from config.json."""
+        cfg = {}
+        if self.config_path.exists():
+            try:
+                cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return cfg.get("hardware_coaching", {
+            "snooze_until": None,
+        })
+
+    def set_hardware_coaching_config(self, updates: dict) -> None:
+        """Update hardware monitoring configuration in config.json."""
+        cfg = {}
+        if self.config_path.exists():
+            try:
+                cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        hw_cfg = cfg.setdefault("hardware_coaching", {})
+        hw_cfg.update(updates)
+        self._atomic_write_json(self.config_path, cfg)
+
+    def is_hardware_coaching_snoozed(self) -> bool:
+        """Check whether hardware chatter and alerts are currently snoozed."""
+        cfg = self.get_hardware_coaching_config()
+        snooze_until = cfg.get("snooze_until")
+        if not snooze_until:
+            return False
+        try:
+            until_dt = datetime.datetime.fromisoformat(snooze_until)
+            return datetime.datetime.now() < until_dt
+        except Exception:
+            return False
+
+    def snooze_hardware(self, hours: float = 24.0) -> datetime.datetime:
+        """Snooze hardware chatter and alerts for N hours."""
+        until_dt = datetime.datetime.now() + datetime.timedelta(hours=hours)
+        self.set_hardware_coaching_config({
+            "snooze_until": until_dt.isoformat(timespec="seconds")
+        })
+        log.info("[HardwareMonitor] Hardware chatter snoozed for %.1f hours (until %s)", hours, until_dt)
         return until_dt
 
     def award_pink_dollars(self, amount: int) -> int:
@@ -9028,6 +9073,285 @@ def restart_application() -> None:
     os._exit(0)
 
 
+class HardwareMonitor:
+    """Zero-overhead, lazy-cached hardware telemetry and thermal monitor.
+    - Reads CPU, RAM, storage, battery, GPU, and ACPI thermal zones.
+    - 25-second lazy cache to eliminate idle overhead.
+    - Persistent NVML handle (skips polling on battery if dGPU asleep).
+    - Background async ACPI thermal reader without blocking UI or showing consoles.
+    - 30-second sustained hysteresis state machine to prevent flapping on brief compile spikes.
+    """
+
+    def __init__(self, memory: Any = None) -> None:
+        self._memory = memory
+        self._cache_ttl = 25.0
+        self._last_poll_time = 0.0
+        self._cached_data: dict[str, Any] = {}
+
+        # Prime CPU meter so the first real read is not 0.0
+        try:
+            import psutil
+            psutil.cpu_percent(interval=None)
+        except Exception:
+            pass
+
+        # Persistent NVML handle
+        self._nvml_initialized = False
+        self._nvml_handle = None
+        self._nvml_lib = None
+        self._init_nvml()
+
+        # Background async ACPI thermal reader
+        self._last_acpi_temp: float | None = None
+        self._last_acpi_poll_time = 0.0
+        self._acpi_reading_in_progress = False
+
+        # Hysteresis state machine
+        self._current_thermal_state = "normal"  # "normal" | "warm" | "furnace"
+        self._abnormal_since: float | None = None
+
+    def _init_nvml(self) -> None:
+        try:
+            import ctypes
+            lib = ctypes.CDLL("nvml.dll")
+            if lib.nvmlInit_v2() == 0:
+                handle = ctypes.c_void_p()
+                if lib.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)) == 0:
+                    self._nvml_lib = lib
+                    self._nvml_handle = handle
+                    self._nvml_initialized = True
+        except Exception:
+            self._nvml_initialized = False
+
+    def _get_gpu_temp(self, on_battery: bool) -> int | None:
+        """Query GPU temperature via persistent NVML handle.
+        Skips read on battery when idle to avoid waking dGPU from low-power state.
+        """
+        if not self._nvml_initialized or not self._nvml_handle or not self._nvml_lib:
+            return None
+        if on_battery:
+            return None  # Let RTX 4050 stay in D3 sleep
+        try:
+            import ctypes
+            temp = ctypes.c_uint()
+            ret = self._nvml_lib.nvmlDeviceGetTemperature(self._nvml_handle, 0, ctypes.byref(temp))
+            return temp.value if ret == 0 else None
+        except Exception:
+            return None
+
+    def _trigger_async_acpi_read(self) -> None:
+        """Poll ACPI Thermal Zone in a detached background thread without console window.
+        Throttled to at most once per 45s to avoid spawning processes unnecessarily.
+        """
+        now = time.time()
+        if (now - self._last_acpi_poll_time < 45.0) or self._acpi_reading_in_progress:
+            return
+        self._acpi_reading_in_progress = True
+        self._last_acpi_poll_time = now
+
+        def _worker():
+            try:
+                cmd = [
+                    "powershell", "-NoProfile", "-Command",
+                    "Get-CimInstance -ClassName Win32_PerfFormattedData_Counters_ThermalZoneInformation -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Temperature"
+                ]
+                raw = subprocess.check_output(
+                    cmd,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                    text=True,
+                    timeout=3.0
+                ).strip()
+                val = float(raw) - 273.15
+                if 20.0 <= val <= 115.0:  # Sanity check
+                    self._last_acpi_temp = round(val, 1)
+            except Exception:
+                pass
+            finally:
+                self._acpi_reading_in_progress = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def get_vitals(self, force: bool = False) -> dict[str, Any]:
+        """Lazy cached readout of all hardware sensors."""
+        now = time.time()
+        if not force and self._cached_data and (now - self._last_poll_time < self._cache_ttl):
+            return self._cached_data
+
+        import psutil
+
+        # 1. CPU
+        try:
+            cpu_pct = psutil.cpu_percent(interval=None)
+        except Exception:
+            cpu_pct = 0.0
+
+        # 2. RAM
+        try:
+            vmem = psutil.virtual_memory()
+            ram_used_gb = vmem.used / (1024**3)
+            ram_total_gb = vmem.total / (1024**3)
+            ram_pct = vmem.percent
+        except Exception:
+            ram_used_gb, ram_total_gb, ram_pct = 0.0, 0.0, 0.0
+
+        # 3. Disks (all local fixed drives)
+        disks = []
+        try:
+            for part in psutil.disk_partitions(all=False):
+                if "cdrom" in part.opts or not part.fstype:
+                    continue
+                try:
+                    u = psutil.disk_usage(part.mountpoint)
+                    free_gb = u.free / (1024**3)
+                    total_gb = u.total / (1024**3)
+                    pct_free = (u.free / u.total) * 100.0 if u.total > 0 else 0.0
+                    disks.append({
+                        "drive": part.mountpoint.rstrip("\\"),
+                        "free_gb": round(free_gb, 1),
+                        "total_gb": round(total_gb, 1),
+                        "pct_free": round(pct_free, 1),
+                    })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 4. Battery
+        bat_info = None
+        on_battery = False
+        try:
+            bat = psutil.sensors_battery()
+            if bat is not None:
+                on_battery = not bat.power_plugged
+                bat_info = {
+                    "percent": bat.percent,
+                    "plugged": bat.power_plugged,
+                }
+        except Exception:
+            pass
+
+        # 5. Temperatures
+        gpu_temp = self._get_gpu_temp(on_battery=on_battery)
+        self._trigger_async_acpi_read()
+
+        data = {
+            "cpu_percent": round(cpu_pct, 1),
+            "ram_used_gb": round(ram_used_gb, 1),
+            "ram_total_gb": round(ram_total_gb, 1),
+            "ram_percent": round(ram_pct, 1),
+            "disks": disks,
+            "battery": bat_info,
+            "gpu_temp": gpu_temp,
+            "acpi_temp": self._last_acpi_temp,
+            "timestamp": now,
+        }
+        self._cached_data = data
+        self._last_poll_time = now
+        self._update_hysteresis(data, now)
+        return data
+
+    def _update_hysteresis(self, data: dict[str, Any], now: float) -> None:
+        """Hysteresis state machine requiring ~30s sustained stress before escalating."""
+        cpu = data["cpu_percent"]
+        ram = data["ram_percent"]
+        gpu = data.get("gpu_temp") or 0
+        acpi = data.get("acpi_temp") or 0
+        max_t = max(gpu, acpi)
+
+        # Enter Furnace condition: Temp >= 85C OR CPU >= 90%
+        # Enter Warm condition: Temp >= 72C OR RAM >= 92% OR CPU >= 75%
+        is_furnace = (max_t >= 85.0 or cpu >= 90.0)
+        is_warm = (max_t >= 72.0 or ram >= 92.0 or cpu >= 75.0)
+
+        if is_furnace:
+            target_state = "furnace"
+        elif is_warm:
+            target_state = "warm"
+        else:
+            # Leave furnace only when below 78C and CPU < 75% (prevent flapping)
+            if self._current_thermal_state == "furnace" and (max_t > 78.0 or cpu > 75.0):
+                target_state = "furnace"
+            elif self._current_thermal_state == "warm" and (max_t > 68.0 or ram > 88.0 or cpu > 70.0):
+                target_state = "warm"
+            else:
+                target_state = "normal"
+
+        if target_state != self._current_thermal_state:
+            if self._abnormal_since is None:
+                self._abnormal_since = now
+            elif (now - self._abnormal_since) >= 30.0:  # 30s sustained
+                self._current_thermal_state = target_state
+                self._abnormal_since = None
+        else:
+            self._abnormal_since = None
+
+    @property
+    def thermal_state(self) -> str:
+        return self._current_thermal_state
+
+    def format_vitals_report(self) -> str:
+        """Generate the deterministic Undertale/Deltarune-style retro readout for /vitals."""
+        v = self.get_vitals(force=True)
+        bat = v.get("battery")
+        if bat is not None:
+            bat_str = f"{bat['percent']}% [{'AC Plugged' if bat['plugged'] else 'Battery'}]"
+        else:
+            bat_str = "Desktop (AC)"
+
+        disk_strs = []
+        for d in v.get("disks", []):
+            disk_strs.append(f"{d['drive']}: {d['free_gb']}GB free ({d['pct_free']}%)")
+        disks_line = " | ".join(disk_strs) if disk_strs else "Unknown"
+
+        gpu_t = f"{v['gpu_temp']} C" if v['gpu_temp'] is not None else "Asleep (dGPU)"
+        acpi_t = f"{v['acpi_temp']} C" if v['acpi_temp'] is not None else "N/A"
+
+        state_label = self.thermal_state.upper()
+        if state_label == "FURNACE":
+            state_label += " (OVERHEATING / HEAVY STRESS!)"
+        elif state_label == "WARM":
+            state_label += " (ACTIVE WORKLOAD)"
+        else:
+            state_label += " (COOL & COZY)"
+
+        return (
+            f"* LAPTOP VITALS & THERMAL TELEMETRY, MEW!\n"
+            f"* CPU: {v['cpu_percent']:.1f}% | RAM: {v['ram_percent']:.1f}% ({v['ram_used_gb']}/{v['ram_total_gb']} GB)\n"
+            f"* Dedicated GPU: {gpu_t} | ACPI Zone: {acpi_t}\n"
+            f"* Storage: {disks_line}\n"
+            f"* Power: {bat_str} | Status: {state_label}"
+        )
+
+    def get_prompt_block(self, force: bool = False) -> str:
+        """Construct the prompt block for Gemini. Returns empty string if normal and not force."""
+        if not force and self.thermal_state == "normal":
+            return ""
+
+        v = self.get_vitals()
+        lines = [
+            "[HARDWARE CONDITION & HARDWARE VITALS (NO PROCESS NAMES)]",
+            f"- CPU Usage: {v['cpu_percent']:.0f}%",
+            f"- RAM Memory: {v['ram_percent']:.0f}% used ({v['ram_used_gb']} / {v['ram_total_gb']} GB)",
+        ]
+        if v.get("gpu_temp") is not None:
+            lines.append(f"- Dedicated GPU Temperature: {v['gpu_temp']} C")
+        if v.get("acpi_temp") is not None:
+            lines.append(f"- ACPI Thermal Zone: {v['acpi_temp']} C")
+
+        crit_disks = [d for d in v.get("disks", []) if d.get("pct_free", 100.0) < 8.0]
+        if crit_disks:
+            warn = ", ".join(f"{d['drive']} has only {d['free_gb']}GB left ({d['pct_free']}%)" for d in crit_disks)
+            lines.append(f"- Low Storage Warning: {warn}")
+
+        lines.append(f"- Overall Thermal Condition: {self.thermal_state.upper()}")
+        lines.append(
+            "- PERSONA INSTRUCTION: Comment playfully on hardware stress ONLY if abnormal. "
+            "Never hallucinate process names. Use varied Undertale-style jokes: compare heat to a hot plate, "
+            "choked RAM to thick molasses, or high fans to a screeching boss theme. Keep it punchy (1 line)."
+        )
+        return "\n".join(lines)
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
@@ -9147,6 +9471,12 @@ class YellowsPixelBuddies(QWidget):
         self._goal_ritual_timer: QTimer = QTimer(self)
         self._goal_ritual_timer.setInterval(30000)
         self._goal_ritual_timer.timeout.connect(self._check_daily_goal_rituals)
+        self._goal_ritual_timer.timeout.connect(self._check_hardware_alerts)
+
+        # --- hardware vitals and thermal monitor ------------------------------
+        self._hardware_monitor = HardwareMonitor(memory=self._memory)
+        self._last_hardware_alert_time: float = -9999.0
+        self._last_hardware_alert_state: str = "normal"
 
         # --- alarms & focus timers ticker (disabled / COMING SOON) -------------
         self._alarm_ticker: QTimer = QTimer(self)
@@ -10042,6 +10372,18 @@ class YellowsPixelBuddies(QWidget):
 
     def _get_best_memory_highlight(self) -> str:
         """Pick an active, specific memory, context detail, or casual care check to center the question around."""
+        # 0. Hardware furnace / emergency thermal stress takes top check-in priority!
+        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
+            if not (hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()):
+                if self._hardware_monitor.thermal_state == "furnace":
+                    v = self._hardware_monitor.get_vitals()
+                    t_val = v.get("gpu_temp") or v.get("acpi_temp") or "hot"
+                    return (
+                        f"The user's laptop hardware is currently under heavy thermal stress ({t_val} C, CPU {v.get('cpu_percent')}%)! "
+                        f"Pink should do an urgent, dramatic check-in teasing the minion about their laptop fans screaming like an angry boss theme or frying an egg on the chassis! "
+                        f"Provide 3 distinct Undertale/Deltarune-style reaction choices!"
+                    )
+
         # 1. Stale or deadline-urgent goals take top priority!
         stale_goal = self._memory.get_stale_goal_candidate() if hasattr(self._memory, "get_stale_goal_candidate") else None
         if stale_goal:
@@ -10255,6 +10597,73 @@ class YellowsPixelBuddies(QWidget):
             self._trigger_ai_question(forced_source="evening_goal", forced_goal=target_goal)
             return
 
+    def _check_hardware_alerts(self) -> None:
+        """Check for sustained abnormal thermal/hardware states and trigger in-character alerts."""
+        if not hasattr(self, "_hardware_monitor") or not self._hardware_monitor:
+            return
+        if hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed():
+            return
+        if not self._dialogue_enabled or getattr(self, "_hidden_in_tray", False):
+            return
+        if self._is_dialogue_convo_active() or getattr(self, "_is_handling_user_chat", False):
+            return
+        if getattr(self, "_phase", None) in (
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO
+        ):
+            return
+
+        now = time.time()
+        v = self._hardware_monitor.get_vitals()
+        current_state = self._hardware_monitor.thermal_state
+        last_alert_state = getattr(self, "_last_hardware_alert_state", "normal")
+        last_alert_time = getattr(self, "_last_hardware_alert_time", -9999.0)
+
+        # 1. Furnace alert (sustained >= 85C or >= 90% CPU for >= 30s)
+        if current_state == "furnace" and last_alert_state != "furnace":
+            if (now - last_alert_time) >= 900.0:  # 15m cooldown between alerts
+                self._last_hardware_alert_time = now
+                self._last_hardware_alert_state = "furnace"
+                furnace_lines = [
+                    "* Minion! The taskbar is scorching hot! Did you set the CPU on fire?! [anim: burnt]",
+                    "* Whew! The cooling fans are screaming like an angry boss fight! Give this machine some air, mew! [anim: shocked]",
+                    "* My pixel dress is practically singed! Are you trying to melt our motherboard into soup?! [anim: burnt]",
+                ]
+                chosen = random.choice(furnace_lines)
+                log.info("[HardwareMonitor] Triggered furnace thermal alert: %s", chosen)
+                self._say(chosen, force=True, record_memory=True)
+                return
+
+        # 2. Recovery from furnace
+        if current_state == "normal" and last_alert_state == "furnace":
+            self._last_hardware_alert_state = "normal"
+            recovery_lines = [
+                "* Ahh, the cooling fans finally calmed down, mew! The thermal crisis has passed! [anim: peace_sign]",
+                "* Temperature dropping back to safe levels! Good job sparing our motherboard, minion! [anim: laughing]",
+            ]
+            chosen = random.choice(recovery_lines)
+            log.info("[HardwareMonitor] Triggered thermal recovery announcement: %s", chosen)
+            self._say(chosen, force=True, record_memory=True)
+            return
+
+        # 3. Critical RAM alert (> 95% used)
+        if v.get("ram_percent", 0.0) >= 95.0 and last_alert_state not in ("ram_alert", "furnace"):
+            if (now - last_alert_time) >= 900.0:
+                self._last_hardware_alert_time = now
+                self._last_hardware_alert_state = "ram_alert"
+                ram_lines = [
+                    "* My pixel steps are moving through thick molasses, mew! Your RAM is completely stuffed! [anim: wistful]",
+                    "* How many tabs do you have open?! The memory is choking, minion! Close something! [anim: shocked]",
+                ]
+                chosen = random.choice(ram_lines)
+                log.info("[HardwareMonitor] Triggered critical RAM alert: %s", chosen)
+                self._say(chosen, force=True, record_memory=True)
+                return
+
+        # Reset RAM alert state when memory drops below 85%
+        if v.get("ram_percent", 0.0) < 85.0 and last_alert_state == "ram_alert":
+            self._last_hardware_alert_state = "normal"
+
     def _build_question_prompt(self, source: str, forced_goal: dict | None = None) -> tuple[str, str]:
         """Construct the system instruction and user prompt for generating an interactive question."""
         now_dt = datetime.datetime.now()
@@ -10276,6 +10685,20 @@ class YellowsPixelBuddies(QWidget):
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
+
+        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
+            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
+            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
+            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
+            if is_hw_inquiry:
+                hw_block = self._hardware_monitor.get_prompt_block(force=True)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
+            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+                hw_block = self._hardware_monitor.get_prompt_block(force=False)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
 
         # Feed ongoing conversation history from the active session so Pink has situational awareness
         active_session_turns = []
@@ -11174,6 +11597,27 @@ RULES:
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
             self._say(reply, force=True, record_memory=False)
             return
+        elif lower_input in ("/vitals", "/specs", "/hardware", "/temp"):
+            reply = self._hardware_monitor.format_vitals_report()
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input.startswith(("/vitals snooze", "/hardware snooze")):
+            parts = clean_input.split()
+            hours = 24.0
+            if len(parts) > 2:
+                try:
+                    hours = float(re.findall(r"[\d.]+", parts[2])[0])
+                except Exception:
+                    hours = 24.0
+            until = self._memory.snooze_hardware(hours)
+            reply = f"* Hardware vitals chatter snoozed for {int(hours) if hours.is_integer() else hours}h (until {until.strftime('%b %d %I:%M %p')})! [anim: wistful]"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/vitals on", "/hardware on", "/vitals resume", "/hardware resume"):
+            self._memory.set_hardware_coaching_config({"snooze_until": None})
+            reply = "* Hardware monitoring alert chatter re-enabled, mew! [anim: peace_sign]"
+            self._say(reply, force=True, record_memory=False)
+            return
         elif lower_input in ("/goals debug", "/goal debug", "/goals_debug"):
             active = self._memory.get_active_goals()
             cfg = self._memory.get_goal_coaching_config()
@@ -11629,6 +12073,20 @@ RULES:
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
+        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
+            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
+            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
+            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
+            if is_hw_inquiry:
+                hw_block = self._hardware_monitor.get_prompt_block(force=True)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
+            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+                hw_block = self._hardware_monitor.get_prompt_block(force=False)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
+
         had_visual = bool(see_screen or attached_image_b64)
         # Spawn background worker thread
         self._gemini_thread = GeminiWorkerThread(
@@ -12015,6 +12473,20 @@ RULES:
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
+
+        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
+            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
+            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
+            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
+            if is_hw_inquiry:
+                hw_block = self._hardware_monitor.get_prompt_block(force=True)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
+            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+                hw_block = self._hardware_monitor.get_prompt_block(force=False)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
 
         if is_gaming:
             prompt_label = f"[Pink is watching your gameplay{game_label}]"
@@ -12580,6 +13052,20 @@ RULES:
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
+
+        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
+            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
+            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
+            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
+            if is_hw_inquiry:
+                hw_block = self._hardware_monitor.get_prompt_block(force=True)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
+            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+                hw_block = self._hardware_monitor.get_prompt_block(force=False)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
 
         check_str = f"{clean_artist} {clean_title}".lower()
         is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
@@ -13908,6 +14394,20 @@ RULES:
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
+
+        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
+            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
+            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
+            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
+            if is_hw_inquiry:
+                hw_block = self._hardware_monitor.get_prompt_block(force=True)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
+            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+                hw_block = self._hardware_monitor.get_prompt_block(force=False)
+                if hw_block:
+                    system_inst += f"\n\n{hw_block}"
 
         candidate_directive = (
             "[STRUCTURAL DIRECTIVE: TRAY BACKGROUND SCREEN OBSERVATION]\n"
