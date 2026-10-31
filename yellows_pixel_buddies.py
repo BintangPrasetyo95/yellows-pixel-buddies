@@ -10686,16 +10686,10 @@ class YellowsPixelBuddies(QWidget):
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
-        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        # Conditional hardware vitals injection (on sustained stress only)
         if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
-            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
             snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if is_hw_inquiry:
-                hw_block = self._hardware_monitor.get_prompt_block(force=True)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
-            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
                 hw_block = self._hardware_monitor.get_prompt_block(force=False)
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
@@ -12474,16 +12468,10 @@ RULES:
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
-        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        # Conditional hardware vitals injection (on sustained stress only)
         if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
-            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
             snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if is_hw_inquiry:
-                hw_block = self._hardware_monitor.get_prompt_block(force=True)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
-            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
                 hw_block = self._hardware_monitor.get_prompt_block(force=False)
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
@@ -13053,16 +13041,10 @@ RULES:
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
-        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        # Conditional hardware vitals injection (on sustained stress only)
         if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
-            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
             snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if is_hw_inquiry:
-                hw_block = self._hardware_monitor.get_prompt_block(force=True)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
-            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
                 hw_block = self._hardware_monitor.get_prompt_block(force=False)
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
@@ -14395,16 +14377,10 @@ RULES:
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
-        # Conditional hardware vitals injection (on inquiry or sustained stress only)
+        # Conditional hardware vitals injection (on sustained stress only)
         if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
-            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
             snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if is_hw_inquiry:
-                hw_block = self._hardware_monitor.get_prompt_block(force=True)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
-            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
+            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
                 hw_block = self._hardware_monitor.get_prompt_block(force=False)
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
