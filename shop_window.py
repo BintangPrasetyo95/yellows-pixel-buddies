@@ -782,7 +782,7 @@ class DeltaruneShopWindow(QWidget):
         """Clean AI metadata tags, asterisks, and format into speech lines starting with '* '."""
         if not text:
             return ["* ..."]
-        t = re.sub(r"\[(?:anim|mode|ghost|seen|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", text, flags=re.IGNORECASE)
+        t = re.sub(r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", text, flags=re.IGNORECASE)
         t = re.sub(r"\*{2,}", "", t)
         lines = [l.strip() for l in t.splitlines() if l.strip()]
         out: list[str] = []
@@ -2942,7 +2942,11 @@ class DeltaruneShopWindow(QWidget):
             desc = "* Companion Toggles:\n* Live toggles for speech, music reactions, and defenses."
         elif self._selected_index == 2:
             notes = self._get_fact_notes()
-            desc = f"* Fact Sheet:\n* Notes stored: {len(notes)}\n* Pink remembers your nickname and notes permanently."
+            temp_count = 0
+            if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "get_active_temporary_facts"):
+                temp_count = len(self._memory.get_active_temporary_facts())
+            temp_str = f"\n* Active 2-day notes: {temp_count}" if temp_count else ""
+            desc = f"* Fact Sheet:\n* Notes stored: {len(notes)}{temp_str}\n* Pink remembers your nickname and notes permanently."
         elif self._selected_index == 3:
             desc = "* Uninstall Pink:\n* Launch the Windows uninstaller or clean local pet data."
         else:

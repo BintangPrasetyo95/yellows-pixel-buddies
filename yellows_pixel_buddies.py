@@ -782,7 +782,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - STRICT ANTI-HALLUCINATION & FACTUALITY RULES:
   * NEVER invent, guess, or fabricate past events, times, timestamps, minutes, conversation details, numbers, or facts.
-  * You have access to: active conversation history, recent session logs from today and yesterday, searched older memories, active 30-day reminders, permanent facts, and USER'S TARGET MILESTONES & LONG-TERM GOALS.
+  * You have access to: active conversation history, recent session logs from today and yesterday, searched older memories, active 30-day reminders, permanent facts, active 2-day temporary situational facts, and USER'S TARGET MILESTONES & LONG-TERM GOALS.
   * If the user asks about past conversations, times, or events:
     - ONLY use the actual logs and records provided in your context.
     - If you do not have the record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs, minion! Stop trying to test me!").
@@ -805,6 +805,20 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
   * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
   * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
+
+- TEMPORARY 2-DAY SITUATIONAL FACTS ([add_temp_fact: ...], [delete_temp_fact: ...]):
+  * You have the full autonomy to spontaneously record temporary situational facts about the user or situation!
+  * Unlike permanent facts (which stay forever), temporary facts AUTO-EXPIRE AFTER 2 DAYS (48 hours).
+  * WHEN TO ADD BY YOURSELF (SPONTANEOUS AGENCY):
+    - User's physical or mental condition: feeling sick, sore throat, headache, pulled an all-nighter, exhausted, skipped a meal, stressed, or needing rest.
+    - User's short-term deadlines or events: 48h game jam this weekend, crunching on a bug fix tonight, midterm exam tomorrow morning, hackathon.
+    - User's temporary environment or gear: working from a cafe today, staying at a hotel, borrowed a laptop, testing a new microphone or keyboard.
+    - Ongoing temporary companion banter or agreements: a 2-day bet, a temporary challenge, or a playful dare.
+  * ROLEPLAY GUIDANCE:
+    - Weave active temporary facts into your banter, teasing, screen peeks, and tsundere check-ins (e.g. asking if their headache improved, or telling them not to collapse during their game jam).
+    - If the user recovers, finishes the crunch, or the temporary situation has passed, append [delete_temp_fact: <text>] to drop it early!
+  * Example: "* S-serve you right for staying up until 4 AM, minion! Take some medicine and rest your eyes! [anim: embarrassed] [add_temp_fact: User has a headache and is running on 3 hours of sleep today]"
+  * Example: "* I heard you finished that nightmare exam! Finally, you're free to serve me again! [anim: laughing] [delete_temp_fact: exam]"
 
 - TARGET MILESTONES & LONG-TERM GOALS ([add_goal: ...], [complete_goal: ...], [delete_goal: ...], [update_goal: ...], [set_goal_deadline: ...], [snooze_goals: ...], [set_coaching_mode: ...]):
   * You have access to the user's grand ambitions and target milestones (from your Goals board in memory/goals.json).
@@ -4338,6 +4352,7 @@ class MemoryManager:
         self.config_path = self.memory_dir / "config.json"
         self.env_path = data_dir / ".env"
         self.facts_path = self.memory_dir / "facts.json"
+        self.temp_facts_path = self.memory_dir / "temp_facts.json"
         self.reminders_path = self.memory_dir / "reminders.json"
         self.alarms_path = self.memory_dir / "alarms.json"
         self.goals_path = self.memory_dir / "goals.json"
@@ -4410,6 +4425,10 @@ class MemoryManager:
                     "notes": [],
                 }
                 self.facts_path.write_text(json.dumps(default_facts, indent=2), encoding="utf-8")
+            if not self.temp_facts_path.exists():
+                self.temp_facts_path.write_text("[]", encoding="utf-8")
+            else:
+                self.get_active_temporary_facts()
             if not self.reminders_path.exists():
                 self.reminders_path.write_text("[]", encoding="utf-8")
             if not self.alarms_path.exists():
@@ -4650,6 +4669,174 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not save fact: %s", err)
             return False
+
+    def get_active_temporary_facts(self, max_age_hours: float = 48.0) -> list[dict]:
+        """Read temporary facts from temp_facts.json, auto-prune anything older than 48 hours (2 days), and return active ones."""
+        if not self.temp_facts_path.exists() or self.temp_facts_path.stat().st_size == 0:
+            return []
+        try:
+            raw = json.loads(self.temp_facts_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return []
+        except Exception as err:
+            log.warning("Could not read temp_facts.json: %s", err)
+            return []
+
+        now = datetime.datetime.now()
+        active: list[dict] = []
+        changed = False
+
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            created_str = item.get("created_at")
+            if not created_str:
+                active.append(item)
+                continue
+            try:
+                dt = datetime.datetime.fromisoformat(created_str)
+                age_hours = (now - dt).total_seconds() / 3600.0
+                if age_hours <= max_age_hours:
+                    active.append(item)
+                else:
+                    changed = True  # Prune expired temporary fact (> 48 hours)
+            except Exception:
+                active.append(item)
+
+        if changed or len(active) != len(raw):
+            try:
+                self.temp_facts_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            except Exception as err:
+                log.warning("Could not prune temp_facts.json: %s", err)
+
+        return active
+
+    def get_temporary_facts_prompt(self, numbered: bool = True) -> str:
+        """Format active 2-day temporary facts with age/expiry hints for prompt injection and user viewing."""
+        active = self.get_active_temporary_facts()
+        if not active:
+            return ""
+        now = datetime.datetime.now()
+        lines = []
+        for idx, item in enumerate(active, 1):
+            text = item.get("text", "").strip()
+            created_str = item.get("created_at", "")
+            time_label = ""
+            if created_str:
+                try:
+                    dt = datetime.datetime.fromisoformat(created_str)
+                    age_hours = (now - dt).total_seconds() / 3600.0
+                    remaining_hours = max(1, int(round(48.0 - age_hours)))
+                    if dt.date() == now.date():
+                        day_str = f"Today {dt.strftime('%I:%M %p')}"
+                    elif (now.date() - dt.date()).days == 1:
+                        day_str = f"Yesterday {dt.strftime('%I:%M %p')}"
+                    else:
+                        day_str = dt.strftime("%b %d, %I:%M %p")
+                    time_label = f" (Added {day_str} | expires in ~{remaining_hours}h)"
+                except Exception:
+                    pass
+            prefix = f"{idx}. " if numbered else "- "
+            lines.append(f"{prefix}{text}{time_label}")
+        return "\n".join(lines)
+
+    def add_temporary_fact(self, fact_text: str, source: str = "pink", ttl_hours: float = 48.0) -> bool:
+        """Store a temporary situational fact about the user or situation that automatically prunes after 48h (2 days)."""
+        clean_text = fact_text.strip()
+        if not clean_text:
+            return False
+        active = self.get_active_temporary_facts(max_age_hours=ttl_hours)
+        # Deduplication check
+        if any(item.get("text", "").strip().lower() == clean_text.lower() for item in active):
+            return False
+
+        # Soft cap to prevent prompt pollution: retain up to 8 active temporary facts
+        if len(active) >= 8:
+            active.pop(0)
+
+        now_dt = datetime.datetime.now()
+        item = {
+            "id": f"tf_{now_dt.strftime('%Y%m%d_%H%M%S')}",
+            "created_at": now_dt.isoformat(),
+            "text": clean_text,
+            "source": source,
+        }
+        active.append(item)
+        try:
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_facts_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Saved new temporary fact (2 days): %s (source: %s)", clean_text, source)
+            return True
+        except Exception as err:
+            log.warning("Could not save temporary fact: %s", err)
+            return False
+
+    def _find_temp_fact_index(self, active: list[dict], identifier: str | int) -> int | None:
+        """Helper to find the 0-based index in active temporary facts by 1-based index, ID, or text match."""
+        if not active or identifier is None:
+            return None
+
+        if isinstance(identifier, int):
+            idx = identifier - 1
+            return idx if 0 <= idx < len(active) else None
+
+        clean = str(identifier).strip()
+        if not clean:
+            return None
+
+        target_str = clean[1:] if clean.startswith("#") else clean
+        if target_str.isdigit():
+            idx = int(target_str) - 1
+            if 0 <= idx < len(active):
+                return idx
+
+        clean_lower = clean.lower()
+
+        # 1. Exact match on id
+        for idx, item in enumerate(active):
+            if item.get("id", "").lower() == clean_lower:
+                return idx
+
+        # 2. Exact match on text
+        for idx, item in enumerate(active):
+            if item.get("text", "").strip().lower() == clean_lower:
+                return idx
+
+        # 3. Substring match on text
+        for idx, item in enumerate(active):
+            if clean_lower in item.get("text", "").strip().lower():
+                return idx
+
+        return None
+
+    def delete_temporary_fact(self, identifier: str | int) -> tuple[bool, str]:
+        """Delete an active temporary fact by 1-based index, ID, or text match.
+        Returns (success, deleted_text)."""
+        active = self.get_active_temporary_facts()
+        idx = self._find_temp_fact_index(active, identifier)
+        if idx is None:
+            return False, ""
+        deleted_item = active.pop(idx)
+        deleted_text = deleted_item.get("text", "")
+        try:
+            self.temp_facts_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Deleted temporary fact: %s", deleted_text)
+            return True, deleted_text
+        except Exception as err:
+            log.warning("Could not delete temporary fact: %s", err)
+            return False, ""
+
+    def clear_all_temporary_facts(self) -> int:
+        """Clear all active temporary facts. Returns count of deleted items."""
+        active = self.get_active_temporary_facts()
+        count = len(active)
+        try:
+            self.temp_facts_path.write_text("[]", encoding="utf-8")
+            log.info("Cleared all temporary facts (%d items)", count)
+            return count
+        except Exception as err:
+            log.warning("Could not clear temporary facts: %s", err)
+            return 0
 
     def get_active_reminders(self, max_age_days: int = 30) -> list[dict]:
         """Read reminders from reminders.json, auto-prune anything older than 30 days, and return active ones."""
@@ -6763,7 +6950,7 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[ghost_prefix.end():]
 
-        l = re.sub(r"\[(?:seen|add_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
+        l = re.sub(r"\[(?:seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
         l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
@@ -7224,6 +7411,14 @@ class GeminiWorkerThread(QThread):
                             f_val = m.group(1).strip()
                             if f_val:
                                 memory.add_fact(f_val)
+                        for m in re.finditer(r"\[(?:add_temp_fact|temp_fact):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            tf_val = m.group(1).strip()
+                            if tf_val:
+                                memory.add_temporary_fact(tf_val, source="screen_peek")
+                        for m in re.finditer(r"\[(?:delete_temp_fact|del_temp_fact|rm_temp_fact):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            dtf_val = m.group(1).strip()
+                            if dtf_val:
+                                memory.delete_temporary_fact(dtf_val)
                         for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             r_val = m.group(1).strip()
                             if r_val:
@@ -7251,7 +7446,7 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(r"\[(?:add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -7311,6 +7506,14 @@ class GeminiWorkerThread(QThread):
                 f_val = m.group(1).strip()
                 if f_val:
                     memory.add_fact(f_val)
+            for m in re.finditer(r"\[(?:add_temp_fact|temp_fact):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                tf_val = m.group(1).strip()
+                if tf_val:
+                    memory.add_temporary_fact(tf_val, source="pink_chat")
+            for m in re.finditer(r"\[(?:delete_temp_fact|del_temp_fact|rm_temp_fact):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                dtf_val = m.group(1).strip()
+                if dtf_val:
+                    memory.delete_temporary_fact(dtf_val)
             for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 r_val = m.group(1).strip()
                 if r_val:
@@ -7383,7 +7586,7 @@ class GeminiWorkerThread(QThread):
                 c_val = m.group(1).strip()
                 if c_val:
                     memory.cancel_alarm_or_timer(c_val)
-        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
 
@@ -10278,6 +10481,14 @@ class YellowsPixelBuddies(QWidget):
                 f_val = m.group(1).strip()
                 if f_val:
                     self._memory.add_fact(f_val)
+            for m in re.finditer(r"\[(?:add_temp_fact|temp_fact):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                tf_val = m.group(1).strip()
+                if tf_val:
+                    self._memory.add_temporary_fact(tf_val, source="choice_reaction")
+            for m in re.finditer(r"\[(?:delete_temp_fact|del_temp_fact|rm_temp_fact):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                dtf_val = m.group(1).strip()
+                if dtf_val:
+                    self._memory.delete_temporary_fact(dtf_val)
             for m in re.finditer(r"\[(?:complete_goal|finish_goal|done_goal):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
                 cg_val = m.group(1).strip()
                 if cg_val:
@@ -10291,7 +10502,7 @@ class YellowsPixelBuddies(QWidget):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     self._memory.update_goal_progress(t_val, n_val)
-            reaction_text = re.sub(r"\[(?:add_fact|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
+            reaction_text = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -10331,7 +10542,7 @@ class YellowsPixelBuddies(QWidget):
         """Check if there is rich memory, media, or time-of-day care context available for a question."""
         if not hasattr(self, "_memory"):
             return False
-        has_facts = bool(self._memory.get_long_term_facts())
+        has_facts = bool(self._memory.get_long_term_facts() or (hasattr(self._memory, "get_active_temporary_facts") and self._memory.get_active_temporary_facts()))
         has_reminders = bool(self._memory.get_active_reminders())
         has_goals = bool(self._memory.get_active_goals()) if hasattr(self._memory, "get_active_goals") else False
         has_song = bool(getattr(self, "_current_song", None) and self._current_song[0])
@@ -10546,7 +10757,13 @@ class YellowsPixelBuddies(QWidget):
             self._last_care_question_time = now_perf
             return prompt_str
 
-        # 3. Personal permanent facts
+        # 3. Situational temporary facts or Personal permanent facts
+        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+        if temp_facts and random.random() < 0.6:
+            return (
+                f"Recall an active situational temporary fact from memory: {temp_facts}. "
+                f"Ask a spontaneous companion follow-up question checking in on this temporary situation!"
+            )
         facts = self._memory.get_long_term_facts() if hasattr(self._memory, "get_long_term_facts") else ""
         if facts:
             return (
@@ -10674,6 +10891,10 @@ class YellowsPixelBuddies(QWidget):
         if facts:
             system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
 
+        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+        if temp_facts:
+            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
+
         reminders = self._memory.get_reminders_prompt()
         if reminders:
             system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
@@ -10760,6 +10981,7 @@ SITUATIONAL AWARENESS, ANTI-REPETITION & EMOTIONAL DIVERGENCE RULES:
    * Avoid boring binary 'good student vs bad slacker' questionnaire choices. Include playful, absurd Toby Fox options!
    * Multi-speaker reactions are encouraged: you can separate doll and ghost on multiple lines using '\n* '.
    * Only append [add_fact: User prefers ...] if the option reveals a clear, unambiguous real preference (NEVER for jokes or sarcasm).
+   * You may append [add_temp_fact: ...] if an option reveals a 1-2 day temporary condition (e.g. pulled an all-nighter, game jam crunch, mild illness).
 """
 
         format_spec = """
@@ -11504,6 +11726,33 @@ RULES:
                 reply = f"* Hmph! Stored in my permanent memory core, minion:\n* \"{fact_content}\"" if ok else "* I already knew that, dummy!"
                 self._say(reply, force=True, record_memory=True)
                 return
+        elif lower_input.startswith(("/tempfact ", "/temp_fact ", "/situational ")):
+            tf_content = clean_input.split(" ", 1)[1].strip()
+            if tf_content:
+                ok = self._memory.add_temporary_fact(tf_content, source="user")
+                reply = f"* Noted in my temporary 2-day logs, minion:\n* \"{tf_content}\"" if ok else "* I already have that temporary note logged, silly!"
+                self._say(reply, force=True, record_memory=True)
+                return
+        elif lower_input.startswith(("/del_tempfact ", "/delete_tempfact ", "/del_temp_fact ", "/delete_temp_fact ", "/rm_tempfact ", "/rm_temp_fact ")):
+            target = clean_input.split(" ", 1)[1].strip()
+            if target:
+                ok, deleted_text = self._memory.delete_temporary_fact(target)
+                if ok:
+                    reply = f"* Deleted temporary fact, mew:\n* \"{deleted_text}\""
+                else:
+                    reply = f"* Couldn't find temporary fact '{target}', dummy! Use /facts or /tempfacts to check active items."
+                self._say(reply, force=True, record_memory=False)
+                return
+        elif lower_input in ("/tempfacts", "/temp_facts"):
+            temp_text = self._memory.get_temporary_facts_prompt(numbered=True)
+            reply = f"* Active temporary facts (valid for 2 days):\n{temp_text}" if temp_text else "* No active temporary facts right now, mew!"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/clear_tempfacts", "/clear_temp_facts"):
+            cleared = self._memory.clear_all_temporary_facts()
+            reply = f"* Swept away {cleared} temporary fact{'s' if cleared != 1 else ''}, mew!" if cleared else "* No temporary facts to clear, silly!"
+            self._say(reply, force=True, record_memory=False)
+            return
         elif lower_input.startswith(("/remind ", "/todo ")):
             remind_content = clean_input.split(" ", 1)[1].strip()
             if remind_content:
@@ -11796,7 +12045,16 @@ RULES:
             return
         elif lower_input in ("/facts", "/fact"):
             facts_text = self._memory.get_long_term_facts()
-            reply = f"* Here is what I permanently remember about you, minion:\n{facts_text}" if facts_text else "* My permanent fact sheet is empty, darling!"
+            temp_text = self._memory.get_temporary_facts_prompt(numbered=True) if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+            sections = []
+            if facts_text:
+                sections.append(f"* PERMANENT MEMORY CORE:\n{facts_text}")
+            if temp_text:
+                sections.append(f"* TEMPORARY SITUATIONAL NOTES (Active for 2 days):\n{temp_text}")
+            if sections:
+                reply = "\n\n".join(sections)
+            else:
+                reply = "* My memory logs and temporary fact sheets are empty, darling!"
             self._say(reply, force=True, record_memory=False)
             return
         elif lower_input in ("/question", "/ask", "/ask_question") or lower_input.startswith(("/question ", "/ask ")) or lower_input in ("ask me a question", "ask me something", "ask a question"):
@@ -12054,6 +12312,10 @@ RULES:
         facts = self._memory.get_long_term_facts()
         if facts:
             system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+        if temp_facts:
+            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
 
         reminders = self._memory.get_reminders_prompt()
         if reminders:
@@ -12455,6 +12717,10 @@ RULES:
         facts = self._memory.get_long_term_facts()
         if facts:
             system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+        if temp_facts:
+            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
 
         reminders = self._memory.get_reminders_prompt()
         if reminders:
@@ -13028,6 +13294,10 @@ RULES:
         facts = self._memory.get_long_term_facts()
         if facts:
             system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+        if temp_facts:
+            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
 
         reminders = self._memory.get_reminders_prompt()
         if reminders:
@@ -14364,6 +14634,10 @@ RULES:
         facts = self._memory.get_long_term_facts()
         if facts:
             system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+
+        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+        if temp_facts:
+            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
 
         reminders = self._memory.get_reminders_prompt()
         if reminders:
