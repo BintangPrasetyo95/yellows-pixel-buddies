@@ -73,6 +73,7 @@ Behaviour
                  cursor leaves the work area / goes too low: she falls, "peace_sign".
                  Shaking the cursor (quick reversals that go nowhere) shakes her off:
                  she falls and laughs.
+                 
       COOLDOWN : JUMP_COOLDOWN_MIN_S..MAX_S, counted from the landing.
 """
 
