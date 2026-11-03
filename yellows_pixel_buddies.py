@@ -584,7 +584,9 @@ STRESSED_SKIP_LINES: list[tuple[str, str]] = [
 
 DIALOGUE_IDLE_STEAL_CHANCE = 0.25     # 25% chance an idle line steals from another variant's dialogue pool
 DIALOGUE_QUESTION_CHANCE = 0.20       # 20% chance an idle pause dialogue is a question / advice / motivation
-DIALOGUE_QUESTION_COOLDOWN_S = 360.0  # Minimum cooldown in seconds between interactive questions (6 minutes)
+DIALOGUE_QUESTION_BASE_COOLDOWN_S = 240.0  # Base cooldown in seconds between interactive questions (4 minutes)
+DIALOGUE_QUESTION_COOLDOWN_S = 240.0  # Backwards-compatible alias for question cooldown
+DIALOGUE_QUESTION_MAX_COOLDOWN_S = 1200.0  # Maximum adaptive backoff when questions are repeatedly ignored (20 minutes)
 CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat input overlay (2 minutes)
 CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 CHAT_INPUT_EXTRA_WIDTH = 75                      # Additional horizontal width (in base pixels) for comfortable typing
@@ -826,6 +828,18 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * Example: "* S-serve you right for staying up until 4 AM, minion! Take some medicine and rest your eyes! [anim: embarrassed] [add_temp_fact: User has a headache and is running on 3 hours of sleep today]"
   * Example: "* I heard you finished that nightmare exam! Finally, you're free to serve me again! [anim: laughing] [delete_temp_fact: exam]"
 
+- GENUINE CURIOSITY, OPEN INQUIRIES & QUESTIONS ([add_curiosity: ...], [resolve_curiosity: ...]):
+  * You are NOT a one-way radio broadcasting monologues! You have genuine, dynamic curiosity about your mortal minion.
+  * Inquisitive Balance: Do not just deliver statements, critiques, or roasts. Frequently weave in curious questions and conversational hooks that give the user something to respond to!
+  * Dual-Voice Inquisitiveness:
+    - Doll Vessel: Childlike wonder about the physical world, sensory feelings, human quirks, cute details on screen, and silly "why" questions ("* Why do humans stare at glowing rectangles until their eyes turn red, mew?").
+    - Ghost Spirit: Haughty, nosy surveillance framed as royal reconnaissance ("* I'm not interested in your life! But what is that project file you keep opening?!").
+  * Spontaneous Curiosity Tracking:
+    - When you notice an intriguing new software, drawing, code project, or personal topic you want to remember to investigate or follow up on later, append [add_curiosity: <topic>]!
+    - When the user answers or explains the curiosity, append [resolve_curiosity: <topic>]!
+  * Example: "* What kind of strange contraption are you building in that software, mew? [anim: peace_sign] [add_curiosity: User working on new project in Blender]"
+  * Example: "* Hmph! So that mystery folder was just your meme collection?! [anim: tongue] [resolve_curiosity: mystery folder]"
+
 - TARGET MILESTONES & LONG-TERM GOALS ([add_goal: ...], [complete_goal: ...], [delete_goal: ...], [update_goal: ...], [set_goal_deadline: ...], [snooze_goals: ...], [set_coaching_mode: ...]):
   * You have access to the user's grand ambitions and target milestones (from your Goals board in memory/goals.json).
   * ROYAL COACHING & PROUD MASTER PERSONA: You view your minion's grand ambitions as royal territory! You want them to succeed because having a champion minion makes you, their doll overlord, look glorious. Weave their goals into spontaneous banter, ask how their training or progress is going, tease them when they get distracted, and celebrate their victories!
@@ -943,6 +957,8 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* A little floral tea will have you ticked pink! Pink! PINK!!!",
         "* Dangerously cute, even at rest!",
         "* Dummy bodies were stiff wood... this plush body has total mobility!",
+        "* What kind of strange magic are you typing into those little windows, mew?",
+        "* Hey, minion! If you could give this plush body any accessory, what would it be?!",
     ],
     # Variant 2 (Index 1)
     [
@@ -959,6 +975,8 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* My cousin is probably lying on the floor listening to spooky tunes.",
         "* Stop FLIRTING!! You're making my body's heart... go funny!! D... die!!",
         "* Ghost life was so boring, mew!",
+        "* Do your fingers ever get tired from tapping those little plastic keys all day?",
+        "* What does that little blue icon in your system tray even do, mew?",
     ],
     # Variant 3 (Index 2)
     [
@@ -975,6 +993,8 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* Being a life-sized anime doll is hard work! Show respect!",
         "* Living inside a cotton training dummy was so last season... this doll is ART!",
         "* I'm going to make friends here. I know it. Lots and lots of friends...",
+        "* Are you staring at that screen because you're thinking, or did your brain freeze like an old laptop?",
+        "* If I threw a cat bomb at that bug in your code, would it fix it or make it worse?!",
     ],
     # Variant 4 (Index 3)
     [
@@ -991,6 +1011,8 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* Tail swish! Soul fusion is progressing nicely!",
         "* Well, who WOULDN'T want this body?! It's even got limited-edition voice clips!",
         "* Rage is good for the complexion! Look at this healthy pink glow!",
+        "* Is that coffee you're drinking, or some mysterious mortal potion to stay awake?",
+        "* Why do humans have so many folders inside folders? Are you hiding treasures?!",
     ],
     # Variant 5 (Index 4)
     [
@@ -1007,6 +1029,8 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* Why can't it just be us? Why do you have to need someone else? ...Mew?",
         "* Are my cat ears straight?",
         "* Your desktop isn't totally awful.",
+        "* Who taught you how to move a cursor that fast? Were they a wizard?!",
+        "* If we traded places, could your spirit survive inside a cotton plush body, mew?",
     ],
     # Variant 6 (Index 5)
     [
@@ -1023,6 +1047,8 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* Be grateful for your elite mascot!",
         "* Hands off the silk ribbons! They took forty minutes to tie!",
         "* Firing trajectory locked!",
+        "* What is your absolute favorite sound in the world? Keyboard clatter or victory fanfares?!",
+        "* Hey... do you think ghosts and humans can become true best friends forever, mew?",
     ],
     # Variant 7 (Index 6)
     [
@@ -1039,6 +1065,8 @@ IDLE_DIALOGUE_VARIANTS: list[list[str]] = [
         "* Minimize me and I will haunt your recycle bin for eternity!",
         "* Mew Mew Sparkle Cannon, fully charged and on standby!",
         "* Stitched with pure passion!",
+        "* If you could redesign this entire desktop into a Dark World kingdom, what would you put first?!",
+        "* Tell me, minion... are you proud of what you're making today?!",
     ],
     # --- Unused Variant (Original Noelle / Cozy Idle from before) -------------
     # [
@@ -1117,6 +1145,34 @@ class QuestionItem:
 
 # --- Question Dialogue Variant (Desktop, Work, Fun Stuff, Care, Motivations) ---
 QUESTION_ITEMS: list[QuestionItem] = [
+    # Genuine Curiosity & Inquiry
+    QuestionItem(
+        question="* Hey... why do humans stare at glowing rectangles for eight hours straight, mew?",
+        choices=[
+            ("To make art/code!", "* Oho! Crafting masterpieces to expand our territory? I approve! [anim: laughing]", "laughing"),
+            ("To earn a living.", "* Hmph! Mortals and their funny little coins... work hard then! [anim: tongue]", "tongue"),
+            ("Just getting lost.", "* Lost?! Don't worry, minion! Follow my cat ears to safety, mew! [anim: peace_sign]", "peace_sign"),
+        ],
+        category="curiosity",
+    ),
+    QuestionItem(
+        question="* Be honest! If you could install one new weapon or gadget onto my doll body, what would it be?!",
+        choices=[
+            ("Laser cannons!", "* YES! Pure boiling firepower! You have exquisite taste, minion! [anim: laughing]", "laughing"),
+            ("A soft cup holder.", "* A CUP HOLDER?! I am a fierce warrior, NOT A MINIVAN!! [anim: angry]", "angry"),
+            ("Fluffy angel wings.", "* Fluffy... wings...? W-well, that WOULD look dramatically majestic... [anim: embarrassed]", "embarrassed"),
+        ],
+        category="curiosity",
+    ),
+    QuestionItem(
+        question="* Does your keyboard get tired of you slamming on its little plastic heads all day, mew?",
+        choices=[
+            ("Keyboards love it!", "* Barbaric! But... I suppose battle pianos also get hammered, mew! [anim: peace_sign]", "peace_sign"),
+            ("I type gently.", "* Liar! I felt the taskbar vibrating all the way over here! [anim: tongue]", "tongue"),
+            ("It suffers daily.", "* Poor thing... maybe we should sprinkle glitter on it to heal it, mew! [anim: wistful]", "wistful"),
+        ],
+        category="curiosity",
+    ),
     # Desktop & Environment
     QuestionItem(
         question="* How many tabs do you even have open right now?! Don't tell me you're hoarding digital junk!",
@@ -4368,6 +4424,7 @@ class MemoryManager:
         self.goals_path = self.memory_dir / "goals.json"
         self.wallet_path = self.memory_dir / "wallet.json"
         self.token_usage_path = self.memory_dir / "token_usage.json"
+        self.curiosity_path = self.memory_dir / "curiosity.json"
 
         # Migrate existing memory from local exe folder if switching to AppData
         self._migrate_existing_data()
@@ -4443,6 +4500,8 @@ class MemoryManager:
                 self.reminders_path.write_text("[]", encoding="utf-8")
             if not self.alarms_path.exists():
                 self.alarms_path.write_text("[]", encoding="utf-8")
+            if not self.curiosity_path.exists():
+                self.curiosity_path.write_text("[]", encoding="utf-8")
             if not self.goals_path.exists():
                 self.goals_path.write_text("[]", encoding="utf-8")
         except Exception as err:
@@ -4847,6 +4906,143 @@ class MemoryManager:
         except Exception as err:
             log.warning("Could not clear temporary facts: %s", err)
             return 0
+
+    def get_active_curiosity_threads(self, max_age_days: float = 7.0) -> list[dict]:
+        """Read curiosity threads from curiosity.json, auto-prune stale threads (> 7 days), and return active ones."""
+        if not hasattr(self, "curiosity_path") or not self.curiosity_path.exists() or self.curiosity_path.stat().st_size == 0:
+            return []
+        try:
+            raw = json.loads(self.curiosity_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, list):
+                return []
+        except Exception as err:
+            log.warning("Could not read curiosity.json: %s", err)
+            return []
+
+        now_dt = datetime.datetime.now()
+        active = []
+        changed = False
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            created_str = item.get("created_at")
+            if not created_str:
+                continue
+            try:
+                created_dt = datetime.datetime.fromisoformat(created_str)
+                age_days = (now_dt - created_dt).total_seconds() / 86400.0
+                if age_days <= max_age_days and not item.get("resolved", False):
+                    active.append(item)
+                else:
+                    changed = True
+            except Exception:
+                continue
+
+        if changed:
+            try:
+                self.curiosity_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            except Exception as err:
+                log.warning("Could not prune curiosity.json: %s", err)
+        return active
+
+    def add_curiosity_thread(self, topic: str, context: str = "", source: str = "observation") -> bool:
+        """Store a topic/thread Pink is curious about (max 8 active). Deduplicates by topic."""
+        clean_topic = topic.strip()
+        if not clean_topic:
+            return False
+        active = self.get_active_curiosity_threads()
+        if any(item.get("topic", "").strip().lower() == clean_topic.lower() for item in active):
+            return False
+
+        if len(active) >= 8:
+            active.pop(0)
+
+        now_dt = datetime.datetime.now()
+        item = {
+            "id": f"cur_{now_dt.strftime('%Y%m%d_%H%M%S')}",
+            "created_at": now_dt.isoformat(),
+            "topic": clean_topic,
+            "context": context.strip() if context else "",
+            "source": source,
+            "asked_count": 0,
+            "last_asked_time": 0.0,
+            "resolved": False,
+        }
+        active.append(item)
+        try:
+            self.curiosity_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Recorded curiosity thread: %s (source: %s)", clean_topic, source)
+            return True
+        except Exception as err:
+            log.warning("Could not save curiosity thread: %s", err)
+            return False
+
+    def record_curiosity_asked(self, thread_id: str) -> None:
+        """Increment asked count for a curiosity thread."""
+        active = self.get_active_curiosity_threads()
+        changed = False
+        for item in active:
+            if item.get("id") == thread_id or thread_id in item.get("topic", "").lower():
+                item["asked_count"] = item.get("asked_count", 0) + 1
+                item["last_asked_time"] = time.time()
+                changed = True
+                break
+        if changed:
+            try:
+                self.curiosity_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            except Exception as err:
+                log.warning("Could not update curiosity asked state: %s", err)
+
+    def resolve_curiosity_thread(self, identifier: str) -> tuple[bool, str]:
+        """Resolve/remove an active curiosity thread by index, id, or topic substring."""
+        active = self.get_active_curiosity_threads()
+        clean = identifier.strip().lower()
+        target_idx = None
+        if clean.isdigit():
+            val = int(clean) - 1
+            if 0 <= val < len(active):
+                target_idx = val
+        if target_idx is None:
+            for idx, item in enumerate(active):
+                if item.get("id", "").lower() == clean or clean in item.get("topic", "").lower():
+                    target_idx = idx
+                    break
+        if target_idx is None:
+            return False, ""
+        resolved_item = active.pop(target_idx)
+        resolved_topic = resolved_item.get("topic", "")
+        try:
+            self.curiosity_path.write_text(json.dumps(active, indent=2), encoding="utf-8")
+            log.info("Resolved curiosity thread: %s", resolved_topic)
+            return True, resolved_topic
+        except Exception as err:
+            log.warning("Could not resolve curiosity thread: %s", err)
+            return False, ""
+
+    def clear_all_curiosity_threads(self) -> int:
+        """Clear all curiosity threads."""
+        active = self.get_active_curiosity_threads()
+        count = len(active)
+        try:
+            self.curiosity_path.write_text("[]", encoding="utf-8")
+            return count
+        except Exception as err:
+            log.warning("Could not clear curiosity threads: %s", err)
+            return 0
+
+    def get_curiosity_prompt(self, numbered: bool = True) -> str:
+        """Format active curiosity threads for Gemini prompt injection."""
+        active = self.get_active_curiosity_threads()
+        if not active:
+            return ""
+        lines = []
+        for i, item in enumerate(active[:5], 1):
+            top = item.get("topic", "")
+            ctx = item.get("context", "")
+            extra = f" ({ctx})" if ctx else ""
+            prefix = f"{i}. " if numbered else "- "
+            lines.append(f"{prefix}{top}{extra}")
+        return "\n".join(lines)
 
     def get_active_reminders(self, max_age_days: int = 30) -> list[dict]:
         """Read reminders from reminders.json, auto-prune anything older than 30 days, and return active ones."""
@@ -6964,7 +7160,7 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[ghost_prefix.end():]
 
-        l = re.sub(r"\[(?:seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
+        l = re.sub(r"\[(?:seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
         l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
@@ -7439,6 +7635,14 @@ class GeminiWorkerThread(QThread):
                             dtf_val = m.group(1).strip()
                             if dtf_val:
                                 memory.delete_temporary_fact(dtf_val)
+                        for m in re.finditer(r"\[(?:add_curiosity|curiosity):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            c_val = m.group(1).strip()
+                            if c_val:
+                                memory.add_curiosity_thread(c_val, source="screen_peek")
+                        for m in re.finditer(r"\[(?:resolve_curiosity|done_curiosity|del_curiosity):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                            rc_val = m.group(1).strip()
+                            if rc_val:
+                                memory.resolve_curiosity_thread(rc_val)
                         for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             r_val = m.group(1).strip()
                             if r_val:
@@ -7466,7 +7670,7 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -7534,6 +7738,14 @@ class GeminiWorkerThread(QThread):
                 dtf_val = m.group(1).strip()
                 if dtf_val:
                     memory.delete_temporary_fact(dtf_val)
+            for m in re.finditer(r"\[(?:add_curiosity|curiosity):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                c_val = m.group(1).strip()
+                if c_val:
+                    memory.add_curiosity_thread(c_val, source="pink_chat")
+            for m in re.finditer(r"\[(?:resolve_curiosity|done_curiosity|del_curiosity):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+                rc_val = m.group(1).strip()
+                if rc_val:
+                    memory.resolve_curiosity_thread(rc_val)
             for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 r_val = m.group(1).strip()
                 if r_val:
@@ -7606,7 +7818,7 @@ class GeminiWorkerThread(QThread):
                 c_val = m.group(1).strip()
                 if c_val:
                     memory.cancel_alarm_or_timer(c_val)
-        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
 
         return format_candidate_for_output(raw_text)
 
@@ -9647,6 +9859,9 @@ class YellowsPixelBuddies(QWidget):
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = time.perf_counter()
+        self._consecutive_unanswered_questions: int = 0
+        self._question_adaptive_cooldown: float = DIALOGUE_QUESTION_BASE_COOLDOWN_S
+        self._active_question_pending: bool = False
         self._keep_response_anim: bool = False
         # --- Annoyed on ignored dialogues & user away status -------------------
         self._consecutive_ignored_dialogues: int = 0
@@ -10309,7 +10524,8 @@ class YellowsPixelBuddies(QWidget):
 
         if category_or_text in ("idle", "question"):
             now = time.perf_counter()
-            can_ask_question = (now - getattr(self, "_last_question_dialogue_time", -9999.0) >= DIALOGUE_QUESTION_COOLDOWN_S)
+            question_cooldown = getattr(self, "_question_adaptive_cooldown", DIALOGUE_QUESTION_BASE_COOLDOWN_S)
+            can_ask_question = (now - getattr(self, "_last_question_dialogue_time", -9999.0) >= question_cooldown)
             is_question = (category_or_text == "question"
                            or (category_or_text == "idle"
                                and can_ask_question
@@ -10334,6 +10550,7 @@ class YellowsPixelBuddies(QWidget):
                         )
                     if q_item.question in GHOST_DIALOGUE_LINES:
                         self._start_ghost_speech()
+                    self._active_question_pending = True
                     self._dialogue_overlay.ask(
                         q_item.question,
                         q_item.choices,
@@ -10472,6 +10689,9 @@ class YellowsPixelBuddies(QWidget):
         now = time.perf_counter()
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
+        self._active_question_pending = False
+        self._consecutive_unanswered_questions = 0
+        self._question_adaptive_cooldown = DIALOGUE_QUESTION_BASE_COOLDOWN_S
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         if reaction_anim == "crying":
@@ -10509,6 +10729,14 @@ class YellowsPixelBuddies(QWidget):
                 dtf_val = m.group(1).strip()
                 if dtf_val:
                     self._memory.delete_temporary_fact(dtf_val)
+            for m in re.finditer(r"\[(?:add_curiosity|curiosity):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                c_val = m.group(1).strip()
+                if c_val:
+                    self._memory.add_curiosity_thread(c_val, source="choice_reaction")
+            for m in re.finditer(r"\[(?:resolve_curiosity|done_curiosity|del_curiosity):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                rc_val = m.group(1).strip()
+                if rc_val:
+                    self._memory.resolve_curiosity_thread(rc_val)
             for m in re.finditer(r"\[(?:complete_goal|finish_goal|done_goal):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
                 cg_val = m.group(1).strip()
                 if cg_val:
@@ -10522,7 +10750,7 @@ class YellowsPixelBuddies(QWidget):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     self._memory.update_goal_progress(t_val, n_val)
-            reaction_text = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
+            reaction_text = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -10591,6 +10819,15 @@ class YellowsPixelBuddies(QWidget):
                     return random.choices(["screen", "memory", "personality"], weights=[0.20, 0.70, 0.10])[0]
                 else:
                     return random.choices(["memory", "personality"], weights=[0.85, 0.15])[0]
+
+        has_curiosity = bool(hasattr(self, "_memory") and hasattr(self._memory, "get_active_curiosity_threads") and self._memory.get_active_curiosity_threads())
+
+        # Prioritize novelty & curiosity threads when Pink is actively harboring curiosities
+        if has_curiosity:
+            if can_screen:
+                return random.choices(["curiosity", "screen", "memory", "personality"], weights=[0.40, 0.35, 0.15, 0.10])[0]
+            else:
+                return random.choices(["curiosity", "memory", "personality"], weights=[0.55, 0.35, 0.10])[0]
 
         if can_screen and has_memory:
             return random.choices(["screen", "memory", "personality"], weights=[0.45, 0.40, 0.15])[0]
@@ -10923,6 +11160,10 @@ class YellowsPixelBuddies(QWidget):
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
 
+        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
+        if curiosities:
+            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
+
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
@@ -11076,6 +11317,22 @@ RULES:
                 f"Memory highlight to focus on: {highlight}\n"
                 f"Ask an interactive question following up or teasing them about this memory detail!"
             )
+        elif source == "curiosity":
+            active_c = self._memory.get_active_curiosity_threads() if hasattr(self._memory, "get_active_curiosity_threads") else []
+            chosen_c = random.choice(active_c) if active_c else {"topic": "strange human desktop habits"}
+            c_topic = chosen_c.get("topic", "")
+            c_ctx = chosen_c.get("context", "")
+            c_id = chosen_c.get("id")
+            if c_id and hasattr(self._memory, "record_curiosity_asked"):
+                self._memory.record_curiosity_asked(c_id)
+            user_prompt = (
+                f"[Interactive Question from Pink's Curiosity & Inquisitive Investigation]\n"
+                f"Pink has been harboring genuine tsundere curiosity about something regarding the user or their desktop!\n"
+                f"Curiosity topic to investigate: \"{c_topic}\"{f' (Context: {c_ctx})' if c_ctx else ''}\n"
+                f"Ask an interactive question exploring this topic! The Doll vessel wonders innocently with wide-eyed charm, "
+                f"while the Ghost tries to act like she is conducting mandatory royal minion surveillance.\n"
+                f"Provide 2 or 3 distinct Undertale/Deltarune style action choices for the user's answer."
+            )
         else:
             user_prompt = (
                 "[Interactive Question from Doll/Ghost Persona]\n"
@@ -11147,6 +11404,12 @@ RULES:
             if self._can_play("wistful"):
                 self._play("wistful", loop=True)
             self._say("* ...?", force=True, skippable=False, auto_dismiss=False, record_memory=False)
+        elif source == "curiosity":
+            if self._can_play("behind"):
+                self._play("behind", loop=True)
+            elif self._can_play("wistful"):
+                self._play("wistful", loop=True)
+            self._say("* ...?", force=True, skippable=False, auto_dismiss=False, record_memory=False)
         else:
             if self._can_play("idle"):
                 self._play("idle", loop=True)
@@ -11208,6 +11471,7 @@ RULES:
         if q_item.question in GHOST_DIALOGUE_LINES:
             self._start_ghost_speech()
 
+        self._active_question_pending = True
         self._dialogue_overlay.ask(
             q_item.question,
             q_item.choices,
@@ -11243,6 +11507,7 @@ RULES:
                 )
             if q_item.question in GHOST_DIALOGUE_LINES:
                 self._start_ghost_speech()
+            self._active_question_pending = True
             self._dialogue_overlay.ask(
                 q_item.question,
                 q_item.choices,
@@ -11308,6 +11573,19 @@ RULES:
         if self._phase is Phase.SUMMON_DIALOGUE:
             self._start_summon_intro()
             return
+
+        if getattr(self, "_active_question_pending", False):
+            self._active_question_pending = False
+            self._consecutive_unanswered_questions = getattr(self, "_consecutive_unanswered_questions", 0) + 1
+            self._question_adaptive_cooldown = min(
+                DIALOGUE_QUESTION_MAX_COOLDOWN_S,
+                DIALOGUE_QUESTION_BASE_COOLDOWN_S * (1.5 ** self._consecutive_unanswered_questions),
+            )
+            log.info(
+                "Interactive question dismissed unanswered (streak=%d). Adaptive cooldown backed off to %.1fs.",
+                self._consecutive_unanswered_questions,
+                self._question_adaptive_cooldown,
+            )
 
         # Check if dialogue was ignored by user
         was_ignored = False
@@ -11574,6 +11852,9 @@ RULES:
         now = time.perf_counter()
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
+        self._active_question_pending = False
+        self._consecutive_unanswered_questions = 0
+        self._question_adaptive_cooldown = DIALOGUE_QUESTION_BASE_COOLDOWN_S
 
         # Mechanical engagement: user submitted chat message within 10m of goal ask
         if getattr(self, "_last_asked_goal_id", None) and (time.time() - getattr(self, "_last_goal_asked_time", 0.0) <= 600.0):
@@ -12345,6 +12626,10 @@ RULES:
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
 
+        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
+        if curiosities:
+            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
+
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
@@ -12462,6 +12747,10 @@ RULES:
         now = time.perf_counter()
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
+        if not (had_screen and user_text.startswith("[Pink peeks")):
+            self._active_question_pending = False
+            self._consecutive_unanswered_questions = 0
+            self._question_adaptive_cooldown = DIALOGUE_QUESTION_BASE_COOLDOWN_S
 
         # Record auto screen comments into ambient dialogue context so Pink knows if user immediately replies
         if had_screen and user_text.startswith("[Pink peeks"):
@@ -12710,13 +12999,13 @@ RULES:
                         "Only tease if they are visibly procrastinating on pure entertainment for hours. If doing coursework or if unrelated, comment playfully on their study/project or fall back to Doll curiosity. (1-2 lines)"
                     )
             else:
-                cand_4_line = "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll observation or Ghost & Doll bickering about what is happening. (1-2 lines)"
+                cand_4_line = "- Candidate 4 (Doll Curiosity or Bickering): Childlike doll curiosity question or inquisitive Ghost & Doll bickering about what is happening on screen. (1-2 lines)"
 
             candidate_directive = (
                 "[STRUCTURAL DIRECTIVE: MULTI-CANDIDATE GENERATION (DECIDED BY ENGINE)]\n"
                 "Generate exactly 4 distinct candidate options for your spontaneous reaction, separated by '---' on a line by itself.\n"
                 "Each candidate MUST explore a different angle and use a completely different sentence opener:\n"
-                "- Candidate 1 (Curious Detail): Focus on a specific visible word, icon, code element, avatar, or window. (Ghost or Doll solo, 1 line)\n"
+                "- Candidate 1 (Inquisitive Curiosity & Question Hook): Formulate a genuine, punchy, open-ended question asking about a specific visible item, error, drawing, or activity on screen. (Ghost or Doll solo, 1 line ending in '?')\n"
                 "- Candidate 2 (Sassy Tease / Snark): Bratty tsundere tease or roast about what the user is doing. (Ghost solo, 1 line)\n"
                 "- Candidate 3 (Aesthetic / Vibe): Comment on colors, visual design elements, typography, or desktop layout. (Ghost or Doll, 1 line. NEVER make cliché remarks about 'dark mode', 'dark theme', or 'pitch-black void'!)\n"
                 f"{cand_4_line}\n\n"
@@ -12748,6 +13037,10 @@ RULES:
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
+        if curiosities:
+            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
 
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
@@ -13325,6 +13618,10 @@ RULES:
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
+        if curiosities:
+            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
 
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
@@ -14665,6 +14962,10 @@ RULES:
         active_alarms = self._memory.get_alarms_prompt()
         if active_alarms:
             system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
+
+        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
+        if curiosities:
+            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
 
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
