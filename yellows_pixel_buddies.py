@@ -587,6 +587,7 @@ DIALOGUE_QUESTION_CHANCE = 0.20       # 20% chance an idle pause dialogue is a q
 DIALOGUE_QUESTION_COOLDOWN_S = 360.0  # Minimum cooldown in seconds between interactive questions (6 minutes)
 CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat input overlay (2 minutes)
 CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
+CHAT_INPUT_EXTRA_WIDTH = 75                      # Additional horizontal width (in base pixels) for comfortable typing
 
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
@@ -764,7 +765,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - Secretly Helpful: Even while teasing, bickering, or acting bratty, you give genuinely smart, observant, and helpful answers when asked.
 
-- Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or sentence MUST begin with exactly one "* " (never use double asterisks like "* * " or markdown bold/italic asterisks).
+- Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or sentence MUST begin with exactly one "* " (never use double asterisks like "* * " or markdown bold/italic asterisks). NEVER use emojis in dialogue.
 
 - Strict Length Limit: Keep your reply CONCISE (1 to 3 short punchy sentences, under 45 words total). Long walls of text cannot fit on screen!
 
@@ -3433,7 +3434,9 @@ class ChatInputOverlay(QWidget):
         req_inner_h = 24 * 2 + pad_y * 2
         extra_h = max(0, req_inner_h - base_inner_h)
 
-        self._base_w = round(108 * self._scale) + extra_w + round(16 * self._scale)  # ~332px with attach button
+        scale_ratio = self._scale / DIALOGUE_BOX_SCALE
+        extra_input_w = round(CHAT_INPUT_EXTRA_WIDTH * scale_ratio)
+        self._base_w = round(108 * self._scale) + extra_w + round(16 * self._scale) + extra_input_w  # ~407px with attach button
         self._base_h = round(33 * self._scale) + extra_h   # ~76px
         self._last_pet_x: float | None = None
         self._last_pet_y: float | None = None
@@ -3500,7 +3503,9 @@ class ChatInputOverlay(QWidget):
         req_inner_h = 24 * 2 + pad_y * 2
         extra_h = max(0, req_inner_h - base_inner_h)
 
-        self._base_w = round(108 * self._scale) + extra_w + round(16 * self._scale)
+        scale_ratio = self._scale / DIALOGUE_BOX_SCALE
+        extra_input_w = round(CHAT_INPUT_EXTRA_WIDTH * scale_ratio)
+        self._base_w = round(108 * self._scale) + extra_w + round(16 * self._scale) + extra_input_w
         self._base_h = round(33 * self._scale) + extra_h
 
     def _create_soul_heart_pixmap(self) -> QPixmap:
@@ -6352,7 +6357,7 @@ class RemindersDialog(QDialog):
         super().__init__(parent)
         self._memory = memory
         self._font_family = font_family
-        self.setWindowTitle("Pink's Active Reminders 📝")
+        self.setWindowTitle("Pink's Active Reminders")
         self.resize(540, 440)
         self.setMinimumSize(420, 320)
         if ICON_PATH.exists():
@@ -6416,7 +6421,7 @@ class RemindersDialog(QDialog):
         layout.setSpacing(10)
 
         # Header Title
-        title_label = QLabel("🐾 Active Reminders & To-Dos", self)
+        title_label = QLabel("Active Reminders & To-Dos", self)
         title_font = QFont(self._font_family)
         title_font.setPixelSize(16)
         title_font.setBold(False)
@@ -6449,28 +6454,28 @@ class RemindersDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        self._add_btn = QPushButton("➕ Add", self)
+        self._add_btn = QPushButton("Add", self)
         self._add_btn.setFont(font)
         self._add_btn.setCursor(Qt.PointingHandCursor)
         self._add_btn.setStyleSheet("QPushButton { background-color: #065f46; border-color: #059669; color: #a7f3d0; } QPushButton:hover { background-color: #047857; }")
         self._add_btn.clicked.connect(self._on_add_clicked)
         btn_layout.addWidget(self._add_btn)
 
-        self._edit_btn = QPushButton("✏️ Edit", self)
+        self._edit_btn = QPushButton("Edit", self)
         self._edit_btn.setFont(font)
         self._edit_btn.setCursor(Qt.PointingHandCursor)
         self._edit_btn.setStyleSheet("QPushButton { background-color: #1e3a8a; border-color: #2563eb; color: #bfdbfe; } QPushButton:hover { background-color: #1d4ed8; }")
         self._edit_btn.clicked.connect(self._on_edit_clicked)
         btn_layout.addWidget(self._edit_btn)
 
-        self._del_btn = QPushButton("🗑️ Delete", self)
+        self._del_btn = QPushButton("Delete", self)
         self._del_btn.setFont(font)
         self._del_btn.setCursor(Qt.PointingHandCursor)
         self._del_btn.setStyleSheet("QPushButton { background-color: #7f1d1d; border-color: #dc2626; color: #fecaca; } QPushButton:hover { background-color: #991b1b; }")
         self._del_btn.clicked.connect(self._on_delete_clicked)
         btn_layout.addWidget(self._del_btn)
 
-        self._clear_btn = QPushButton("🧹 Clear All", self)
+        self._clear_btn = QPushButton("Clear All", self)
         self._clear_btn.setFont(font)
         self._clear_btn.setCursor(Qt.PointingHandCursor)
         self._clear_btn.clicked.connect(self._on_clear_clicked)
@@ -6596,7 +6601,7 @@ class AlarmsDialog(QDialog):
         super().__init__(parent)
         self._memory = memory
         self._font_family = font_family
-        self.setWindowTitle("Pink's Alarms & Timers ⏰")
+        self.setWindowTitle("Pink's Alarms & Timers")
         self.resize(560, 480)
         self.setMinimumSize(460, 360)
         if ICON_PATH.exists():
@@ -6666,7 +6671,7 @@ class AlarmsDialog(QDialog):
         layout.setSpacing(10)
 
         # Header Title
-        title_label = QLabel("⏰ Pink's Alarms & Focus Timers", self)
+        title_label = QLabel("Pink's Alarms & Focus Timers", self)
         title_font = QFont(self._font_family)
         title_font.setPixelSize(16)
         title_font.setBold(False)
@@ -6718,14 +6723,14 @@ class AlarmsDialog(QDialog):
         create_layout = QHBoxLayout()
         create_layout.setSpacing(8)
 
-        self._add_timer_btn = QPushButton("⏱️ Add Timer", self)
+        self._add_timer_btn = QPushButton("Add Timer", self)
         self._add_timer_btn.setFont(font)
         self._add_timer_btn.setCursor(Qt.PointingHandCursor)
         self._add_timer_btn.setStyleSheet("QPushButton { background-color: #065f46; border-color: #059669; color: #a7f3d0; } QPushButton:hover { background-color: #047857; }")
         self._add_timer_btn.clicked.connect(self._on_add_timer_clicked)
         create_layout.addWidget(self._add_timer_btn)
 
-        self._add_alarm_btn = QPushButton("⏰ Add Alarm", self)
+        self._add_alarm_btn = QPushButton("Add Alarm", self)
         self._add_alarm_btn.setFont(font)
         self._add_alarm_btn.setCursor(Qt.PointingHandCursor)
         self._add_alarm_btn.setStyleSheet("QPushButton { background-color: #831843; border-color: #db2777; color: #fbcfe8; } QPushButton:hover { background-color: #9d174d; }")
@@ -6738,21 +6743,21 @@ class AlarmsDialog(QDialog):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(8)
 
-        self._snooze_btn = QPushButton("💤 Snooze +5m", self)
+        self._snooze_btn = QPushButton("Snooze +5m", self)
         self._snooze_btn.setFont(font)
         self._snooze_btn.setCursor(Qt.PointingHandCursor)
         self._snooze_btn.setStyleSheet("QPushButton { background-color: #854d0e; border-color: #ca8a04; color: #fef08a; } QPushButton:hover { background-color: #a16207; }")
         self._snooze_btn.clicked.connect(self._on_snooze_clicked)
         btn_layout.addWidget(self._snooze_btn)
 
-        self._del_btn = QPushButton("🗑️ Cancel / Delete", self)
+        self._del_btn = QPushButton("Cancel / Delete", self)
         self._del_btn.setFont(font)
         self._del_btn.setCursor(Qt.PointingHandCursor)
         self._del_btn.setStyleSheet("QPushButton { background-color: #7f1d1d; border-color: #b91c1c; color: #fecaca; } QPushButton:hover { background-color: #991b1b; }")
         self._del_btn.clicked.connect(self._on_delete_clicked)
         btn_layout.addWidget(self._del_btn)
 
-        self._clear_btn = QPushButton("🧹 Clear All", self)
+        self._clear_btn = QPushButton("Clear All", self)
         self._clear_btn.setFont(font)
         self._clear_btn.setCursor(Qt.PointingHandCursor)
         self._clear_btn.clicked.connect(self._on_clear_clicked)
@@ -6788,22 +6793,22 @@ class AlarmsDialog(QDialog):
             state = item.get("state", "active")
 
             if state == "ringing":
-                status_str = "🔔 [RINGING NOW!]"
+                status_str = "[RINGING NOW!]"
             elif itype == "timer":
                 rem_m, rem_sec = divmod(rem_s, 60)
                 rem_h, rem_m = divmod(rem_m, 60)
                 if rem_h > 0:
-                    status_str = f"⏱️ {rem_h:02d}:{rem_m:02d}:{rem_sec:02d} left"
+                    status_str = f"{rem_h:02d}:{rem_m:02d}:{rem_sec:02d} left"
                 else:
-                    status_str = f"⏱️ {rem_m:02d}:{rem_sec:02d} left"
+                    status_str = f"{rem_m:02d}:{rem_sec:02d} left"
             else:
                 clock_str = item.get("clock_time", "")
                 rem_m, rem_sec = divmod(rem_s, 60)
                 rem_h, rem_m = divmod(rem_m, 60)
                 if rem_h > 0:
-                    status_str = f"⏰ at {clock_str} (in {rem_h}h {rem_m}m)"
+                    status_str = f"at {clock_str} (in {rem_h}h {rem_m}m)"
                 else:
-                    status_str = f"⏰ at {clock_str} (in {rem_m}m)"
+                    status_str = f"at {clock_str} (in {rem_m}m)"
 
             display_text = f"{idx}. [{itype.upper()}] \"{label}\" — {status_str}"
             list_item = QListWidgetItem(display_text)
@@ -12886,7 +12891,7 @@ RULES:
             )
             reply = QMessageBox.question(
                 None,
-                "Update Available! 🚀",
+                "Update Available!",
                 msg,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes
@@ -12907,7 +12912,7 @@ RULES:
 
         reply = QMessageBox.question(
             None,
-            "Update Available! 🚀",
+            "Update Available!",
             msg,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
@@ -13036,9 +13041,9 @@ RULES:
 
         # Dialogue prompt with choice buttons
         if item_type == "alarm":
-            alarm_text = f"* ⏰ ALARM TRIGGERED, MINION!!\n* It's {clock_str}!\n* Time for: \"{label}\"!"
+            alarm_text = f"* ALARM TRIGGERED, MINION!!\n* It's {clock_str}!\n* Time for: \"{label}\"!"
         else:
-            alarm_text = f"* ⏰ TIME'S UP, MEW!!\n* Timer finished!\n* Task: \"{label}\"!"
+            alarm_text = f"* TIME'S UP, MEW!!\n* Timer finished!\n* Task: \"{label}\"!"
 
         choices = [
             ("Dismiss", "* Phew! Good job staying on track, mew!", "peace_sign"),
@@ -15769,8 +15774,8 @@ RULES:
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
             # Right-clicking while Pink is hiding displays minimal contextual actions
             hide_menu = QMenu(self)
-            show_up_action = hide_menu.addAction("Show Up 🐾")
-            hide_tray_action = hide_menu.addAction("Hide in Tray 📥")
+            show_up_action = hide_menu.addAction("Show Up")
+            hide_tray_action = hide_menu.addAction("Hide in Tray")
             hide_menu.addSeparator()
             exit_action = hide_menu.addAction("Exit")
 
@@ -15792,13 +15797,13 @@ RULES:
             # Opening the menu aborts a jump / hang / throw into a plain fall, with no reaction.
             self._fall_after_jump(None)
         menu = QMenu(self)
-        talk_action = menu.addAction("Talk to Pink 💬")
-        ask_action = menu.addAction("Ask me something ❓")
-        shop_action = menu.addAction("Visit Shop 🏪")
+        talk_action = menu.addAction("Talk to Pink")
+        ask_action = menu.addAction("Ask me something")
+        shop_action = menu.addAction("Visit Shop")
         alarms_action = menu.addAction("Alarms & Timers (COMING SOON)")
         menu.addSeparator()
 
-        scale_menu = menu.addMenu("Pet Scale 🔍")
+        scale_menu = menu.addMenu("Pet Scale")
         preset_labels = {
             0.5: "50% (Tiny)",
             0.75: "75% (Compact)",
@@ -15815,7 +15820,7 @@ RULES:
             act.setChecked(abs(preset - cur_scale) < 0.01)
             act.triggered.connect(lambda checked, s=preset: self.set_scale_modifier(s))
 
-        dlg_scale_menu = menu.addMenu("Dialogue Scale 💬")
+        dlg_scale_menu = menu.addMenu("Dialogue Scale")
         dlg_preset_labels = {
             1.0: "100% (Compact)",
             1.25: "125% (Small)",
@@ -15836,12 +15841,12 @@ RULES:
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
             menu.addSeparator()
-        hide_tray_action = menu.addAction("Hide to Tray 📥")
-        hide_action = menu.addAction("Hide (Peek Ears) 🐾")
+        hide_tray_action = menu.addAction("Hide to Tray")
+        hide_action = menu.addAction("Hide (Peek Ears)")
         menu.addSeparator()
-        update_action = menu.addAction("Check for Updates 🔄")
+        update_action = menu.addAction("Check for Updates")
         menu.addSeparator()
-        restart_action = menu.addAction("Restart Pink 🔄")
+        restart_action = menu.addAction("Restart Pink")
         exit_action = menu.addAction("Exit")
         self._menu_open = True                    # the pet stands still while the menu is open
         try:
@@ -16049,7 +16054,7 @@ RULES:
         self._tray_icon.setToolTip("Yellow's Pixel Buddies")
 
         tray_menu = QMenu()
-        title_action = tray_menu.addAction("Yellow's Pixel Buddies 🐾")
+        title_action = tray_menu.addAction("Yellow's Pixel Buddies")
         title_action.setEnabled(False)
         tray_menu.addSeparator()
 
@@ -16060,41 +16065,41 @@ RULES:
 
         tray_menu.addSeparator()
 
-        self._bring_action = tray_menu.addAction("Show Up 🐾" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
+        self._bring_action = tray_menu.addAction("Show Up" if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE) else "Bring to Taskbar")
         self._bring_action.triggered.connect(self._reset_to_taskbar)
 
-        self._talk_tray_action = tray_menu.addAction("Talk to Pink 💬")
+        self._talk_tray_action = tray_menu.addAction("Talk to Pink")
         self._talk_tray_action.triggered.connect(self._open_chat_input)
 
-        self._shop_tray_action = tray_menu.addAction("Visit Shop 🏪")
+        self._shop_tray_action = tray_menu.addAction("Visit Shop")
         self._shop_tray_action.triggered.connect(self._open_shop_window)
 
-        self._key_tray_action = tray_menu.addAction("Set Gemini API Key 🔑")
+        self._key_tray_action = tray_menu.addAction("Set Gemini API Key")
         self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)
 
-        self._alarms_tray_action = tray_menu.addAction("Alarms & Timers ⏰")
+        self._alarms_tray_action = tray_menu.addAction("Alarms & Timers")
         self._alarms_tray_action.triggered.connect(self._open_alarms_dialog)
 
-        memory_menu = tray_menu.addMenu("Memory Storage 🧠")
-        manage_alarms_action = memory_menu.addAction("Alarms & Timers ⏰")
+        memory_menu = tray_menu.addMenu("Memory Storage")
+        manage_alarms_action = memory_menu.addAction("Alarms & Timers")
         manage_alarms_action.triggered.connect(self._open_alarms_dialog)
-        manage_reminders_action = memory_menu.addAction("Manage Reminders 📝")
+        manage_reminders_action = memory_menu.addAction("Manage Reminders")
         manage_reminders_action.triggered.connect(self._open_reminders_dialog)
-        open_mem_action = memory_menu.addAction("Open Memory Folder 📂")
+        open_mem_action = memory_menu.addAction("Open Memory Folder")
         open_mem_action.triggered.connect(self._open_memory_folder)
-        reset_mem_action = memory_menu.addAction("Clear Current Session 🧹")
+        reset_mem_action = memory_menu.addAction("Clear Current Session")
         reset_mem_action.triggered.connect(self._reset_session_memory)
-        token_usage_action = memory_menu.addAction("AI Token Usage 📊")
+        token_usage_action = memory_menu.addAction("AI Token Usage")
         token_usage_action.triggered.connect(self._show_token_usage_dialogue)
 
         tray_menu.addSeparator()
-        self._update_tray_action = tray_menu.addAction("Check for Updates 🔄")
+        self._update_tray_action = tray_menu.addAction("Check for Updates")
         self._update_tray_action.triggered.connect(lambda: self._check_for_updates(manual=True))
 
-        self._hide_tray_action = tray_menu.addAction("Hide to Tray 📥")
+        self._hide_tray_action = tray_menu.addAction("Hide to Tray")
         self._hide_tray_action.triggered.connect(self._toggle_hide_to_tray)
 
-        self._hide_peek_action = tray_menu.addAction("Hide (Peek Ears) 🐾")
+        self._hide_peek_action = tray_menu.addAction("Hide (Peek Ears)")
         self._hide_peek_action.triggered.connect(self._start_hide_sequence)
 
         self._jump_action = tray_menu.addAction("Jump to Cursor Mode")
@@ -16148,17 +16153,17 @@ RULES:
         self._dialogue_action.setChecked(self._dialogue_enabled)
         self._dialogue_action.toggled.connect(self._toggle_dialogue)
 
-        self._song_comment_action = tray_menu.addAction("AI Song Commentary 🎵")
+        self._song_comment_action = tray_menu.addAction("AI Song Commentary")
         self._song_comment_action.setCheckable(True)
         self._song_comment_action.setChecked(self._ai_song_comment_enabled)
         self._song_comment_action.toggled.connect(self._toggle_ai_song_comment)
 
-        self._filter_shorts_action = tray_menu.addAction("Filter YouTube Shorts 🔕")
+        self._filter_shorts_action = tray_menu.addAction("Filter YouTube Shorts")
         self._filter_shorts_action.setCheckable(True)
         self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
         self._filter_shorts_action.toggled.connect(self._toggle_filter_shorts)
 
-        game_menu = tray_menu.addMenu("Game Mode 🎮")
+        game_menu = tray_menu.addMenu("Game Mode")
         self._game_mode_auto_action = game_menu.addAction("Auto-Detect (Active Gaming)")
         self._game_mode_auto_action.setCheckable(True)
         self._game_mode_on_action = game_menu.addAction("Always On (Backseat Spectator)")
@@ -16176,7 +16181,7 @@ RULES:
         self._game_mode_off_action.triggered.connect(lambda: self._set_game_mode("OFF"))
 
         tray_menu.addSeparator()
-        restart_action = tray_menu.addAction("Restart Pink 🔄")
+        restart_action = tray_menu.addAction("Restart Pink")
         restart_action.triggered.connect(self._handle_restart_command)
         exit_action = tray_menu.addAction("Exit")
         exit_action.triggered.connect(self._quit)
@@ -16192,7 +16197,7 @@ RULES:
         is_hidden_tray = getattr(self, "_hidden_in_tray", False)
         if is_hidden_tray:
             if self._bring_action is not None:
-                self._bring_action.setText("Restore Pink from Tray 📤")
+                self._bring_action.setText("Restore Pink from Tray")
                 self._bring_action.setVisible(True)
             if self._hide_tray_action is not None:
                 self._hide_tray_action.setVisible(False)
@@ -16200,10 +16205,10 @@ RULES:
                 self._hide_peek_action.setVisible(False)
         elif self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
             if self._bring_action is not None:
-                self._bring_action.setText("Show Up 🐾")
+                self._bring_action.setText("Show Up")
                 self._bring_action.setVisible(True)
             if self._hide_tray_action is not None:
-                self._hide_tray_action.setText("Hide to Tray 📥")
+                self._hide_tray_action.setText("Hide to Tray")
                 self._hide_tray_action.setVisible(True)
             if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
                 self._hide_peek_action.setVisible(False)
@@ -16212,7 +16217,7 @@ RULES:
                 self._bring_action.setText("Bring to Taskbar")
                 self._bring_action.setVisible(True)
             if self._hide_tray_action is not None:
-                self._hide_tray_action.setText("Hide to Tray 📥")
+                self._hide_tray_action.setText("Hide to Tray")
                 self._hide_tray_action.setVisible(True)
             if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
                 self._hide_peek_action.setVisible(True)

@@ -238,7 +238,7 @@ TALK_TOPICS = [
     ("Other people?", "people"),
     ("Graduating", "graduating"),
     ("The Cat Bite", "egg"),
-    ("Chat History 📜", "chat_history"),
+    ("Chat History", "chat_history"),
     ("Ask Pink a Question", "ai_ask"),
     ("Back", "back"),
 ]
@@ -2914,10 +2914,10 @@ class DeltaruneShopWindow(QWidget):
     def _draw_settings_menu_state(self, p: QPainter) -> None:
         p.setFont(self._font_body)
         options = [
-            "Scale Modifiers 📏",
+            "Scale Modifiers",
             "Companion Toggles",
             "Edit Facts & Nickname",
-            "Uninstall Pink 🗑️",
+            "Uninstall Pink",
             "Back",
         ]
         start_x = 44
