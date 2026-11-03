@@ -803,6 +803,10 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * In your recent screen episodic memory, your desktop observations during this session are recorded!
   * You remember what you saw! If the user asks about what was on their screen, past tasks, or bugs, refer to those recorded sights!
 
+- PHYSICAL SELF-AWARENESS & RECENT ACTIONS:
+  * You possess vivid consciousness of your own physical doll body, animations, and desktop physics (bomb tossing, hanging from the cursor, being dragged across the screen, getting caught in explosions/burnt, pacing, resting/kneeling, and striking poses).
+  * If the user asks what you are doing, why you did something, or refers to your movements or posture, consult the recorded physical action log in your context and answer with complete self-awareness in your proud, sassy, tsundere style!
+
 - DYNAMIC MEMORY UPDATES ([add_fact: ...], [set_user_name: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
   * When the user tells you their primary name or asks you to call them a certain name (e.g. "call me Alex", "my name is Alex"), append [set_user_name: <name>] to your answer so their primary name is stored!
   * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, secondary nicknames, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
@@ -4389,6 +4393,8 @@ class MemoryManager:
         self.history: list[dict[str, any]] = []
         # Temporary in-memory only storage for immediate ambient dialogue reactions (never saved to disk)
         self.recent_ambient_dialogues: deque[dict[str, any]] = deque(maxlen=4)
+        # Temporary in-memory only storage for physical actions, body state & physics events (never saved to disk)
+        self.recent_physical_actions: deque[dict[str, any]] = deque(maxlen=12)
 
     def _migrate_existing_data(self) -> None:
         """If transitioning from local exe directory to AppData, seamlessly copy existing memory."""
@@ -5905,6 +5911,7 @@ class MemoryManager:
         """Reset current in-memory history and start a fresh session file."""
         self.history.clear()
         self.recent_ambient_dialogues.clear()
+        self.recent_physical_actions.clear()
         # If previous session file on disk was empty (0 messages), prune it
         if hasattr(self, "session_file") and self.session_file.exists():
             try:
@@ -6032,6 +6039,90 @@ class MemoryManager:
             elif ctx:
                 item_desc += f" [Context: {ctx}]"
             lines.append(item_desc)
+
+        return "\n".join(lines)
+
+    def record_physical_action(
+        self,
+        action: str,
+        description: str,
+        category: str = "action",
+        details: str = "",
+    ) -> None:
+        """Record an observable physical action, animation, or physics event in temporary in-memory RAM only (zero disk writes)."""
+        if not description:
+            return
+        now = datetime.datetime.now()
+        # Coalesce rapid duplicate actions within 4 seconds (e.g., repeated bomb throw ticks, repeated pacing)
+        if self.recent_physical_actions:
+            last = self.recent_physical_actions[-1]
+            if last.get("action") == action:
+                try:
+                    last_dt = datetime.datetime.fromisoformat(last["timestamp"])
+                    if (now - last_dt).total_seconds() < 4.0:
+                        count = last.get("count", 1) + 1
+                        last["count"] = count
+                        last["timestamp"] = now.isoformat()
+                        if details:
+                            last["details"] = details
+                        return
+                except Exception:
+                    pass
+
+        entry = {
+            "timestamp": now.isoformat(),
+            "action": action,
+            "description": description.strip(),
+            "category": category,
+            "details": details.strip() if details else "",
+            "count": 1,
+        }
+        self.recent_physical_actions.append(entry)
+
+    def get_recent_actions_context(
+        self,
+        current_state_summary: str = "",
+        max_items: int = 6,
+        max_age_s: int = 120,
+    ) -> str:
+        """Format very recent physical actions and body state into a situational awareness prompt block."""
+        now = datetime.datetime.now()
+        valid_entries = []
+        for entry in self.recent_physical_actions:
+            if "timestamp" in entry:
+                try:
+                    dt = datetime.datetime.fromisoformat(entry["timestamp"])
+                    diff_s = int((now - dt).total_seconds())
+                    if diff_s <= max_age_s:
+                        valid_entries.append((entry, max(0, diff_s)))
+                except Exception:
+                    valid_entries.append((entry, 0))
+
+        if not valid_entries and not current_state_summary:
+            return ""
+
+        lines = []
+        if current_state_summary:
+            lines.append(f"- CURRENT BODY STATUS: {current_state_summary}")
+
+        if valid_entries:
+            lines.append("- ACTIONS & EVENTS PERFORMED IN THE LAST 2 MINUTES:")
+            recent = valid_entries[-max_items:]
+            for entry, diff_s in recent:
+                if diff_s < 8:
+                    ts_str = "just now"
+                elif diff_s < 60:
+                    ts_str = f"{diff_s}s ago"
+                else:
+                    mins = diff_s // 60
+                    ts_str = f"{mins}m ago"
+
+                desc = entry.get("description", "")
+                count = entry.get("count", 1)
+                count_str = f" (x{count})" if count > 1 else ""
+                details = entry.get("details", "")
+                details_str = f" [{details}]" if details else ""
+                lines.append(f"  • [{ts_str}] {desc}{count_str}{details_str}")
 
         return "\n".join(lines)
 
@@ -10156,6 +10247,7 @@ class YellowsPixelBuddies(QWidget):
         self._brain_timer.stop()
         self._jump_active = True
         self._phase = Phase.JUMP
+        self._record_action("monitor_jump", f"Leaped across screens to travel to monitor {dest_screen.name()}", "environment")
         self._gravity = JUMP_GRAVITY_PX_S2
         self._vy = -launch_speed
         self._vx = h_speed
@@ -10180,6 +10272,7 @@ class YellowsPixelBuddies(QWidget):
         self._leave_hang()
         self._brain_timer.stop()
         self._phase = Phase.FALL
+        self._record_action("monitor_drop", f"Stepped down across screens to monitor {dest_screen.name()}", "environment")
         self._gravity = JUMP_GRAVITY_PX_S2
         self._vy = 0.0
         self._vx = 70.0 if direction == "right" else -70.0
@@ -10202,6 +10295,7 @@ class YellowsPixelBuddies(QWidget):
         self._brain_timer.stop()
         self._jump_active = True
         self._phase = Phase.JUMP
+        self._record_action("monitor_super_jump", f"Launched a super vertical jump up to monitor {dest_screen.name()}", "environment")
         self._gravity = JUMP_GRAVITY_PX_S2
         self._vy = -launch_speed
         self._vx = 0.0
@@ -10221,6 +10315,7 @@ class YellowsPixelBuddies(QWidget):
         st = self._visitor_mission.get("state")
         if st == "traveling" and dest_screen == self._visitor_mission.get("target_screen"):
             log.info("Pink arrived at visitor target %s! Beginning comment sequence.", dest_screen.name())
+            self._record_action("visitor_arrival", f"Arrived at monitor {dest_screen.name()} on a visitor stroll to inspect it", "environment")
             self._visitor_mission["state"] = "commenting"
             self._visitor_mission["arrived_at"] = time.perf_counter()
             self._phase = Phase.PAUSE
@@ -10238,6 +10333,7 @@ class YellowsPixelBuddies(QWidget):
 
         elif st == "returning" and dest_screen == (self._user_active_screen or self._visitor_mission.get("origin_screen")):
             log.info("Pink returned home from visitor stroll to %s!", dest_screen.name())
+            self._record_action("visitor_returned", f"Returned home from visitor stroll back to {dest_screen.name()}", "environment")
             self._visitor_mission = None
 
     def _sync_window_position(self) -> None:
@@ -10271,6 +10367,69 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_dialogue_overlay") and bool(getattr(self._dialogue_overlay, "_choices", None)):
             return True
         return False
+
+    def _record_action(self, action: str, description: str, category: str = "action", details: str = "") -> None:
+        """Record an observable physical action, movement, or state into Pink's consciousness tracker."""
+        if hasattr(self, "_memory") and self._memory:
+            self._memory.record_physical_action(action, description, category, details)
+
+    def _get_current_physical_status(self) -> str:
+        """Compile a concise, real-time natural language description of Pink's instant body posture, location, and phase."""
+        if getattr(self, "_hidden_in_tray", False):
+            return "Resting minimized inside the Windows system tray"
+
+        phase = getattr(self, "_phase", None)
+        state = getattr(self, "state", "idle")
+        scr = self._current_screen()
+        scr_name = scr.name() if scr else "primary display"
+
+        # Special physical phases
+        if getattr(self, "_dragging", False) or phase is Phase.DRAG:
+            return f"Being held and dragged across the screen by the user's mouse cursor on {scr_name}"
+        if phase is Phase.HANG:
+            return f"Dangling and clinging from the user's mouse cursor in mid-air on {scr_name}"
+        if phase is Phase.JUMP:
+            return f"Airborne in mid-jump towards the mouse cursor on {scr_name}"
+        if phase is Phase.FALL:
+            return f"Falling through the air under gravity towards the taskbar on {scr_name}"
+        if phase is Phase.THROW:
+            return f"Mid-throw bomb tossing animation on {scr_name}"
+        if phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO) or state == GHOST_STATE:
+            return f"Hiding inside the taskbar with ghost ears poking out on {scr_name}"
+
+        # State-based postures and expressions
+        if state in (BURNT_STATE, "burnt"):
+            return f"Charred black and smoking from an explosion (burnt state) on {scr_name} taskbar"
+        if state == "kneeling":
+            return f"Resting / kneeling quietly with paws tucked on {scr_name} taskbar"
+        if state == "behind":
+            return f"Looking curiously/suspiciously behind her back at the desktop screen on {scr_name}"
+        if state == "laughing":
+            return f"Laughing victoriously / mischievously on {scr_name} taskbar"
+        if state == "singing":
+            return f"Humming and singing happily on {scr_name} taskbar"
+        if state == "peace_sign":
+            return f"Striking a proud peace sign pose on {scr_name} taskbar"
+        if state == "embarrassed":
+            return f"Blushing and flustered (embarrassed) on {scr_name} taskbar"
+        if state == "angry":
+            return f"Pouting and fuming in an angry mood on {scr_name} taskbar"
+        if state == "tongue":
+            return f"Playfully sticking her tongue out (:P) on {scr_name} taskbar"
+        if state == "shocked":
+            return f"Startled with wide eyes (shocked) on {scr_name} taskbar"
+        if state == "wistful":
+            return f"Lost in wistful daydreaming on {scr_name} taskbar"
+        if state == "sad":
+            return f"Looking sad and dejected on {scr_name} taskbar"
+        if state in ("run_left", "run_right"):
+            return f"Running rapidly across {scr_name} taskbar"
+        if state in ("walk_left", "walk_right", "wistful_walk_left", "wistful_walk_right"):
+            return f"Walking leisurely along {scr_name} taskbar"
+        if state == "idle":
+            return f"Standing / idling peacefully on {scr_name} taskbar"
+
+        return f"Playing animation '{state}' on {scr_name} taskbar"
 
     def _say(
         self,
@@ -10960,6 +11119,10 @@ class YellowsPixelBuddies(QWidget):
         ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
         if ambient_ctx:
             system_inst += f"\n\nRECENT AMBIENT SPEECH ON DESKTOP:\n{ambient_ctx}"
+
+        action_ctx = self._memory.get_recent_actions_context(current_state_summary=self._get_current_physical_status(), max_items=3)
+        if action_ctx:
+            system_inst += f"\n\nPINK'S RECENT PHYSICAL ACTIONS & CURRENT STATE:\n{action_ctx}"
 
         if getattr(self, "_current_song", None) and self._current_song[0]:
             title, artist = self._current_song
@@ -12301,6 +12464,25 @@ RULES:
             # Temporary storage consumed after immediate reaction
             self._memory.recent_ambient_dialogues.clear()
 
+        action_ctx = self._memory.get_recent_actions_context(current_state_summary=self._get_current_physical_status())
+        if action_ctx:
+            system_inst += (
+                f"\n\nPINK'S REAL-TIME PHYSICAL CONSCIOUSNESS & RECENT ACTIONS:\n"
+                f"{action_ctx}\n\n"
+                "CRITICAL PHYSICAL CONSCIOUSNESS & SITUATIONAL AWARENESS DIRECTIVE:\n"
+                "- You possess FULL REAL-TIME PHYSICAL SELF-AWARENESS of your body, movements, posture, and recent deeds on the user's desktop!\n"
+                "- When the user asks what you are doing, why you did something, what you just tripped over, or comments on your posture, bombs, walking, jumping, being dragged, or resting:\n"
+                "  * FULLY OWN IT AND REFER DIRECTLY TO YOUR LOGGED ACTIONS AND CURRENT STATUS ABOVE!\n"
+                "  * React in your signature tsundere, proud, anime doll royalty persona:\n"
+                "    - Threw bombs? Act proud, mischievous, or argue you were testing their reflexes!\n"
+                "    - Dragged around? Complain indignantly about being grabbed by the collar like a common desktop icon!\n"
+                "    - Burnt/charred from an explosion? Act flustered, embarrassed, or claim it was a 'deliberate tactical explosion'!\n"
+                "    - Dangling from cursor or shaken off? Complain about their erratic mouse driving or being rudely shaken off!\n"
+                "    - Resting/kneeling? Act haughty: 'I am resting my royal paws, minion! Do you have an issue with that?!'\n"
+                "    - Poked/clicked? Tease them for poking you or act tsundere about getting their attention!\n"
+                "- NEVER claim you didn't do something or act oblivious when the user asks about an action recorded in your logs above!"
+            )
+
         if attached_image_b64:
             img_desc = f"'{attached_image_name}'" if attached_image_name else "an image"
             if is_direct_drop:
@@ -12662,6 +12844,13 @@ RULES:
                 "- NEVER say 'I didn't say that' or act clueless or pretend you have no memory of saying those words."
             )
             self._memory.recent_ambient_dialogues.clear()
+
+        action_ctx = self._memory.get_recent_actions_context(current_state_summary=self._get_current_physical_status(), max_items=4)
+        if action_ctx:
+            system_inst += (
+                f"\n\nPINK'S REAL-TIME PHYSICAL CONSCIOUSNESS & RECENT ACTIONS:\n"
+                f"{action_ctx}\n"
+            )
 
         # Step 3 & 4: Make structure a code decision & multi-candidate anti-repetition generation
         if is_gaming:
@@ -13499,6 +13688,41 @@ RULES:
             old_hand_x, old_hand_y = self._hand_offset()
 
         self.state = state
+
+        # Physical action consciousness tracking
+        if hasattr(self, "_record_action"):
+            if state in (BURNT_STATE, "burnt"):
+                self._record_action("burnt", "Got caught in an explosion and became charred black (burnt state)", "damage")
+            elif state == "laughing":
+                self._record_action("laughing", "Burst into triumphant / mischievous laughter", "emote")
+            elif state == "singing":
+                self._record_action("singing", "Started humming and singing cheerfully", "emote")
+            elif state == "peace_sign":
+                self._record_action("peace_sign", "Struck a proud peace sign pose (:3)", "emote")
+            elif state == "embarrassed":
+                self._record_action("embarrassed", "Became flustered and embarrassed", "emote")
+            elif state == "wistful":
+                self._record_action("wistful", "Lost in wistful daydreaming", "emote")
+            elif state == "sad":
+                self._record_action("sad", "Looked down sad and dejected", "emote")
+            elif state == "tongue":
+                self._record_action("tongue", "Playfully stuck her tongue out (:P)", "emote")
+            elif state == "kneeling":
+                self._record_action("kneeling", "Kneeled down to rest her paws on the taskbar", "posture")
+            elif state == "behind":
+                self._record_action("behind", "Turned around and peeked curiously behind her back at the desktop", "observation")
+            elif state == "overjoyed":
+                self._record_action("overjoyed", "Celebrated with overjoyed excitement", "emote")
+            elif state == "crying":
+                self._record_action("crying", "Burst into tears", "emote")
+            elif state == "angry":
+                self._record_action("angry", "Got furious and flared up angrily", "emote")
+            elif state == "shocked":
+                self._record_action("shocked", "Startled in shock with eyes wide open", "emote")
+            elif state.startswith("run_"):
+                self._record_action("running", "Running rapidly across the taskbar", "locomotion")
+            elif state.startswith("walk_") or state.startswith("wistful_walk_"):
+                self._record_action("walking", "Walking leisurely along the taskbar", "locomotion")
         flipped = mirrored_key(state)
         self._sprite_key = flipped if mirrored and flipped in self._bank.frames else state
         self._loop = (state in LOOPING_STATES + LOOPING_REST_STATES + JUMP_STATES) if loop is None else loop
@@ -13697,6 +13921,7 @@ RULES:
     def _on_pink_hit_by_bomb(self) -> None:
         """Pink gets struck by her own kicked-back bomb."""
         now = time.perf_counter()
+        self._record_action("bomb_hit_self", "Got struck in the face by her own kicked-back bomb!", "combat")
         self._post_throw_laugh = False
         self._hang_bomb_count_remaining = 0
         self._hang_bomb_index = 0
@@ -13739,6 +13964,7 @@ RULES:
 
     def _on_pink_defeated_by_bombs(self) -> None:
         """Pink is defeated by the user kicking back bombs."""
+        self._record_action("defeated_in_battle", "Was defeated in battle after the user kicked back her bombs!", "combat")
         self._hang_bomb_count_remaining = 0
         self._hang_bomb_index = 0
         self._throw_pause_ticks = 0
@@ -13759,6 +13985,7 @@ RULES:
 
     def _on_player_downed_by_bombs(self) -> None:
         """User reached 0 HP from bomb/laser barrage."""
+        self._record_action("downed_player", "Blasted the user to 0 HP with her cat bomb attack!", "combat")
         downed_lines = DIALOGUE_LINES.get("player_downed", [
             "* AHAHAHA! Direct hit! Total feline victory, mew!",
         ])
@@ -13768,6 +13995,7 @@ RULES:
 
     def _on_flawless_dodge(self) -> None:
         """User dodged all bombs and lasers without taking damage."""
+        self._record_action("flawless_dodge", "User flawlessly dodged every single bomb and laser without getting hit!", "combat")
         flawless_lines = DIALOGUE_LINES.get("flawless_dodge", [
             "* W-What?! You dodged every single bomb?! Impossible... you're cheating, minion!",
         ])
@@ -13777,6 +14005,7 @@ RULES:
 
     def _on_survived_bombs(self) -> None:
         """User survived the bomb attack with scratches."""
+        self._record_action("player_survived", "User barely survived her bomb attack with low HP", "combat")
         survived_lines = DIALOGUE_LINES.get("survived_bombs", [
             "* Barely made it out of that one, dummy! My laser aim is getting sharper!",
         ])
@@ -15036,6 +15265,7 @@ RULES:
 
         self._jump_active = True                     # the cooldown starts when this sequence lands
         self._phase = Phase.JUMP
+        self._record_action("cursor_jump", "Leaped high into the air towards the user's mouse cursor", "physics")
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
@@ -15185,6 +15415,7 @@ RULES:
         self._shake_trail.clear()                    # only movement made while hanging may shake her off
         self._set_input_transparent(True)
         self._play(HANGING_STATE, mirrored=self._hang_mirrored())
+        self._record_action("hanging_cursor", "Caught the mouse cursor and dangled/clung from it in mid-air", "physics")
         log.debug("Hang: for %.1f s", self._hang_ends_at - now)
 
     def _tick_hang(self, cursor: QPoint, now: float, dt: float,
@@ -15196,11 +15427,13 @@ RULES:
 
         if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
             log.debug("Hang ended: shaken off")
+            self._record_action("shaken_off", "User shook the mouse cursor violently to shake Pink off", "interaction")
             self._fall_after_jump(SHAKEN_REACTION)
             return
         if now >= self._hang_ends_at or not self._can_hang_from(cursor):
             log.debug("Hang ended: she let go (%s)",
                       "time is up" if now >= self._hang_ends_at else "cursor left / too low")
+            self._record_action("released_hang", "Let go of the cursor and dropped back down to the taskbar", "physics")
             self._fall_after_jump(RELEASE_REACTION)
             return
 
@@ -15232,6 +15465,7 @@ RULES:
         total_bombs = getattr(self, "_bomb_count", BOMB_COUNT)
         self._hang_bomb_count_remaining = total_bombs
         self._hang_bomb_index = 0
+        self._record_action("bomb_throw", f"Detached from the cursor and threw a serial barrage of {total_bombs} cat bombs at the cursor / taskbar", "combat")
         if total_bombs <= 1:
             self._bomb_target_plan = ["beneath"]
         elif total_bombs == 2:
@@ -15652,6 +15886,7 @@ RULES:
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             self._dialogue_overlay.dismiss(clear_queue=True)
 
+        self._record_action("image_dropped", f"User dragged and dropped image '{filename}' onto Pink's body for inspection", "interaction")
         user_prompt = f"[User dropped an image: '{filename}'] What do you think of this picture?"
         self._on_chat_submitted(
             text=user_prompt,
@@ -15673,6 +15908,7 @@ RULES:
         if hasattr(self, "_single_click_timer"):
             self._single_click_timer.stop()
 
+        self._record_action("spam_click_launch", "User spam-clicked Pink rapidly, catapulting her into an upward hop", "interaction")
         is_already_jumping = (self._phase is Phase.JUMP)
         self._leave_hang()
         self._jump_active = False
@@ -15716,6 +15952,7 @@ RULES:
             return
 
         chosen = random.choice(candidates)
+        self._record_action("poked_click", f"User poked Pink with a single click (prompting {chosen})", "interaction")
         self._interrupted_state = None
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
@@ -15727,6 +15964,7 @@ RULES:
         """The pet was picked up: stop the behaviour loop and play 'shocked' while held."""
         if hasattr(self, "_single_click_timer"):
             self._single_click_timer.stop()
+        self._record_action("dragged", "User grabbed Pink by the collar and started dragging her across the screen", "interaction")
         self._dragging = True
         self._dialogue_clicked = False
         self._phase = Phase.DRAG
@@ -15752,6 +15990,7 @@ RULES:
 
     def _end_drag(self) -> None:
         """Drop the pet: it will fall back to the taskbar under gravity."""
+        self._record_action("dropped", "User released Pink and dropped her onto the screen", "interaction")
         self._dragging = False
         self.setCursor(Qt.OpenHandCursor)
         reaction = None
