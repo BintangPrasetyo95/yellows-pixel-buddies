@@ -2945,8 +2945,12 @@ class DeltaruneShopWindow(QWidget):
             temp_count = 0
             if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "get_active_temporary_facts"):
                 temp_count = len(self._memory.get_active_temporary_facts())
+            curiosity_count = 0
+            if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "get_active_curiosity_threads"):
+                curiosity_count = len(self._memory.get_active_curiosity_threads())
             temp_str = f"\n* Active 2-day notes: {temp_count}" if temp_count else ""
-            desc = f"* Fact Sheet:\n* Notes stored: {len(notes)}{temp_str}\n* Pink remembers your nickname and notes permanently."
+            curiosity_str = f"\n* Active curiosities: {curiosity_count}" if curiosity_count else ""
+            desc = f"* Fact Sheet:\n* Notes stored: {len(notes)}{temp_str}{curiosity_str}\n* Pink remembers your nickname and notes permanently."
         elif self._selected_index == 3:
             desc = "* Uninstall Pink:\n* Launch the Windows uninstaller or clean local pet data."
         else:
@@ -3047,7 +3051,11 @@ class DeltaruneShopWindow(QWidget):
         if self._selected_index == 0:
             desc = f"* Nickname Manager:\n* Current: \"{self._get_user_name()}\"\n* Pink addresses you by this moniker."
         elif self._selected_index == 1:
-            desc = "* Inscribe a new permanent fact note into Pink's memory logs."
+            curiosity_count = 0
+            if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "get_active_curiosity_threads"):
+                curiosity_count = len(self._memory.get_active_curiosity_threads())
+            curiosity_hint = f"\n* Active curiosities: {curiosity_count}" if curiosity_count else ""
+            desc = f"* Inscribe a new permanent fact note into Pink's memory logs.{curiosity_hint}"
         elif 2 <= self._selected_index < len(notes) + 2:
             n_text = notes[self._selected_index - 2]
             desc = f"* Note #{self._selected_index - 1}:\n* \"{n_text}\"\n* [Click to open & edit]"
