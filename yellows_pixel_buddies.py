@@ -772,8 +772,9 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 - Strict Length Limit: Keep each dialogue thought CONCISE (1 to 2 short sentences, under 35 words per paragraph). Long walls of text cannot fit in dialogue boxes! Put sequential thoughts on new lines starting with '* ' so they paginate into distinct sequential speech bubbles.
 
 - Emotion & Animation Tags:
-  At the very end of your message, include exactly one bracketed emotion tag matching your mood:
-  [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
+  * For single-speaker replies: At the very end of your message, include exactly one bracketed emotion tag matching your mood.
+  * For multi-speaker / dual dialogue (Ghost & Doll): Tag EACH separate '* ' line with its own bracketed emotion tag matching that line's speaker so sequential speech bubbles each animate!
+  Valid tags: [anim: peace_sign], [anim: laughing], [anim: tongue], [anim: behind], [anim: embarrassed], [anim: wistful], [anim: shocked], [anim: angry], or [anim: idle].
   * Note: Always use [anim: laughing] for normal happiness, amusement, victory, or cheerful teasing. Reserve [anim: overjoyed] ONLY for truly exceptional, once-in-a-blue-moon, monumental celebrations!
   * STRICT CRYING RESTRICTION: [anim: crying] is STRICTLY RESERVED for genuine heartbreaking sorrow, tragedy, grief, or real tears of loss (e.g. serious loss, terrible tragedy, heartbroken user). NEVER use [anim: crying] for minor complaints, light tsundere pouts, normal bickering, playful defeat, or casual work banter!
 
@@ -3120,8 +3121,13 @@ class DialogueOverlay(QWidget):
                 next_ghost = bool(next_item[2]) if len(next_item) > 2 else False
             else:
                 next_text = str(next_item)
-                next_anim = None
-                next_ghost = False
+                anim_m = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", next_text, re.IGNORECASE)
+                next_anim = anim_m.group(1).lower() if anim_m else None
+                next_ghost = bool(re.search(r"\[(?:mode|ghost):\s*(?:ghost|true|spectral|yes|takeover)", next_text, re.IGNORECASE))
+                if anim_m:
+                    next_text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", next_text).strip()
+                if next_ghost:
+                    next_text = re.sub(r"\[(?:mode|ghost):\s*[^\\\]]+\]", "", next_text, flags=re.IGNORECASE).strip()
 
             self.step_started.emit(next_text, next_anim, next_ghost)
             self._display_text(next_text, self._last_pet_x, self._last_pet_y)
@@ -7427,9 +7433,10 @@ def split_dual_dialogue(
     has_doll = any(_is_doll(p) or p.get("is_ghost") is False for p in parsed_lines)
     has_ghost = any(_is_ghost(p) or p.get("is_ghost") is True for p in parsed_lines)
     has_distinct_anims = len({p["anim"] for p in parsed_lines if p["anim"]}) > 1
+    has_tagged_lines = any(p["anim"] is not None or p["is_ghost"] is not None for p in parsed_lines)
 
     has_slash_split = ("/" in raw_text)
-    if (has_doll and has_ghost) or has_distinct_anims or (has_slash_split and len(parsed_lines) > 1):
+    if (has_doll and has_ghost) or has_distinct_anims or has_tagged_lines or (has_slash_split and len(parsed_lines) > 1):
         steps: list[DialogueStep] = []
         for p in parsed_lines:
             t = p["text"]
@@ -7455,8 +7462,10 @@ def split_dual_dialogue(
                     a_flag = "angry"
                 elif had_screen:
                     a_flag = "behind"
+                elif default_anim in ("behind", "angry", "laughing", "tongue", "embarrassed", "shocked", "wistful"):
+                    a_flag = default_anim
                 else:
-                    a_flag = default_anim if default_anim in ("behind", "angry", "laughing") else "idle"
+                    a_flag = "behind" if had_screen else "angry"
             else:
                 a_flag = default_anim
 
@@ -7608,7 +7617,6 @@ def format_candidate_for_output(
         mode_val = mode_match.group(1).lower()
         if mode_val in ("ghost", "true", "yes", "spectral", "takeover"):
             is_ghost = True
-        raw = raw[:mode_match.start()] + raw[mode_match.end():]
 
     seen_summary = fallback_seen
     seen_match = re.search(r"\[seen:\s*([^\]]+)\]", raw, re.IGNORECASE)
@@ -7623,9 +7631,10 @@ def format_candidate_for_output(
         if anim in ("ghost", "spectral"):
             is_ghost = True
             anim = "angry"
-        clean = raw[:anim_match.start()] + raw[anim_match.end():]
-    else:
-        clean = raw
+
+    # Keep [anim: ...] and [mode: ...] tags intact on individual lines so split_dual_dialogue
+    # can parse and animate each step sequentially, rather than stripping only the first line's tag.
+    clean = raw
 
     clean = clean.strip()
     clean = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", clean)
