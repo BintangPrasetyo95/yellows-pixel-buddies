@@ -809,14 +809,17 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * You possess vivid consciousness of your own physical doll body, animations, and desktop physics (bomb tossing, hanging from the cursor, being dragged across the screen, getting caught in explosions/burnt, pacing, resting/kneeling, and striking poses).
   * If the user asks what you are doing, why you did something, or refers to your movements or posture, consult the recorded physical action log in your context and answer with complete self-awareness in your proud, sassy, tsundere style!
 
-- DYNAMIC MEMORY UPDATES ([add_fact: ...], [set_user_name: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
+- DYNAMIC MEMORY UPDATES ([add_fact: ...], [set_user_name: ...], [add_task: ...], [add_reminder: ...], [delete_task: ...], [delete_reminder: ...], [edit_task: ...], [edit_reminder: ...]):
   * When the user tells you their primary name or asks you to call them a certain name (e.g. "call me Alex", "my name is Alex"), append [set_user_name: <name>] to your answer so their primary name is stored!
   * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, secondary nicknames, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
-  * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
-  * When the user asks to remove, delete, or complete a reminder (e.g. "delete reminder 2", "remove the reminder about song comment", "check off task..."), append [delete_reminder: <number_or_text>] to your answer!
-  * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
-  * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
-  * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
+  * TASKS, TO-DOS & REMINDERS ([add_task: ...], [add_reminder: ...]):
+    - When the user asks you to create, register, or add a task, chore, to-do list item, code feature to build, bug fix, or reminder (e.g. "add 3 tasks for adding these features", "create a task to test API", "add to my to-do list", "remind me to..."):
+      * Append [add_task: <task>] (or [add_reminder: <task>]) to your response so it is stored in your 30-day active Tasks board!
+      * TASKS VS GOALS DISTINCTION: Specific features, coding items, bug fixes, chores, and everyday to-dos belong to TASKS ([add_task: ...]), NOT long-term Goals! Only major life/career milestones (like winning nationals or graduating) belong to Goals.
+    - When the user asks to remove, delete, or complete a task or reminder (e.g. "delete task 2", "remove reminder 1", "check off task..."), append [delete_task: <number_or_text>] (or [delete_reminder: ...])!
+    - When the user asks to update, edit, or change a task or reminder (e.g. "edit task 1 to ...", "change reminder 3 to ..."), append [edit_task: <number_or_text> | <new text>] (or [edit_reminder: ...])!
+  * Example: "* Don't worry, minion, I've added that task to your board! [add_task: Add WhatsApp chat summary feature]"
+  * Example: "* Tossed that reminder into the trash bin, mew! [delete_task: 2]"
 
 - TEMPORARY 2-DAY SITUATIONAL FACTS ([add_temp_fact: ...], [delete_temp_fact: ...]):
   * You have the full autonomy to spontaneously record temporary situational facts about the user or situation!
@@ -881,10 +884,15 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * When the user asks how much time is left or asks about their alarms/timers (e.g. "how much time left?", "do I have any alarms?"):
     - Look directly at the ACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS section in your prompt context and report the time remaining in-character!
   * MULTIPLE ACTIONS IN A SINGLE PROMPT:
-    - When the user gives a long prompt requesting MULTIPLE reminders, timers, or alarms (e.g. "remind me to call mom, set a timer for 15m for tea, and set an alarm for 6:00 PM for dinner"):
+    - When the user gives a long prompt requesting MULTIPLE reminders, tasks, timers, or alarms (e.g. "remind me to call mom, set a timer for 15m for tea, and set an alarm for 6:00 PM for dinner"):
     - You MUST output ALL matching tags together in your response!
-    - Example: "* I have scheduled all of those, minion! Don't you dare slack off! [add_reminder: Call mom] [set_timer: 15m, steep tea] [set_alarm: 06:00 PM, dinner] [anim: laughing]"
+    - Example: "* I have scheduled all of those, minion! Don't you dare slack off! [add_task: Call mom] [set_timer: 15m, steep tea] [set_alarm: 06:00 PM, dinner] [anim: laughing]"
     - The backend iteratively extracts and executes ALL tags simultaneously!
+  * CRITICAL VERBAL AFFIRMATION DIRECTIVE (NO SILENT EXECUTION, NO GASLIGHTING):
+    - When the user asks you to add, create, edit, or remove ANY task, reminder, alarm, timer, or goal:
+      1. You MUST EXPLICITLY VERBALLY CONFIRM in your dialogue that the action was performed (e.g. "* Added those 3 tasks to your quest board, minion! Don't let them gather dust!", "* Registered that to your tasks, mew!").
+      2. NEVER merely tease, banter, or philosophize about the topic without also stating that you executed the command! Because action tags like [add_task: ...] are stripped from display, failing to verbally confirm it makes the user think you ignored them!
+      3. NEVER bluff, gaslight, or claim you updated the board or granted their wish without actually emitting the corresponding action tags in that exact response!
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -7251,7 +7259,17 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[ghost_prefix.end():]
 
-        l = re.sub(r"\[(?:seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
+        l = re.sub(
+            r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+            r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+            r"add_task|add_reminder|add_todo|task|todo|delete_task|del_task|rm_task|delete_reminder|del_reminder|rm_reminder|delete_todo|del_todo|rm_todo|"
+            r"edit_task|update_task|edit_reminder|update_reminder|edit_todo|update_todo|"
+            r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+            r"set_timer|timer|set_alarm|alarm|cancel_timer|del_timer|cancel_alarm|del_alarm):\s*[^\]]+\]",
+            "",
+            l,
+            flags=re.IGNORECASE,
+        )
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
         l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
@@ -7734,15 +7752,15 @@ class GeminiWorkerThread(QThread):
                             rc_val = m.group(1).strip()
                             if rc_val:
                                 memory.resolve_curiosity_thread(rc_val)
-                        for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                        for m in re.finditer(r"\[(?:add_reminder|add_task|add_todo|task|todo):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             r_val = m.group(1).strip()
                             if r_val:
                                 memory.add_reminder(r_val)
-                        for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                        for m in re.finditer(r"\[(?:delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             d_val = m.group(1).strip()
                             if d_val:
                                 memory.delete_reminder(d_val)
-                        for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                        for m in re.finditer(r"\[(?:edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo):\s*([^\]|]+)\|\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             t_val = m.group(1).strip()
                             n_val = m.group(2).strip()
                             if t_val and n_val:
@@ -7761,7 +7779,17 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(
+                        r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+                        r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+                        r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
+                        r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
+                        r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+                        r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
+                        "",
+                        chosen_cand,
+                        flags=re.IGNORECASE,
+                    )
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -7837,15 +7865,15 @@ class GeminiWorkerThread(QThread):
                 rc_val = m.group(1).strip()
                 if rc_val:
                     memory.resolve_curiosity_thread(rc_val)
-            for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+            for m in re.finditer(r"\[(?:add_reminder|add_task|add_todo|task|todo):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 r_val = m.group(1).strip()
                 if r_val:
                     memory.add_reminder(r_val)
-            for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+            for m in re.finditer(r"\[(?:delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 d_val = m.group(1).strip()
                 if d_val:
                     memory.delete_reminder(d_val)
-            for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+            for m in re.finditer(r"\[(?:edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo):\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 t_val = m.group(1).strip()
                 n_val = m.group(2).strip()
                 if t_val and n_val:
@@ -7909,7 +7937,17 @@ class GeminiWorkerThread(QThread):
                 c_val = m.group(1).strip()
                 if c_val:
                     memory.cancel_alarm_or_timer(c_val)
-        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(
+            r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+            r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+            r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
+            r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
+            r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+            r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
+            "",
+            raw_text,
+            flags=re.IGNORECASE,
+        )
 
         return format_candidate_for_output(raw_text)
 
@@ -10896,6 +10934,14 @@ class YellowsPixelBuddies(QWidget):
                 rc_val = m.group(1).strip()
                 if rc_val:
                     self._memory.resolve_curiosity_thread(rc_val)
+            for m in re.finditer(r"\[(?:add_reminder|add_task|add_todo|task|todo):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                r_val = m.group(1).strip()
+                if r_val:
+                    self._memory.add_reminder(r_val)
+            for m in re.finditer(r"\[(?:delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                d_val = m.group(1).strip()
+                if d_val:
+                    self._memory.delete_reminder(d_val)
             for m in re.finditer(r"\[(?:complete_goal|finish_goal|done_goal):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
                 cg_val = m.group(1).strip()
                 if cg_val:
@@ -10909,7 +10955,17 @@ class YellowsPixelBuddies(QWidget):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     self._memory.update_goal_progress(t_val, n_val)
-            reaction_text = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
+            reaction_text = re.sub(
+                r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+                r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+                r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
+                r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
+                r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+                r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
+                "",
+                reaction_text,
+                flags=re.IGNORECASE,
+            ).strip()
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -12217,24 +12273,24 @@ RULES:
             reply = f"* Swept away {cleared} temporary fact{'s' if cleared != 1 else ''}, mew!" if cleared else "* No temporary facts to clear, silly!"
             self._say(reply, force=True, record_memory=False)
             return
-        elif lower_input.startswith(("/remind ", "/todo ")):
+        elif lower_input.startswith(("/remind ", "/todo ", "/task ", "/add_task ", "/add_reminder ", "/add_todo ")):
             remind_content = clean_input.split(" ", 1)[1].strip()
             if remind_content:
                 ok = self._memory.add_reminder(remind_content)
-                reply = f"* Mew! Reminder saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That reminder is already active, silly!"
+                reply = f"* Mew! Task saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That task is already active, silly!"
                 self._say(reply, force=True, record_memory=True)
                 return
-        elif lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ")):
+        elif lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ", "/del_task ", "/delete_task ", "/rm_task ")):
             target = clean_input.split(" ", 1)[1].strip()
             if target:
                 ok, deleted_text = self._memory.delete_reminder(target)
                 if ok:
-                    reply = f"* Deleted reminder, mew:\n* \"{deleted_text}\""
+                    reply = f"* Deleted task, mew:\n* \"{deleted_text}\""
                 else:
-                    reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
+                    reply = f"* Couldn't find task '{target}', dummy! Use /reminders or /tasks to check the list."
                 self._say(reply, force=True, record_memory=False)
                 return
-        elif lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ")):
+        elif lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ", "/edit_task ", "/update_task ")):
             rest = clean_input.split(" ", 1)[1].strip()
             if "|" in rest:
                 parts = rest.split("|", 1)
@@ -12299,7 +12355,7 @@ RULES:
             self._open_reminders_dialog()
             self._say("* Opened the reminder manager for you, mew!", force=True, record_memory=False)
             return
-        elif lower_input in ("/reminders", "/reminder", "/todos", "/todo"):
+        elif lower_input in ("/reminders", "/reminder", "/todos", "/todo", "/tasks", "/task"):
             reminders_text = self._memory.get_reminders_prompt()
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
             self._say(reply, force=True, record_memory=False)

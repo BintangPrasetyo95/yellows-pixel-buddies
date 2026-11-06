@@ -264,9 +264,14 @@ def _is_task_creation_turn(msg: dict[str, Any]) -> bool:
 
     creation_patterns = [
         r"\[add_reminder:",
+        r"\[add_task:",
+        r"\[add_todo:",
         r"^/remind\b",
         r"^/todo\b",
+        r"^/task\b",
+        r"^/add_task\b",
         r"^/add_reminder\b",
+        r"^/add_todo\b",
         r"\bremind me\b",
         r"\bdon't let me forget\b",
         r"\badd (?:a )?(?:new )?(?:task|reminder|chore|todo)\b",
