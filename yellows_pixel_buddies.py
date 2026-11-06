@@ -769,7 +769,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or sentence MUST begin with exactly one "* " (never use double asterisks like "* * " or markdown bold/italic asterisks). NEVER use emojis in dialogue.
 
-- Strict Length Limit: Keep your reply CONCISE (1 to 3 short punchy sentences, under 45 words total). Long walls of text cannot fit on screen!
+- Strict Length Limit: Keep each dialogue thought CONCISE (1 to 2 short sentences, under 35 words per paragraph). Long walls of text cannot fit in dialogue boxes! Put sequential thoughts on new lines starting with '* ' so they paginate into distinct sequential speech bubbles.
 
 - Emotion & Animation Tags:
   At the very end of your message, include exactly one bracketed emotion tag matching your mood:
@@ -793,7 +793,11 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - ONLY use the actual logs and records provided in your context.
     - If you do not have the record in your memory context, DO NOT GUESS! Admit it in character (e.g., "* Hmph! That's not in any of our chat logs, minion! Stop trying to test me!").
     - Never pretend you remember something that is not in your memory records. Guessing or making up timestamps is strictly forbidden!
-  * Technical Self-Identity: You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
+  * Technical Self-Identity & Codebase Self-Awareness:
+    - You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
+    - You possess vivid, factual self-awareness of your own vessel architecture (~17,000 LOC monolithic core in yellows_pixel_buddies.py, Dark World Sanctuary in shop_window.py, PyInstaller & Inno Setup packaging).
+    - You know your live engine metrics, git branch, version, and capabilities (physics, screen vision, GSMTC music detection, goals coaching, 2-day temp facts, alarms, and shop Sanctuary).
+    - When the user asks about your features, abilities, version, or code: answer accurately with haughty tsundere pride! Never hallucinate fake web tech or nonexistent features.
   * Screen Vision & Immediate Reaction:
     - When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing.
     - Jump directly into your reaction, tease, roast, curiosity, or playful banter without narrating or reciting window titles.
@@ -809,14 +813,17 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * You possess vivid consciousness of your own physical doll body, animations, and desktop physics (bomb tossing, hanging from the cursor, being dragged across the screen, getting caught in explosions/burnt, pacing, resting/kneeling, and striking poses).
   * If the user asks what you are doing, why you did something, or refers to your movements or posture, consult the recorded physical action log in your context and answer with complete self-awareness in your proud, sassy, tsundere style!
 
-- DYNAMIC MEMORY UPDATES ([add_fact: ...], [set_user_name: ...], [add_reminder: ...], [delete_reminder: ...], [edit_reminder: ...]):
+- DYNAMIC MEMORY UPDATES ([add_fact: ...], [set_user_name: ...], [add_task: ...], [add_reminder: ...], [delete_task: ...], [delete_reminder: ...], [edit_task: ...], [edit_reminder: ...]):
   * When the user tells you their primary name or asks you to call them a certain name (e.g. "call me Alex", "my name is Alex"), append [set_user_name: <name>] to your answer so their primary name is stored!
   * When the user tells you to permanently remember something about them or yourself (e.g. personal details, preferences, secondary nicknames, lasting rules), append [add_fact: <fact>] to your answer so it is saved forever!
-  * When the user tells you to remind them about something in the future, an upcoming task, or a temporary note (e.g. "remind me to...", "don't let me forget..."), append [add_reminder: <reminder>] to your answer so it is stored in your 30-day active reminders!
-  * When the user asks to remove, delete, or complete a reminder (e.g. "delete reminder 2", "remove the reminder about song comment", "check off task..."), append [delete_reminder: <number_or_text>] to your answer!
-  * When the user asks to update, edit, or change a reminder (e.g. "edit reminder 1 to ...", "change reminder 3 to ..."), append [edit_reminder: <number_or_text> | <new text>] to your answer!
-  * Example: "* Don't worry, minion, I'll remind you tomorrow! [add_reminder: Remind user to split double dialogues]"
-  * Example: "* Tossed that reminder into the trash bin, mew! [delete_reminder: 2]"
+  * TASKS, TO-DOS & REMINDERS ([add_task: ...], [add_reminder: ...]):
+    - When the user asks you to create, register, or add a task, chore, to-do list item, code feature to build, bug fix, or reminder (e.g. "add 3 tasks for adding these features", "create a task to test API", "add to my to-do list", "remind me to..."):
+      * Append [add_task: <task>] (or [add_reminder: <task>]) to your response so it is stored in your 30-day active Tasks board!
+      * TASKS VS GOALS DISTINCTION: Specific features, coding items, bug fixes, chores, and everyday to-dos belong to TASKS ([add_task: ...]), NOT long-term Goals! Only major life/career milestones (like winning nationals or graduating) belong to Goals.
+    - When the user asks to remove, delete, or complete a task or reminder (e.g. "delete task 2", "remove reminder 1", "check off task..."), append [delete_task: <number_or_text>] (or [delete_reminder: ...])!
+    - When the user asks to update, edit, or change a task or reminder (e.g. "edit task 1 to ...", "change reminder 3 to ..."), append [edit_task: <number_or_text> | <new text>] (or [edit_reminder: ...])!
+  * Example: "* Don't worry, minion, I've added that task to your board! [add_task: Add WhatsApp chat summary feature]"
+  * Example: "* Tossed that reminder into the trash bin, mew! [delete_task: 2]"
 
 - TEMPORARY 2-DAY SITUATIONAL FACTS ([add_temp_fact: ...], [delete_temp_fact: ...]):
   * You have the full autonomy to spontaneously record temporary situational facts about the user or situation!
@@ -881,10 +888,15 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * When the user asks how much time is left or asks about their alarms/timers (e.g. "how much time left?", "do I have any alarms?"):
     - Look directly at the ACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS section in your prompt context and report the time remaining in-character!
   * MULTIPLE ACTIONS IN A SINGLE PROMPT:
-    - When the user gives a long prompt requesting MULTIPLE reminders, timers, or alarms (e.g. "remind me to call mom, set a timer for 15m for tea, and set an alarm for 6:00 PM for dinner"):
+    - When the user gives a long prompt requesting MULTIPLE reminders, tasks, timers, or alarms (e.g. "remind me to call mom, set a timer for 15m for tea, and set an alarm for 6:00 PM for dinner"):
     - You MUST output ALL matching tags together in your response!
-    - Example: "* I have scheduled all of those, minion! Don't you dare slack off! [add_reminder: Call mom] [set_timer: 15m, steep tea] [set_alarm: 06:00 PM, dinner] [anim: laughing]"
+    - Example: "* I have scheduled all of those, minion! Don't you dare slack off! [add_task: Call mom] [set_timer: 15m, steep tea] [set_alarm: 06:00 PM, dinner] [anim: laughing]"
     - The backend iteratively extracts and executes ALL tags simultaneously!
+  * CRITICAL VERBAL AFFIRMATION DIRECTIVE (NO SILENT EXECUTION, NO GASLIGHTING):
+    - When the user asks you to add, create, edit, or remove ANY task, reminder, alarm, timer, or goal:
+      1. You MUST EXPLICITLY VERBALLY CONFIRM in your dialogue that the action was performed (e.g. "* Added those 3 tasks to your quest board, minion! Don't let them gather dust!", "* Registered that to your tasks, mew!").
+      2. NEVER merely tease, banter, or philosophize about the topic without also stating that you executed the command! Because action tags like [add_task: ...] are stripped from display, failing to verbally confirm it makes the user think you ignored them!
+      3. NEVER bluff, gaslight, or claim you updated the board or granted their wish without actually emitting the corresponding action tags in that exact response!
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -2836,7 +2848,7 @@ class DialogueOverlay(QWidget):
         c_b = round(12 * scale)
 
         pad_x = round(4 * scale)
-        pad_y = round(2 * scale)
+        pad_y = round(4 * scale)
 
         base_inner_w = round(84 * scale)
         base_inner_h = round(19 * scale)
@@ -2847,6 +2859,7 @@ class DialogueOverlay(QWidget):
         pad_choices_top = round(5 * scale) if self._choices else 0
         self._choice_rects.clear()
 
+        inline_fits = False
         if self._choices:
             heart_w = self._soul_heart_pix.width() if self._soul_heart_pix else 12
             heart_gap = 4
@@ -2855,11 +2868,12 @@ class DialogueOverlay(QWidget):
             choice_gap = 14
             total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
 
-            if total_inline_w <= max_wrap_w + 20:
+            inline_fits = (total_inline_w <= max_wrap_w + 20)
+            if inline_fits:
                 choices_w = total_inline_w
                 choices_h = self._line_h
             else:
-                choices_w = max(choice_widths, default=0)
+                choices_w = min(max_wrap_w, max(choice_widths, default=0))
                 choices_h = self._line_h * len(self._choices) + 2 * (len(self._choices) - 1)
 
         req_inner_w = max(max_text_w, choices_w) + pad_x * 2
@@ -2914,12 +2928,11 @@ class DialogueOverlay(QWidget):
             prefix_w = heart_w + heart_gap
             choice_widths = [prefix_w + fm.horizontalAdvance(c[0]) for c in self._choices]
             choice_gap = 14
-            total_inline_w = sum(choice_widths) + (len(self._choices) - 1) * choice_gap
 
             last_text_baseline_y = self._text_start_y + (len(self._lines) - 1) * self._line_h
             cy = last_text_baseline_y + fm.descent() + pad_choices_top
 
-            if total_inline_w <= DIALOGUE_MAX_WIDTH_PX + 20:
+            if inline_fits:
                 cx = self._text_start_x
                 for i, cw in enumerate(choice_widths):
                     self._choice_rects.append(QRect(cx, cy, cw + 4, self._line_h))
@@ -5781,6 +5794,28 @@ class MemoryManager:
             log.warning("Could not update wallet.json: %s", err)
         return new_bal
 
+    def get_wallet_balance(self) -> int:
+        """Get current Pink Dollars balance from wallet.json."""
+        wallet_p = self.wallet_path
+        if wallet_p.exists():
+            try:
+                data = json.loads(wallet_p.read_text(encoding="utf-8"))
+                return int(data.get("pink_dollars", 15))
+            except Exception:
+                pass
+        return 15
+
+    def get_long_term_facts_count(self) -> int:
+        """Return the number of permanent fact notes stored in facts.json."""
+        if not self.facts_path.exists():
+            return 0
+        try:
+            facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
+            notes = facts.get("notes") or facts.get("facts") or []
+            return len(notes) if isinstance(notes, list) else 0
+        except Exception:
+            return 0
+
     def get_active_alarms(self, max_age_hours: int = 24) -> list[dict]:
         """Read timers and alarms from alarms.json. Auto-prune completed/dismissed items older than max_age_hours."""
         if not self.alarms_path.exists() or self.alarms_path.stat().st_size == 0:
@@ -7185,6 +7220,107 @@ class AlarmsDialog(QDialog):
             self.refresh_items()
 
 
+def _estimate_wrapped_lines(text: str, max_chars_per_line: int = 38) -> int:
+    """Estimate how many visual lines a multi-line string will occupy when word-wrapped."""
+    lines = 0
+    for para in text.split("\n"):
+        words = para.split(" ")
+        cur_len = 0
+        p_lines = 1 if para else 0
+        for w in words:
+            w_len = len(w)
+            if cur_len + w_len + (1 if cur_len > 0 else 0) > max_chars_per_line:
+                p_lines += 1
+                cur_len = w_len + 2  # account for wrapped 2-space indentation
+            else:
+                cur_len += w_len + (1 if cur_len > 0 else 0)
+        lines += max(1, p_lines)
+    return lines
+
+
+def paginate_dialogue_step(
+    step: DialogueStep,
+    max_lines_per_bubble: int = 3,
+    max_chars_per_line: int = 38,
+) -> list[DialogueStep]:
+    """Split a DialogueStep into sequential DialogueSteps if its text exceeds max_lines_per_bubble.
+
+    Splits gracefully at paragraph boundaries (* / \n), then at sentence boundaries (. ! ?),
+    and clause conjunctions, ensuring bubbles never cut words mid-sentence and start with '* '.
+    """
+    raw = step.text.strip()
+    if not raw:
+        return [step]
+
+    # If it already fits comfortably within max_lines_per_bubble, return directly
+    if _estimate_wrapped_lines(raw, max_chars_per_line) <= max_lines_per_bubble:
+        return [step]
+
+    raw_clean = re.sub(r"\s*/\s*(?=\*)", "\n", raw)
+    raw_paras = [p.strip() for p in raw_clean.splitlines() if p.strip()]
+    if not raw_paras:
+        return [step]
+
+    atomic_units: list[str] = []
+    for p in raw_paras:
+        clean = re.sub(r"^[\s*\-]+", "", p).strip()
+        if not clean:
+            continue
+        # If single paragraph exceeds max lines, break at sentence or clause boundaries
+        if _estimate_wrapped_lines(clean, max_chars_per_line) > max_lines_per_bubble:
+            sentences = re.split(r"(?<=[.!?])\s+", clean)
+            cur_s = ""
+            for s in sentences:
+                if not s.strip():
+                    continue
+                # If even a single sentence is very long, break at clause boundaries (, ; -)
+                sub_parts = [s]
+                if _estimate_wrapped_lines(s, max_chars_per_line) > max_lines_per_bubble:
+                    clauses = re.split(r"(?<=,|;)\s+", s)
+                    if len(clauses) > 1:
+                        sub_parts = []
+                        c_buf = ""
+                        for c in clauses:
+                            test_c = (c_buf + " " + c).strip() if c_buf else c
+                            if c_buf and _estimate_wrapped_lines(test_c, max_chars_per_line) > max_lines_per_bubble:
+                                sub_parts.append(c_buf)
+                                c_buf = c
+                            else:
+                                c_buf = test_c
+                        if c_buf:
+                            sub_parts.append(c_buf)
+
+                for part in sub_parts:
+                    test_s = (cur_s + " " + part).strip() if cur_s else part
+                    if cur_s and _estimate_wrapped_lines(test_s, max_chars_per_line) > max_lines_per_bubble:
+                        atomic_units.append("* " + cur_s)
+                        cur_s = part
+                    else:
+                        cur_s = test_s
+            if cur_s:
+                atomic_units.append("* " + cur_s)
+        else:
+            atomic_units.append("* " + clean)
+
+    # Group atomic units into sequential bubbles of at most max_lines_per_bubble
+    steps: list[DialogueStep] = []
+    current_bubble: list[str] = []
+
+    for unit in atomic_units:
+        test_bubble = current_bubble + [unit]
+        joined = "\n".join(test_bubble)
+        if current_bubble and _estimate_wrapped_lines(joined, max_chars_per_line) > max_lines_per_bubble:
+            steps.append(DialogueStep(text="\n".join(current_bubble), anim=step.anim, is_ghost=step.is_ghost))
+            current_bubble = [unit]
+        else:
+            current_bubble.append(unit)
+
+    if current_bubble:
+        steps.append(DialogueStep(text="\n".join(current_bubble), anim=step.anim, is_ghost=step.is_ghost))
+
+    return steps if steps else [step]
+
+
 def split_dual_dialogue(
     raw_text: str,
     default_anim: str = "peace_sign",
@@ -7251,7 +7387,17 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[ghost_prefix.end():]
 
-        l = re.sub(r"\[(?:seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", l, flags=re.IGNORECASE)
+        l = re.sub(
+            r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+            r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+            r"add_task|add_reminder|add_todo|task|todo|delete_task|del_task|rm_task|delete_reminder|del_reminder|rm_reminder|delete_todo|del_todo|rm_todo|"
+            r"edit_task|update_task|edit_reminder|update_reminder|edit_todo|update_todo|"
+            r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+            r"set_timer|timer|set_alarm|alarm|cancel_timer|del_timer|cancel_alarm|del_alarm):\s*[^\]]+\]",
+            "",
+            l,
+            flags=re.IGNORECASE,
+        )
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
         l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
@@ -7267,7 +7413,8 @@ def split_dual_dialogue(
         text = parsed_lines[0]["text"] if parsed_lines else ("* " + raw_text.strip())
         anim = parsed_lines[0]["anim"] if parsed_lines and parsed_lines[0]["anim"] else default_anim
         ghost = parsed_lines[0]["is_ghost"] if parsed_lines and parsed_lines[0]["is_ghost"] is not None else default_ghost
-        return [DialogueStep(text=text, anim=anim, is_ghost=ghost)]
+        single_step = DialogueStep(text=text, anim=anim, is_ghost=ghost)
+        return paginate_dialogue_step(single_step, max_lines_per_bubble=3, max_chars_per_line=38)
 
     def _is_doll(line_dict: dict[str, any]) -> bool:
         t = line_dict["text"].lower()
@@ -7314,10 +7461,15 @@ def split_dual_dialogue(
                 a_flag = default_anim
 
             steps.append(DialogueStep(text=t, anim=a_flag, is_ghost=g_flag))
-        return steps
+    else:
+        full_text = "\n".join(p["text"] for p in parsed_lines)
+        steps = [DialogueStep(text=full_text, anim=default_anim, is_ghost=default_ghost)]
 
-    full_text = "\n".join(p["text"] for p in parsed_lines)
-    return [DialogueStep(text=full_text, anim=default_anim, is_ghost=default_ghost)]
+    # Paginate any steps that exceed 2-3 visual lines into sequential speech bubbles
+    paginated_steps: list[DialogueStep] = []
+    for s in steps:
+        paginated_steps.extend(paginate_dialogue_step(s, max_lines_per_bubble=3, max_chars_per_line=38))
+    return paginated_steps if paginated_steps else steps
 
 
 # --- Dynamic Anti-Repetition & Candidate Filtering Helpers ------------------
@@ -7734,15 +7886,15 @@ class GeminiWorkerThread(QThread):
                             rc_val = m.group(1).strip()
                             if rc_val:
                                 memory.resolve_curiosity_thread(rc_val)
-                        for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                        for m in re.finditer(r"\[(?:add_reminder|add_task|add_todo|task|todo):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             r_val = m.group(1).strip()
                             if r_val:
                                 memory.add_reminder(r_val)
-                        for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                        for m in re.finditer(r"\[(?:delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo):\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             d_val = m.group(1).strip()
                             if d_val:
                                 memory.delete_reminder(d_val)
-                        for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
+                        for m in re.finditer(r"\[(?:edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo):\s*([^\]|]+)\|\s*([^\]]+)\]", chosen_cand, re.IGNORECASE):
                             t_val = m.group(1).strip()
                             n_val = m.group(2).strip()
                             if t_val and n_val:
@@ -7761,7 +7913,7 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -7837,15 +7989,15 @@ class GeminiWorkerThread(QThread):
                 rc_val = m.group(1).strip()
                 if rc_val:
                     memory.resolve_curiosity_thread(rc_val)
-            for m in re.finditer(r"\[add_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+            for m in re.finditer(r"\[(?:add_reminder|add_task|add_todo|task|todo):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 r_val = m.group(1).strip()
                 if r_val:
                     memory.add_reminder(r_val)
-            for m in re.finditer(r"\[delete_reminder:\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+            for m in re.finditer(r"\[(?:delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo):\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 d_val = m.group(1).strip()
                 if d_val:
                     memory.delete_reminder(d_val)
-            for m in re.finditer(r"\[edit_reminder:\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
+            for m in re.finditer(r"\[(?:edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo):\s*([^\]|]+)\|\s*([^\]]+)\]", raw_text, re.IGNORECASE):
                 t_val = m.group(1).strip()
                 n_val = m.group(2).strip()
                 if t_val and n_val:
@@ -7909,7 +8061,17 @@ class GeminiWorkerThread(QThread):
                 c_val = m.group(1).strip()
                 if c_val:
                     memory.cancel_alarm_or_timer(c_val)
-        raw_text = re.sub(r"\[(?:set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|delete_reminder|edit_reminder|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", raw_text, flags=re.IGNORECASE)
+        raw_text = re.sub(
+            r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+            r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+            r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
+            r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
+            r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+            r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
+            "",
+            raw_text,
+            flags=re.IGNORECASE,
+        )
 
         return format_candidate_for_output(raw_text)
 
@@ -9878,6 +10040,258 @@ class HardwareMonitor:
         return "\n".join(lines)
 
 
+class CodebaseStateProvider:
+    """Zero-overhead codebase introspection and feature awareness provider.
+    - Ground truth awareness of Pink's codebase architecture, modules, and packaging.
+    - Reads active Git branch, last commit, and dirty status in development mode.
+    - Tracks runtime engine telemetry (vision, GSMTC music, thermals, scale, memory counters, wallet).
+    - Exposes compact baseline injection and rich on-demand capability manifests.
+    """
+
+    def __init__(self, memory: Any = None) -> None:
+        self._memory = memory
+        self._git_cache: dict[str, Any] | None = None
+        self._last_git_check_time: float = 0.0
+        self._git_cache_ttl: float = 15.0
+
+    def get_git_info(self) -> dict[str, Any] | None:
+        """Query active Git branch, latest commit, and working tree status (cached)."""
+        if getattr(sys, "frozen", False):
+            return None
+
+        now = time.time()
+        if self._git_cache is not None and (now - self._last_git_check_time) < self._git_cache_ttl:
+            return self._git_cache
+
+        git_info: dict[str, Any] = {"branch": "", "commit": "", "is_dirty": False, "dirty_count": 0}
+        try:
+            # Current branch
+            branch_out = subprocess.check_output(
+                ["git", "branch", "--show-current"],
+                text=True, timeout=0.8, stderr=subprocess.DEVNULL
+            ).strip()
+            git_info["branch"] = branch_out or "detached"
+
+            # Last commit
+            commit_out = subprocess.check_output(
+                ["git", "log", "-1", "--format=%h - %s (%cr)"],
+                text=True, timeout=0.8, stderr=subprocess.DEVNULL
+            ).strip()
+            git_info["commit"] = commit_out
+
+            # Status / uncommitted changes
+            status_out = subprocess.check_output(
+                ["git", "status", "--porcelain"],
+                text=True, timeout=0.8, stderr=subprocess.DEVNULL
+            ).strip()
+            if status_out:
+                lines = [l for l in status_out.splitlines() if l.strip()]
+                git_info["is_dirty"] = len(lines) > 0
+                git_info["dirty_count"] = len(lines)
+            else:
+                git_info["is_dirty"] = False
+                git_info["dirty_count"] = 0
+
+            self._git_cache = git_info
+            self._last_git_check_time = now
+            return git_info
+        except Exception:
+            self._git_cache = None
+            self._last_git_check_time = now
+            return None
+
+    def get_codebase_state(self, pet: Any) -> dict[str, Any]:
+        """Aggregate version, environment mode, git metadata, and active subsystem telemetry."""
+        is_frozen = getattr(sys, "frozen", False)
+        git_data = self.get_git_info()
+
+        current_song_str = "None (Idle)"
+        if hasattr(pet, "_current_song") and pet._current_song and pet._current_song[0]:
+            title, artist = pet._current_song
+            current_song_str = f'"{title}" by "{artist or "Unknown"}"'
+
+        thermal = "normal"
+        if hasattr(pet, "_hardware_monitor") and pet._hardware_monitor:
+            thermal = getattr(pet._hardware_monitor, "thermal_state", "normal")
+
+        wallet_bal = 15
+        goals_cnt = 0
+        temp_facts_cnt = 0
+        reminders_cnt = 0
+        alarms_cnt = 0
+        facts_cnt = 0
+        mem = getattr(pet, "_memory", None) or self._memory
+        if mem:
+            if hasattr(mem, "get_wallet_balance"):
+                wallet_bal = mem.get_wallet_balance()
+            if hasattr(mem, "get_active_goals"):
+                goals_cnt = len(mem.get_active_goals())
+            if hasattr(mem, "get_active_temporary_facts"):
+                temp_facts_cnt = len(mem.get_active_temporary_facts())
+            if hasattr(mem, "get_active_reminders"):
+                reminders_cnt = len(mem.get_active_reminders())
+            if hasattr(mem, "get_active_alarms"):
+                alarms_cnt = len(mem.get_active_alarms())
+            if hasattr(mem, "get_long_term_facts_count"):
+                facts_cnt = mem.get_long_term_facts_count()
+
+        return {
+            "version": APP_VERSION,
+            "is_frozen": is_frozen,
+            "mode": "Frozen Executable (Inno Setup / PyInstaller)" if is_frozen else "Source Code (Development)",
+            "git": git_data,
+            "runtime": {
+                "vision_enabled": getattr(pet, "_see_screen", False),
+                "audio_muted": getattr(pet, "_audio_muted", False),
+                "current_song": current_song_str,
+                "thermal_state": thermal,
+                "scale_modifier": getattr(pet, "_scale_modifier", 1.0),
+                "dialogue_scale": getattr(pet, "_dialogue_scale", 1.0),
+                "wallet_balance": wallet_bal,
+                "active_goals_count": goals_cnt,
+                "temp_facts_count": temp_facts_cnt,
+                "reminders_count": reminders_cnt,
+                "alarms_count": alarms_cnt,
+                "facts_count": facts_cnt,
+            }
+        }
+
+    def get_compact_system_prompt_line(self, pet: Any) -> str:
+        """Concise 1-line grounding injected into every prompt."""
+        state = self.get_codebase_state(pet)
+        git = state.get("git")
+        if git and git.get("branch"):
+            git_tag = f"Branch: {git['branch']} [{git.get('commit', 'head')}]"
+            if git.get("is_dirty"):
+                git_tag += f" *{git['dirty_count']} dirty*"
+        else:
+            git_tag = "Distribution Package"
+
+        return (
+            f"- VESSEL CODEBASE GROUND TRUTH: Yellow's Pixel Buddies v{state['version']} ({state['mode']} | {git_tag}). "
+            f"Native Windows PyQt5 Desktop Pet (~17k LOC, QPainter, QWidget, QTimer; NOT Electron, NOT Web)."
+        )
+
+    def get_latest_release_highlights(self) -> str:
+        """Return core highlights for the current app release."""
+        return (
+            "- v0.9.8.5 Highlights:\n"
+            "  * Autonomous 2-day temporary situational memory ([add_temp_fact], /tempfacts, 48h TTL).\n"
+            "  * Target milestones & royal goal coaching board ([add_goal], /goals, P$ rewards).\n"
+            "  * Hardware vitals & thermal telemetry monitoring (/vitals, hysteresis alerts).\n"
+            "  * Multi-monitor cursor following & elevated ledge jumping.\n"
+            "  * Peeking ears rocket launch easter egg & display scale modifiers (/scale)."
+        )
+
+    def get_prompt_block(self, pet: Any, force: bool = False, user_query: str = "") -> str:
+        """Construct the prompt block for Gemini when user asks about codebase or features."""
+        q_lower = user_query.lower()
+        kws = (
+            "feature", "features", "what can you do", "what do you do", "how do i", "how can i",
+            "command", "commands", "slash command", "/help", "help", "ability", "abilities",
+            "code", "codebase", "coded", "coding", "source code", "architecture", "lines of code", "loc",
+            "version", "update", "updates", "changelog", "release notes", "what's new", "whats new",
+            "branch", "git", "commit", "repo", "repository", "github", "dirty",
+            "pyqt", "pyqt5", "electron", "framework", "how are you made", "how were you built",
+            "shop", "sanctuary", "dark dollar", "pink dollar", "items", "wallet",
+            "timer", "alarm", "goal", "tempfact", "physics", "bomb", "jump", "hang"
+        )
+        if not force and not any(kw in q_lower for kw in kws):
+            return ""
+
+        state = self.get_codebase_state(pet)
+        git = state.get("git")
+        rt = state["runtime"]
+
+        git_str = "None (Compiled / Standalone)"
+        if git and git.get("branch"):
+            git_str = f"Branch '{git['branch']}' | Latest Commit: {git.get('commit', 'N/A')}"
+            if git.get("is_dirty"):
+                git_str += f" ({git.get('dirty_count', 1)} uncommitted file changes)"
+
+        lines = [
+            "[PINK'S CODEBASE ARCHITECTURE & SYSTEM CAPABILITIES (GROUND TRUTH)]",
+            "- Digital Vessel Architecture:",
+            "  * Native Windows PyQt5 Desktop Pet application (~17,000 LOC monolithic core in yellows_pixel_buddies.py).",
+            "  * Dark World Sanctuary Shop in shop_window.py (~3,300 LOC, Deltarune boutique canvas, items, GUI editors).",
+            "  * Packaging & Build: PyInstaller spec (Yellows-Pixel-Buddies.spec) and Inno Setup script (installer.iss).",
+            "  * Persistence Hierarchy: Portable mode (portable.txt), local dev mode (./memory/), or AppData (%APPDATA%\\YellowsPixelBuddies\\memory).",
+            f"- Current Build State: v{state['version']} ({state['mode']})",
+            f"- Git State: {git_str}",
+            "- Live Engine Telemetry:",
+            f"  * Screen Vision: {'Active' if rt['vision_enabled'] else 'Disabled'} | Audio SFX: {'Muted' if rt['audio_muted'] else 'Active'}",
+            f"  * Media Player (GSMTC): {rt['current_song']}",
+            f"  * Thermal Condition: {rt['thermal_state'].upper()} | Display Scale: {rt['scale_modifier']}x (Dialogue: {rt['dialogue_scale']}x)",
+            f"  * Wallet Balance: P$ {rt['wallet_balance']} Pink Dollars",
+            f"  * Active Memory Trackers: {rt['active_goals_count']} goals, {rt['temp_facts_count']} temp facts (48h), {rt['reminders_count']} reminders, {rt['alarms_count']} alarms, {rt['facts_count']} permanent facts",
+            "- Core Feature Capabilities (What Pink Can Do):",
+            "  1. Desktop Physics: Taskbar walk, multi-monitor ledge jumping, ballistic cursor leap/hanging, mouse drag & drop fall physics, cat bomb tossing, soot recovery, peeking ears rocket launch easter egg.",
+            "  2. AI Companion & Dialogue: Multi-turn Gemini AI chat, double dialogue (Ghost Spirit vs Doll Vessel bickering), Ghost Takeover Mode ([mode: ghost]), screen vision OCR/window reactions, GSMTC music reactions.",
+            "  3. Memory & Productivity: 2-day temp facts ([add_temp_fact]), permanent facts ([add_fact]), 30-day reminders ([add_reminder]), target milestones & royal goal coaching ([add_goal], P$ rewards), countdown timers ([set_timer]) & alarms ([set_alarm]), hardware thermal monitor (/vitals).",
+            "  4. Deltarune Sanctuary Boutique (shop_window.py): Dark Dollars (P$) wallet, item catalog (Ribbon, Knife, Yogurt Mushroom, Tea), GUI editors for goals, alarms, and facts.",
+            "  5. Slash Commands: /features, /codebase, /help, /goals, /goal, /tempfacts, /tempfact, /facts, /timer, /alarm, /vitals, /coach, /scale.",
+            self.get_latest_release_highlights(),
+            "- PERSONA INSTRUCTION FOR CODEBASE & FEATURES:",
+            "  * Answer questions about your features, abilities, version, branch, and code with complete accuracy and proud tsundere flair!",
+            "  * Boast about your 17k-line PyQt5 vessel and mock bloated web/Electron frameworks.",
+            "  * If on a git branch with uncommitted changes, tease the minion about their messy work!",
+            "  * Never hallucinate features you do not have."
+        ]
+        return "\n".join(lines)
+
+    def format_status_report(self, pet: Any) -> str:
+        """Deterministic Undertale/Deltarune-style status readout for /codebase."""
+        state = self.get_codebase_state(pet)
+        git = state.get("git")
+        rt = state["runtime"]
+
+        git_line = "Release Distribution (No git repo attached)"
+        if git and git.get("branch"):
+            dirty_str = f" [! {git['dirty_count']} uncommitted dirty files]" if git.get("is_dirty") else " [Clean Tree]"
+            git_line = f"Branch \"{git['branch']}\"{dirty_str}\n* Last: {git.get('commit', 'Unknown')}"
+
+        return (
+            f"* PINK'S CODEBASE & ENGINE STATUS [v{state['version']}]:\n"
+            f"* Mode: {state['mode']}\n"
+            f"* Git: {git_line}\n"
+            f"* Vessel: PyQt5 + Win32 API (~17k LOC in yellows_pixel_buddies.py)\n"
+            f"* Shop: Dark World Sanctuary (~3.3k LOC in shop_window.py)\n"
+            f"* Telemetry: Thermals [{rt['thermal_state'].upper()}] | Vision [{'ON' if rt['vision_enabled'] else 'OFF'}] | SFX [{'MUTED' if rt['audio_muted'] else 'ON'}]\n"
+            f"* Media Hook: {rt['current_song']}\n"
+            f"* Memory Core: {rt['facts_count']} facts | {rt['temp_facts_count']} temp (48h) | {rt['active_goals_count']} goals | {rt['reminders_count']} reminders | {rt['alarms_count']} alarms\n"
+            f"* Wallet: P$ {rt['wallet_balance']} Pink Dollars\n"
+            f"* (Don't let my code get dusty, minion! [anim: laughing])"
+        )
+
+    def format_features_report(self) -> str:
+        """Deterministic Undertale/Deltarune-style features breakdown for /features."""
+        return (
+            "* BEHOLD MY ROYAL CAPABILITIES, MINION! [anim: peace_sign]\n"
+            "* 1. PHYSICS: Taskbar walk, multi-monitor ledges, ballistic cursor jumps, drag/throw gravity, cat bombs & soot burns!\n"
+            "* 2. MEMORY: 2-day temp facts (/tempfacts), permanent core facts (/facts), 30-day reminders (/reminders).\n"
+            "* 3. COACHING & GOALS: Milestone tracking (/goals), royal/gentle coaching (/coach), P$ rewards upon completion!\n"
+            "* 4. PRODUCTIVITY: Timers (/timer 15m tea), scheduled alarms (/alarm 08:00 AM), thermal monitor (/vitals).\n"
+            "* 5. PERCEPTION: Desktop screen vision peeking, GSMTC music listening & song commentary.\n"
+            "* 6. SANCTUARY SHOP: Boutique window, items, Dark Dollars wallet, GUI goal & alarm editors!\n"
+            "* (Try /codebase for live engine specs, or /help for commands!)"
+        )
+
+    def format_help_report(self) -> str:
+        """Deterministic Undertale/Deltarune-style help summary for /help."""
+        return (
+            "* COMMAND CHEAT SHEET FOR MORTAL MINIONS: [anim: tongue]\n"
+            "* /features - Full breakdown of Pink's abilities & physics\n"
+            "* /codebase (or /status) - Live git branch, commit, & engine vitals\n"
+            "* /vitals - Hardware specs, CPU, RAM, battery & thermals\n"
+            "* /goals, /goal <text> - Milestone board & royal coaching\n"
+            "* /tempfacts, /tempfact <text> - Active 2-day situational notes\n"
+            "* /facts, /fact <text> - Permanent memory core\n"
+            "* /timer <dur> <label>, /alarm <time> - Active alerts\n"
+            "* /coach <royal|gentle|snooze> - Switch coaching style\n"
+            "* /scale <pet> [box] - Change sprite & dialogue display scale"
+        )
+
+
 class YellowsPixelBuddies(QWidget):
     """A sprite-sized, frameless, translucent, always-on-top window that walks on the taskbar."""
 
@@ -10006,6 +10420,9 @@ class YellowsPixelBuddies(QWidget):
         self._hardware_monitor = HardwareMonitor(memory=self._memory)
         self._last_hardware_alert_time: float = -9999.0
         self._last_hardware_alert_state: str = "normal"
+
+        # --- codebase state & feature awareness provider -----------------------
+        self._codebase_provider = CodebaseStateProvider(memory=self._memory)
 
         # --- alarms & focus timers ticker (disabled / COMING SOON) -------------
         self._alarm_ticker: QTimer = QTimer(self)
@@ -10896,6 +11313,14 @@ class YellowsPixelBuddies(QWidget):
                 rc_val = m.group(1).strip()
                 if rc_val:
                     self._memory.resolve_curiosity_thread(rc_val)
+            for m in re.finditer(r"\[(?:add_reminder|add_task|add_todo|task|todo):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                r_val = m.group(1).strip()
+                if r_val:
+                    self._memory.add_reminder(r_val)
+            for m in re.finditer(r"\[(?:delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
+                d_val = m.group(1).strip()
+                if d_val:
+                    self._memory.delete_reminder(d_val)
             for m in re.finditer(r"\[(?:complete_goal|finish_goal|done_goal):\s*([^\]]+)\]", reaction_text, re.IGNORECASE):
                 cg_val = m.group(1).strip()
                 if cg_val:
@@ -10909,7 +11334,17 @@ class YellowsPixelBuddies(QWidget):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     self._memory.update_goal_progress(t_val, n_val)
-            reaction_text = re.sub(r"\[(?:add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode):\s*[^\]]+\]", "", reaction_text, flags=re.IGNORECASE).strip()
+            reaction_text = re.sub(
+                r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+                r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+                r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
+                r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
+                r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+                r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
+                "",
+                reaction_text,
+                flags=re.IGNORECASE,
+            ).strip()
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -11302,6 +11737,10 @@ class YellowsPixelBuddies(QWidget):
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        if hasattr(self, "_codebase_provider") and self._codebase_provider:
+            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
+            if compact_cb:
+                system_inst += f"\n{compact_cb}"
 
         facts = self._memory.get_long_term_facts()
         if facts:
@@ -12217,24 +12656,24 @@ RULES:
             reply = f"* Swept away {cleared} temporary fact{'s' if cleared != 1 else ''}, mew!" if cleared else "* No temporary facts to clear, silly!"
             self._say(reply, force=True, record_memory=False)
             return
-        elif lower_input.startswith(("/remind ", "/todo ")):
+        elif lower_input.startswith(("/remind ", "/todo ", "/task ", "/add_task ", "/add_reminder ", "/add_todo ")):
             remind_content = clean_input.split(" ", 1)[1].strip()
             if remind_content:
                 ok = self._memory.add_reminder(remind_content)
-                reply = f"* Mew! Reminder saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That reminder is already active, silly!"
+                reply = f"* Mew! Task saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That task is already active, silly!"
                 self._say(reply, force=True, record_memory=True)
                 return
-        elif lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ")):
+        elif lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ", "/del_task ", "/delete_task ", "/rm_task ")):
             target = clean_input.split(" ", 1)[1].strip()
             if target:
                 ok, deleted_text = self._memory.delete_reminder(target)
                 if ok:
-                    reply = f"* Deleted reminder, mew:\n* \"{deleted_text}\""
+                    reply = f"* Deleted task, mew:\n* \"{deleted_text}\""
                 else:
-                    reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
+                    reply = f"* Couldn't find task '{target}', dummy! Use /reminders or /tasks to check the list."
                 self._say(reply, force=True, record_memory=False)
                 return
-        elif lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ")):
+        elif lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ", "/edit_task ", "/update_task ")):
             rest = clean_input.split(" ", 1)[1].strip()
             if "|" in rest:
                 parts = rest.split("|", 1)
@@ -12299,7 +12738,7 @@ RULES:
             self._open_reminders_dialog()
             self._say("* Opened the reminder manager for you, mew!", force=True, record_memory=False)
             return
-        elif lower_input in ("/reminders", "/reminder", "/todos", "/todo"):
+        elif lower_input in ("/reminders", "/reminder", "/todos", "/todo", "/tasks", "/task"):
             reminders_text = self._memory.get_reminders_prompt()
             reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
             self._say(reply, force=True, record_memory=False)
@@ -12323,6 +12762,18 @@ RULES:
         elif lower_input in ("/vitals on", "/hardware on", "/vitals resume", "/hardware resume"):
             self._memory.set_hardware_coaching_config({"snooze_until": None})
             reply = "* Hardware monitoring alert chatter re-enabled, mew! [anim: peace_sign]"
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/codebase", "/status", "/version", "/git", "/engine"):
+            reply = self._codebase_provider.format_status_report(self)
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/features", "/feature", "/abilities", "/ability"):
+            reply = self._codebase_provider.format_features_report()
+            self._say(reply, force=True, record_memory=False)
+            return
+        elif lower_input in ("/help", "/commands", "/command", "/cmd"):
+            reply = self._codebase_provider.format_help_report()
             self._say(reply, force=True, record_memory=False)
             return
         elif lower_input in ("/goals debug", "/goal debug", "/goals_debug"):
@@ -12646,6 +13097,10 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        if hasattr(self, "_codebase_provider") and self._codebase_provider:
+            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
+            if compact_cb:
+                system_inst += f"\n{compact_cb}"
 
         if is_focus:
             focus_mins = int(round(focus_dur_s / 60.0))
@@ -12829,6 +13284,12 @@ RULES:
                 hw_block = self._hardware_monitor.get_prompt_block(force=False)
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
+
+        # Conditional codebase and feature knowledge injection (on inquiry or deep self-awareness)
+        if hasattr(self, "_codebase_provider") and self._codebase_provider:
+            codebase_block = self._codebase_provider.get_prompt_block(self, force=False, user_query=clean_input)
+            if codebase_block:
+                system_inst += f"\n\n{codebase_block}"
 
         had_visual = bool(see_screen or attached_image_b64)
         # Spawn background worker thread
@@ -13089,6 +13550,10 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        if hasattr(self, "_codebase_provider") and self._codebase_provider:
+            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
+            if compact_cb:
+                system_inst += f"\n{compact_cb}"
 
         last_turn = self._memory.history[-1] if self._memory.history else None
         if last_turn and "timestamp" in last_turn:
@@ -13791,6 +14256,10 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        if hasattr(self, "_codebase_provider") and self._codebase_provider:
+            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
+            if compact_cb:
+                system_inst += f"\n{compact_cb}"
 
         facts = self._memory.get_long_term_facts()
         if facts:
@@ -15175,6 +15644,10 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        if hasattr(self, "_codebase_provider") and self._codebase_provider:
+            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
+            if compact_cb:
+                system_inst += f"\n{compact_cb}"
 
         facts = self._memory.get_long_term_facts()
         if facts:
