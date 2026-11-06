@@ -7922,7 +7922,17 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]", "", chosen_cand, flags=re.IGNORECASE)
+                    chosen_cand = re.sub(
+                        r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+                        r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
+                        r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
+                        r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
+                        r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
+                        r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
+                        "",
+                        chosen_cand,
+                        flags=re.IGNORECASE,
+                    )
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
