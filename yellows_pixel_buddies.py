@@ -2508,6 +2508,8 @@ class Phase(Enum):
     SUMMON_INTRO = auto()     # ghost rises FAST, looks R&L, flies off right, shocked pops in
     HIDE_OUTRO = auto()       # runs right, ghost enters, slowly sinks into hide state
     EXIT_OUTRO = auto()       # runs to furthest screen edge and quits when offscreen
+    TRAY_HIDE = auto()        # leaping into system tray corner/icon
+    TRAY_RESTORE = auto()     # leaping out from system tray corner/icon back onto taskbar
 
 
 class VfxOverlay(QWidget):
@@ -11045,6 +11047,10 @@ class YellowsPixelBuddies(QWidget):
             return f"Falling through the air under gravity towards the taskbar on {scr_name}"
         if phase is Phase.THROW:
             return f"Mid-throw bomb tossing animation on {scr_name}"
+        if phase is Phase.TRAY_HIDE:
+            return f"Jumping into the system tray on {scr_name}"
+        if phase is Phase.TRAY_RESTORE:
+            return f"Jumping out from the system tray on {scr_name}"
         if phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO) or state == GHOST_STATE:
             return f"Hiding inside the taskbar with ghost ears poking out on {scr_name}"
 
@@ -11105,7 +11111,8 @@ class YellowsPixelBuddies(QWidget):
             return
         if not force and (getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
                                               Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
-                                              Phase.SUMMON_INTRO, Phase.EXIT_OUTRO)
+                                              Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+                                              Phase.TRAY_HIDE, Phase.TRAY_RESTORE)
                 or getattr(self, "_jump_active", False)
                 or getattr(self, "_dragging", False)):
             return
@@ -11655,7 +11662,8 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_phase", None) in (
             Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
-            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.TRAY_HIDE, Phase.TRAY_RESTORE
         ):
             return
 
@@ -11696,7 +11704,8 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_phase", None) in (
             Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
-            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.TRAY_HIDE, Phase.TRAY_RESTORE
         ):
             return
 
@@ -11979,6 +11988,7 @@ RULES:
             Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
             Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
             Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO,
+            Phase.TRAY_HIDE, Phase.TRAY_RESTORE,
         ):
             return False
 
@@ -12411,7 +12421,7 @@ RULES:
         """Open the interactive chat text input bar to talk to Pink."""
         if hasattr(self, "_single_click_timer"):
             self._single_click_timer.stop()
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
         if getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG):
             return
@@ -14365,7 +14375,7 @@ RULES:
             return
         if not self._dialogue_enabled or not getattr(self, "_ai_song_comment_enabled", True):
             return
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
 
         # Stale comment prevention: ensure this commentary matches the active target song
@@ -15158,6 +15168,16 @@ RULES:
                 self._sync_window_position()
             return
 
+        if self._phase is Phase.TRAY_HIDE:
+            self._tick_tray_hide(now, dt, bounds)
+            self._sync_window_position()
+            return
+
+        if self._phase is Phase.TRAY_RESTORE:
+            self._tick_tray_restore(now, dt, bounds)
+            self._sync_window_position()
+            return
+
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
             if now - getattr(self, "_hang_started_at", now) > 15.0:
                 log.warning("Phase.HANG watchdog: hang timed out (>15.0s). Forcing release.")
@@ -15430,13 +15450,24 @@ RULES:
         else:
             self._hide_to_tray()
 
+    def _get_tray_target_pos(self) -> tuple[float, float]:
+        """Calculate target coordinates of the system tray area on the primary taskbar."""
+        area = QApplication.primaryScreen().availableGeometry()
+        ground_y = float(area.y() + area.height() - self.height() + FOOT_PADDING)
+        if hasattr(self, "_tray_icon") and self._tray_icon is not None:
+            geo = self._tray_icon.geometry()
+            if geo.isValid() and not geo.isEmpty():
+                return float(geo.center().x() - self.width() / 2.0), ground_y
+        fallback_x = float(area.x() + area.width() - self.width() - self._ear_peek_offset_x)
+        return fallback_x, ground_y
+
     def _hide_to_tray(self) -> None:
-        """Hide Pink completely from the screen into the system tray.
+        """Hide Pink into the system tray with an airborne jump into the tray corner.
         While hidden, she remains invisible on screen but reads the screen every 5 minutes
-        to maintain context and keep the session active. She can only be brought back
-        to the screen via the system tray icon.
+        to maintain context and keep the session active. She can be brought back
+        to the screen via the system tray icon, leaping out from that same spot.
         """
-        if getattr(self, "_hidden_in_tray", False):
+        if getattr(self, "_hidden_in_tray", False) or self._phase in (Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
 
         if hasattr(self, "_single_click_timer"):
@@ -15463,10 +15494,54 @@ RULES:
         self._dragging = False
         self._press_global = None
 
+        target_x, target_y = self._get_tray_target_pos()
+        self._tray_spot = (target_x, target_y)
+        dx = target_x - self._x
+        dy = target_y - self._y
+        dist = abs(dx)
+
+        if dist < 30.0:
+            duration = 0.35
+            self._vx = 0.0
+            self._vy = -360.0
+        else:
+            duration = min(0.85, max(0.40, dist / 1100.0))
+            self._vx = dx / duration
+            self._vy = -520.0
+
+        self._gravity = max(600.0, 2.0 * (dy - self._vy * duration) / (duration * duration))
+        self._tray_hide_duration = duration
+        self._tray_hide_timer = 0.0
+        self._facing = "right" if dx >= 0.0 else "left"
+        self._phase = Phase.TRAY_HIDE
+        self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        self._sync_window_position()
+        log.info("Pink jumping into tray: target=(%.1f, %.1f), vx=%.1f, vy=%.1f, duration=%.2fs",
+                 target_x, target_y, self._vx, self._vy, duration)
+
+    def _tick_tray_hide(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
+        """Physics tick for Pink jumping into the system tray icon."""
+        self._tray_hide_timer += dt
+        self._x += self._vx * dt
+        self._y += self._vy * dt + 0.5 * self._gravity * dt * dt
+        self._vy += self._gravity * dt
+        self._update_airborne_facing()
+
+        target_x, target_y = getattr(self, "_tray_spot", (self._x, bounds[3]))
+        if self._tray_hide_timer >= getattr(self, "_tray_hide_duration", 0.6) or (self._vy >= 0.0 and self._y >= target_y):
+            self._x = target_x
+            self._y = target_y
+            self._sync_window_position()
+            self._finish_hide_to_tray()
+
+    def _finish_hide_to_tray(self) -> None:
+        """Landed inside the tray: hide window and activate background tray monitor."""
+        self.hide()
         self._hidden_in_tray = True
         self._tray_hidden_at = time.time()
         self._tray_observations = []
-        self.hide()
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
 
         # Update tray actions (only one restore action to avoid duplicate 'shows shows')
         if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
@@ -15496,8 +15571,8 @@ RULES:
         log.info("Pink hidden to system tray; 5-minute background screen reading active.")
 
     def _restore_from_tray(self) -> None:
-        """Restore Pink from the system tray back onto the primary taskbar."""
-        if not getattr(self, "_hidden_in_tray", False):
+        """Restore Pink from the system tray: shows up jumping out from that same spot."""
+        if not getattr(self, "_hidden_in_tray", False) or self._phase in (Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
 
         if hasattr(self, "_tray_screen_timer") and self._tray_screen_timer.isActive():
@@ -15505,19 +15580,17 @@ RULES:
 
         self._hidden_in_tray = False
 
-        bounds = self._bounds()
-        min_x, max_x, _min_y, ground_y = bounds
-        self._x = float((min_x + max_x) // 2)
-        self._y = float(ground_y)
-        self._vy = 0.0
-        self._vx = 0.0
-        self._phase = Phase.PAUSE
-        self._pause_elapsed = False
+        # Restore at the same spot where Pink jumped into the tray
+        spot = getattr(self, "_tray_spot", None)
+        if not spot:
+            spot = self._get_tray_target_pos()
+        tray_x, ground_y = spot
 
+        self._x = tray_x
+        self._y = ground_y
         self._sync_window_position()
         self.show()
         ensure_window_topmost(self)
-        self._play("peace_sign")
 
         if hasattr(self, "_hide_tray_action") and self._hide_tray_action is not None:
             self._hide_tray_action.setText("Hide to Tray \U0001f4e5")
@@ -15527,6 +15600,36 @@ RULES:
             self._bring_action.setVisible(True)
         if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
             self._hide_peek_action.setVisible(True)
+
+        # Launch her jumping up and out onto the taskbar from that same spot!
+        self._facing = "left"
+        self._vy = -540.0
+        self._vx = -170.0
+        self._gravity = JUMP_GRAVITY_PX_S2
+        self._phase = Phase.TRAY_RESTORE
+        self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
+        log.info("Pink restored: jumping out from same tray spot (%.1f, %.1f)", tray_x, ground_y)
+
+    def _tick_tray_restore(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
+        """Physics tick for Pink jumping out of the tray back onto the taskbar."""
+        min_x, max_x, _min_y, ground_y = bounds
+        self._x += self._vx * dt
+        self._x = max(min_x, min(self._x, max_x))
+        self._y += self._vy * dt + 0.5 * self._gravity * dt * dt
+        self._vy += self._gravity * dt
+        self._update_airborne_facing()
+
+        if self._vy >= 0.0 and self._y >= ground_y:
+            self._y = ground_y
+            self._vy = 0.0
+            self._vx = 0.0
+            self._finish_restore_from_tray(bounds)
+
+    def _finish_restore_from_tray(self, bounds: tuple[float, float, float, float]) -> None:
+        """Landed on the taskbar ground after jumping out from tray: play reaction and speak."""
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._play("peace_sign")
 
         # Contextual return line acknowledging what Pink saw while in tray
         obs = getattr(self, "_tray_observations", [])
@@ -16465,7 +16568,7 @@ RULES:
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
-        if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             event.accept()
             return
         if getattr(self, "_visitor_mission", None):
@@ -16546,7 +16649,7 @@ RULES:
             super().mousePressEvent(event)   # right button -> contextMenuEvent follows
 
     def mouseMoveEvent(self, event) -> None:
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
         if self._press_global is None or not (event.buttons() & Qt.LeftButton):
             if not self._dragging:
@@ -16576,7 +16679,7 @@ RULES:
             return
         self._press_global = None
 
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
 
         if getattr(self, "_dialogue_clicked", False):
@@ -16611,7 +16714,7 @@ RULES:
         """Double left-click opens the chat input overlay to talk to Pink."""
         if hasattr(self, "_single_click_timer"):
             self._single_click_timer.stop()
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW):
             return
@@ -16671,7 +16774,7 @@ RULES:
         """Inspect and comment directly on an image dropped onto Pink."""
         if hasattr(self, "_single_click_timer"):
             self._single_click_timer.stop()
-        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
         if getattr(self, "_gemini_thread", None) is not None and self._gemini_thread.isRunning():
             self._say("* Hold your horses, minion! I'm still thinking about your last question!", force=True, record_memory=False)
@@ -17254,7 +17357,7 @@ RULES:
             if hasattr(self, "_hide_peek_action") and self._hide_peek_action is not None:
                 self._hide_peek_action.setVisible(True)
         if hasattr(self, "_talk_tray_action") and self._talk_tray_action is not None:
-            self._talk_tray_action.setEnabled(not is_hidden_tray and self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO))
+            self._talk_tray_action.setEnabled(not is_hidden_tray and self._phase not in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE))
         if self._startup_action is not None:
             self._startup_action.blockSignals(True)
             self._startup_action.setChecked(is_run_at_startup_enabled())
@@ -17535,7 +17638,7 @@ RULES:
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE):
             self._start_summon_intro()
             return
-        if self._phase in (Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
         self._reset_jump_state()
         min_x, max_x, _min_y, ground_y = self._bounds()
@@ -17561,7 +17664,8 @@ RULES:
                 ensure_window_topmost(self)
                 if self._phase not in (
                     Phase.JUMP, Phase.HANG, Phase.FALL,
-                    Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO
+                    Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO,
+                    Phase.TRAY_HIDE, Phase.TRAY_RESTORE
                 ):
                     self._play("peace_sign")
                     self._start_pause(roll_special=False)
@@ -17583,7 +17687,7 @@ RULES:
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         """Left-click or double-click tray icon to call Pink if she is hiding."""
-        if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
+        if self._phase in (Phase.HIDE_OUTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
             return
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             if getattr(self, "_hidden_in_tray", False):
