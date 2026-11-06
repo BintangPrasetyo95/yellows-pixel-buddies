@@ -583,6 +583,67 @@ class DeltaruneShopWindow(QWidget):
         self._last_exit_idx = CANON_EXITS.index(chosen)
         return chosen
 
+    def _paginate_shop_text(self, text: str, max_lines_per_page: int = 4, max_chars_per_line: int = 50) -> list[str]:
+        """Split a long shopkeeper dialogue line into paginated cards of at most max_lines_per_page."""
+        raw_clean = re.sub(r"\s*/\s*(?=\*)", "\n", text.strip())
+        raw_paras = [p.strip() for p in raw_clean.splitlines() if p.strip()]
+        if not raw_paras:
+            return ["* " + text.strip() if not text.strip().startswith("* ") else text.strip()]
+
+        def _count_lines(s: str) -> int:
+            lines = 0
+            for para in s.split("\n"):
+                words = para.split(" ")
+                cur_len = 0
+                p_lines = 1 if para else 0
+                for w in words:
+                    w_len = len(w)
+                    if cur_len + w_len + (1 if cur_len > 0 else 0) > max_chars_per_line:
+                        p_lines += 1
+                        cur_len = w_len + 2
+                    else:
+                        cur_len += w_len + (1 if cur_len > 0 else 0)
+                lines += max(1, p_lines)
+            return lines
+
+        atomic_units: list[str] = []
+        for p in raw_paras:
+            clean = re.sub(r"^[\s*\-]+", "", p).strip()
+            if not clean:
+                continue
+            if _count_lines(clean) > max_lines_per_page:
+                sentences = re.split(r"(?<=[.!?])\s+", clean)
+                cur_s = ""
+                for s in sentences:
+                    if not s.strip():
+                        continue
+                    test_s = (cur_s + " " + s).strip() if cur_s else s
+                    if cur_s and _count_lines(test_s) > max_lines_per_page:
+                        atomic_units.append("* " + cur_s)
+                        cur_s = s
+                    else:
+                        cur_s = test_s
+                if cur_s:
+                    atomic_units.append("* " + cur_s)
+            else:
+                atomic_units.append("* " + clean)
+
+        pages: list[str] = []
+        cur_page: list[str] = []
+        for unit in atomic_units:
+            test_page = cur_page + [unit]
+            joined = "\n".join(test_page)
+            if cur_page and _count_lines(joined) > max_lines_per_page:
+                pages.append("\n".join(cur_page))
+                cur_page = [unit]
+            else:
+                cur_page.append(unit)
+
+        if cur_page:
+            pages.append("\n".join(cur_page))
+
+        return pages if pages else [text]
+
     def deliver_ai_reply(self, lines: list[str]) -> None:
         """Deliver AI-generated shopkeeper speech directly into the typewriter dialogue queue."""
         if not lines:
@@ -592,10 +653,11 @@ class DeltaruneShopWindow(QWidget):
             text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", l)
             text = re.sub(r"\[mode:\s*[^\\\]]+\]", "", text)
             text = re.sub(r"\[seen:\s*[^\\\]]+\]", "", text).strip()
-            if text:
-                if not text.startswith("* "):
-                    text = "* " + text
-                clean_lines.append(text)
+            if not text:
+                continue
+            paginated = self._paginate_shop_text(text, max_lines_per_page=4, max_chars_per_line=50)
+            clean_lines.extend(paginated)
+
         if not clean_lines:
             return
         self._dialogue_queue = clean_lines
@@ -2693,10 +2755,13 @@ class DeltaruneShopWindow(QWidget):
         self._draw_dialogue_text(p, QRect(36, 271, 568, 175))
 
     def _draw_dialogue_text(self, p: QPainter, rect: QRect) -> None:
+        p.save()
+        p.setClipRect(rect)
         p.setFont(self._font_body)
         p.setPen(QColor(255, 255, 255))
         visible_text = self._dialogue_text[: self._dialogue_char_idx]
         p.drawText(rect, Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, visible_text)
+        p.restore()
 
     def _draw_root_state(self, p: QPainter) -> None:
         self._draw_dialogue_text(p, QRect(32, 269, 355, 185))
@@ -3207,7 +3272,12 @@ class DeltaruneShopWindow(QWidget):
             self._draw_dialogue_text(p, QRect(36, 271, 568, 175))
             p.setFont(self._font_small)
             p.setPen(QColor(157, 162, 196))
-            p.drawText(530, 456, "[Z / Esc]")
+            total_q = len(self._dialogue_queue)
+            if total_q > 1:
+                cur_q = self._dialogue_queue_idx + 1
+                p.drawText(QRect(36, 450, 568, 20), Qt.AlignRight | Qt.AlignVCenter, f"Page {cur_q}/{total_q}  [Z: Next | Esc: Back]")
+            else:
+                p.drawText(530, 456, "[Z / Esc]")
 
     def _draw_item_action_state(self, p: QPainter) -> None:
         if self._inspect_item_kind == "fact":
