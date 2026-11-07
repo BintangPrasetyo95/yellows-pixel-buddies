@@ -67,6 +67,8 @@ from PyQt5.QtWidgets import (
 if TYPE_CHECKING:
     from yellows_pixel_buddies import MemoryManager, YellowsPixelBuddies
 
+from sound_manager import get_sound_manager, play_sound
+
 log = logging.getLogger("yellows_pixel_buddies.shop")
 
 # --- Directory Paths -----------------------------------------------------------
@@ -159,13 +161,16 @@ class PinkWallet:
     def add(self, amount: int) -> int:
         self.pink_dollars = max(0, self.pink_dollars + amount)
         self.save()
+        play_sound("coin")
         return self.pink_dollars
 
     def spend(self, amount: int) -> bool:
         if self.pink_dollars >= amount:
             self.pink_dollars -= amount
             self.save()
+            play_sound("coin")
             return True
+        play_sound("menu_error")
         return False
 
 
@@ -819,7 +824,10 @@ class DeltaruneShopWindow(QWidget):
 
     def _on_typewriter_tick(self) -> None:
         if self._dialogue_char_idx < len(self._dialogue_text):
+            ch = self._dialogue_text[self._dialogue_char_idx]
             self._dialogue_char_idx += 1
+            if not ch.isspace():
+                play_sound("text_blip")
             self.update()
         else:
             self._typewriter_timer.stop()
@@ -1002,6 +1010,7 @@ class DeltaruneShopWindow(QWidget):
             return
         if self._history_turn_idx > 0:
             self._history_turn_idx -= 1
+            play_sound("menu_move")
             self.set_dialogue("\n".join(self._history_view_turns[self._history_turn_idx]))
             self.update()
 
@@ -1010,10 +1019,12 @@ class DeltaruneShopWindow(QWidget):
             return
         if self._history_turn_idx < len(self._history_view_turns) - 1:
             self._history_turn_idx += 1
+            play_sound("menu_move")
             self.set_dialogue("\n".join(self._history_view_turns[self._history_turn_idx]))
             self.update()
         else:
             self.state = ShopState.CHAT_HISTORY_SESSIONS
+            play_sound("menu_move")
             self.set_dialogue("* End of session turns reached. Returned to archives.")
             self.update()
 
@@ -1227,6 +1238,7 @@ class DeltaruneShopWindow(QWidget):
         if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "complete_goal"):
             ok, goal_text, awarded = self._memory.complete_goal(text)
             if ok:
+                play_sound("goal_complete")
                 self._wallet._load()
                 self.set_dialogue(
                     f"* TARGET MILESTONE CONQUERED!!\n* You finished: \"{goal_text}\"\n* Pink evaluated your achievement at +P$ {awarded:06d}!"
@@ -1361,6 +1373,7 @@ class DeltaruneShopWindow(QWidget):
         ok, deleted_text = self._memory.delete_reminder(text)
         if ok:
             self._wallet.add(reward)
+            play_sound("sell")
             self.set_dialogue(
                 f"{CANON_SELL_SUCCESS}\n* \"{deleted_text}\" finished! (+P$ {reward:02d})"
             )
@@ -1429,6 +1442,7 @@ class DeltaruneShopWindow(QWidget):
                 self._selected_index = 0
             elif opt.startswith("Delete"):
                 self._delete_goal(self._inspect_item_text)
+                play_sound("menu_select")
                 self.set_dialogue(f"* Goal discarded:\n* \"{self._inspect_item_text}\"")
                 self.state = ShopState.TASKS
                 self._tasks_tab = 0
@@ -1464,6 +1478,7 @@ class DeltaruneShopWindow(QWidget):
             elif opt.startswith("Delete"):
                 if self._memory:
                     self._memory.delete_reminder(self._inspect_item_text)
+                play_sound("menu_select")
                 self.set_dialogue(f"* Task removed from chore board:\n* \"{self._inspect_item_text}\"")
                 self.state = ShopState.TASKS
                 self._tasks_tab = 1
@@ -1479,6 +1494,7 @@ class DeltaruneShopWindow(QWidget):
                 mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
                 if mem and hasattr(mem, "cancel_alarm_or_timer"):
                     mem.cancel_alarm_or_timer(target)
+                play_sound("menu_select")
                 self.set_dialogue(f"* Alarm cancelled:\n* \"{self._inspect_item_text}\"")
                 self.state = ShopState.TASKS
                 self._tasks_tab = 2
@@ -1497,6 +1513,7 @@ class DeltaruneShopWindow(QWidget):
                     mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
                     if mem and hasattr(mem, "cancel_alarm_or_timer"):
                         mem.cancel_alarm_or_timer(target)
+                play_sound("menu_select")
                 self.set_dialogue("* Active timer stopped, darling.")
                 self.state = ShopState.TASKS
                 self._tasks_tab = 3
@@ -1511,6 +1528,7 @@ class DeltaruneShopWindow(QWidget):
                 self._prompt_edit_fact_note(self._inspect_item_text)
             elif self._inspect_choice_idx == 1 or opt.startswith("Delete"):
                 self._delete_fact_note(self._inspect_item_text)
+                play_sound("menu_select")
                 self.set_dialogue(f"* Fact note expunged from memory:\n* \"{self._inspect_item_text}\"")
                 self.state = ShopState.FACTS_EDIT
                 self._selected_index = 0
@@ -1542,6 +1560,7 @@ class DeltaruneShopWindow(QWidget):
             self._sessions_scroll_offset = max(0, self._sessions_scroll_offset - 1)
         elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
             self._note_scroll_offset = max(0, self._note_scroll_offset - 1)
+        play_sound("menu_move")
         self.update()
 
     def _scroll_down(self) -> None:
@@ -1569,6 +1588,7 @@ class DeltaruneShopWindow(QWidget):
             self._sessions_scroll_offset = min(max_off, self._sessions_scroll_offset + 1)
         elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
             self._note_scroll_offset += 1
+        play_sound("menu_move")
         self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -1583,6 +1603,7 @@ class DeltaruneShopWindow(QWidget):
         count = self._get_menu_count()
         if count <= 0:
             return
+        play_sound("menu_move")
         if self.state == ShopState.ITEM_ACTION:
             if self._inspect_item_kind == "fact":
                 self._scroll_up()
@@ -1638,6 +1659,7 @@ class DeltaruneShopWindow(QWidget):
         count = self._get_menu_count()
         if count <= 0:
             return
+        play_sound("menu_move")
         if self.state == ShopState.ITEM_ACTION:
             if self._inspect_item_kind == "fact":
                 self._scroll_down()
@@ -1712,7 +1734,7 @@ class DeltaruneShopWindow(QWidget):
         elif self.state == ShopState.FACTS_EDIT:
             return len(self._get_facts_menu_items()) + 1  # Facts + Back
         elif self.state == ShopState.TOGGLES_MENU:
-            return 5  # 4 toggles + Back
+            return 6  # 5 toggles + Back
         elif self.state == ShopState.ITEM_ACTION:
             return len(self._inspect_options)
         elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
@@ -1870,6 +1892,7 @@ class DeltaruneShopWindow(QWidget):
                 "* Toggle real-time background song commentary.",
                 "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
                 "* Toggle feline explosive ordnance and laser defense.",
+                "* Toggle retro audio and chiptune sound effects.",
                 "* Return to sanctuary settings.",
             ]
             if 0 <= self._selected_index < len(dialogues):
@@ -1905,6 +1928,7 @@ class DeltaruneShopWindow(QWidget):
                 self.set_dialogue("* Return to the talk topics menu.")
 
     def _confirm_selection(self) -> None:
+        play_sound("menu_select")
         if self.state == ShopState.ROOT:
             if self._selected_index == 0:  # CHARACTER
                 self.state = ShopState.CHARACTER
@@ -2098,6 +2122,17 @@ class DeltaruneShopWindow(QWidget):
                     self._pet._toggle_bomb_attack(new_val)
                     state_str = "ARMED" if new_val else "DISARMED"
                     self.set_dialogue(f"* Cat-head bombs are now {state_str}, mew!")
+            elif self._selected_index == 4:  # Sound FX
+                if self._pet and hasattr(self._pet, "_toggle_sound_effects"):
+                    is_muted = getattr(self._pet, "_audio_muted", True)
+                    self._pet._toggle_sound_effects(is_muted)  # un-mute if muted, mute if unmuted
+                    state_str = "MUTED" if not is_muted else "ENABLED"
+                    self.set_dialogue(f"* Sound effects are now {state_str}, darling!")
+                else:
+                    sm = get_sound_manager()
+                    sm.set_muted(not sm.muted)
+                    state_str = "MUTED" if sm.muted else "ENABLED"
+                    self.set_dialogue(f"* Sound effects are now {state_str}, darling!")
             else:  # Back
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 1
@@ -2212,6 +2247,7 @@ class DeltaruneShopWindow(QWidget):
         if not self._pet or not hasattr(self._pet, "cycle_dialogue_scale"):
             return
         new_scale = self._pet.cycle_dialogue_scale(direction=direction)
+        play_sound("menu_move")
         if new_scale <= 1.0:
             self.set_dialogue("* Compact speech bubble! Nice and tidy, mew!")
         elif new_scale <= 1.25:
@@ -2228,6 +2264,7 @@ class DeltaruneShopWindow(QWidget):
         if not self._pet or not hasattr(self._pet, "cycle_scale_modifier"):
             return
         new_scale = self._pet.cycle_scale_modifier(direction=direction)
+        play_sound("menu_move")
         if new_scale <= 0.5:
             self.set_dialogue("* Tiny mode engaged! I'm smol but mighty, mew!")
         elif new_scale <= 0.75:
@@ -2246,6 +2283,7 @@ class DeltaruneShopWindow(QWidget):
         if self._input_container.isVisible():
             self._on_input_cancelled()
             return
+        play_sound("menu_move")
         if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.SETTINGS_MENU, ShopState.TALK_MENU):
             self.state = ShopState.ROOT
             self._selected_index = 0
@@ -2350,6 +2388,7 @@ class DeltaruneShopWindow(QWidget):
 
     def _on_input_cancelled(self) -> None:
         self._input_container.hide()
+        play_sound("menu_move")
         self.set_dialogue("* Cancelled, darling.")
         self.update()
 
@@ -2361,24 +2400,29 @@ class DeltaruneShopWindow(QWidget):
 
         if self._input_mode == "fact_name":
             self._save_facts(name=val)
+            play_sound("save")
             self.set_dialogue(f"* I shall address you as '{val}' from now on, darling!")
         elif self._input_mode == "fact_note":
             self._save_facts(new_note=val)
+            play_sound("save")
             self.set_dialogue(f"* Inscribed into my permanent fact logs:\n* \"{val}\"")
         elif self._input_mode == "edit_fact_note":
             old_text = self._inspect_item_text
             self._edit_fact_note(old_text, val)
             self._inspect_item_text = val
             self._note_scroll_offset = 0
+            play_sound("save")
             self.set_dialogue(f"* Fact note updated:\n* \"{val}\"")
             self.state = ShopState.FACTS_EDIT
             self.update()
         elif self._input_mode == "new_goal":
             self._add_goal(val)
+            play_sound("save")
             self.set_dialogue(f"* New target milestone logged:\n* \"{val}\"\n* Complete it to collect +P$ 000005!")
         elif self._input_mode == "new_task":
             if self._memory:
                 self._memory.add_reminder(val)
+            play_sound("save")
             self.set_dialogue(f"* Task registered to chore board:\n* \"{val}\"\n* Finish it for Pink Dollars!")
         elif self._input_mode == "new_alarm":
             m = re.match(r"^(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}[:.]\d{2})\s*(.*)$", val, re.IGNORECASE)
@@ -2394,25 +2438,32 @@ class DeltaruneShopWindow(QWidget):
             if mem and hasattr(mem, "add_alarm"):
                 item = mem.add_alarm(time_str, lbl)
                 if item:
+                    play_sound("save")
                     self.set_dialogue(
                         f"* Calibrating chronometers and winding the pocket watch...\n"
                         f"* Clock alarm primed for {item.get('clock_time')} (\"{lbl}\")!\n"
                         f"* I will sound the bells right on schedule, minion!"
                     )
                 else:
+                    play_sound("menu_error")
                     self.set_dialogue("* Format error: Use e.g. 08:30 AM Meeting or 14:30 Sync, dummy!")
             else:
+                play_sound("menu_error")
                 self.set_dialogue("* Alarm mechanism currently unavailable, mew!")
         elif self._input_mode == "custom_timer":
             try:
                 mins = int(val)
                 if mins > 0:
                     self.start_timer(mins, "Custom Focus")
+                    play_sound("save")
                 else:
+                    play_sound("menu_error")
                     self.set_dialogue("* Positive minutes only, silly!")
             except ValueError:
+                play_sound("menu_error")
                 self.set_dialogue("* That wasn't a valid number of minutes, dummy!")
         elif self._input_mode == "ai_ask":
+            play_sound("menu_select")
             self.set_dialogue(f"* \"{val}\"\n* ... *pondering seriously with folded paws* ...")
             if self._pet and hasattr(self._pet, "_on_chat_submitted"):
                 serious_prompt = (
@@ -2471,11 +2522,13 @@ class DeltaruneShopWindow(QWidget):
                     return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx - 1) % len(self._inspect_options)
+                play_sound("menu_move")
                 self.update()
                 return
             elif self.state == ShopState.TASKS:
                 self._tasks_tab = (self._tasks_tab - 1) % 2
                 self._selected_index = 0
+                play_sound("menu_move")
                 self.update()
         elif key in (Qt.Key_Right, Qt.Key_D):
             if self.state == ShopState.CHAT_HISTORY_VIEW:
@@ -2490,11 +2543,13 @@ class DeltaruneShopWindow(QWidget):
                     return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx + 1) % len(self._inspect_options)
+                play_sound("menu_move")
                 self.update()
                 return
             elif self.state == ShopState.TASKS:
                 self._tasks_tab = (self._tasks_tab + 1) % 2
                 self._selected_index = 0
+                play_sound("menu_move")
                 self.update()
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Z, Qt.Key_Space):
             if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW) and self._is_typing():
@@ -2586,6 +2641,7 @@ class DeltaruneShopWindow(QWidget):
                 if self.state == ShopState.ITEM_ACTION:
                     self._inspect_choice_idx = hover_idx
                 self._on_selection_changed()
+                play_sound("menu_move")
                 self.update()
         elif is_dialogue and (self._is_typing() or self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW)):
             self.setCursor(Qt.PointingHandCursor)
@@ -2652,10 +2708,12 @@ class DeltaruneShopWindow(QWidget):
         if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS,
                           ShopState.SETTINGS_MENU, ShopState.SCALES_MENU, ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT,
                           ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
-            if 20 <= pt.x() <= 400 and 265 <= pt.y() <= 465:
+            if 20 <= pt.x() <= 400 and 265 <= pt.y() <= 485:
                 row = (pt.y() - 265) // 36
-                if 0 <= row < 5:
-                    if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TOGGLES_MENU):
+                if 0 <= row < 6:
+                    if self.state == ShopState.TOGGLES_MENU:
+                        return row
+                    elif self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU) and row < 5:
                         return row
                     elif self.state == ShopState.SCALES_MENU:
                         return row if row < 3 else None
@@ -2700,6 +2758,10 @@ class DeltaruneShopWindow(QWidget):
                         return row if row < 2 else None
 
         return None
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        play_sound("sanctuary_open")
 
     # --- Painting & Rendering (Zero Allocations) -------------------------------
 
@@ -3036,6 +3098,7 @@ class DeltaruneShopWindow(QWidget):
         song_on = getattr(self._pet, "_ai_song_comment_enabled", True) if self._pet else True
         game_mode = getattr(self._pet, "_game_mode", "AUTO") if self._pet else "AUTO"
         bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
+        sfx_on = not getattr(self._pet, "_audio_muted", True) if self._pet else not get_sound_manager().muted
 
         p.setFont(self._font_body)
         options = [
@@ -3043,6 +3106,7 @@ class DeltaruneShopWindow(QWidget):
             f"Song React: [{'ON' if song_on else 'OFF'}]",
             f"Game Mode: [{game_mode}]",
             f"Bomb Attack: [{'ON' if bomb_on else 'OFF'}]",
+            f"Sound FX: [{'ON' if sfx_on else 'OFF'}]",
             "Back",
         ]
         start_x = 44
@@ -3064,6 +3128,7 @@ class DeltaruneShopWindow(QWidget):
             "* Toggle AI commentary on currently playing music.",
             "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
             "* Toggle feline explosive defense behavior.",
+            "* Toggle retro audio and chiptune sound effects.",
             "* Return to sanctuary settings.",
         ]
         desc = descriptions[self._selected_index] if 0 <= self._selected_index < len(descriptions) else ""

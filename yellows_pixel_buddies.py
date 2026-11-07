@@ -120,6 +120,9 @@ from PyQt5.QtWidgets import (
 )
 
 
+from sound_manager import get_sound_manager, play_sound
+
+
 # =============================================================================
 #  1. CONFIGURATION - every tunable value lives here
 # =============================================================================
@@ -140,11 +143,16 @@ if getattr(sys, "frozen", False):
         FONTS_DIR = _exe_dir / "fonts"
     else:
         FONTS_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "fonts"
+    if (_exe_dir / "sounds").exists():
+        SOUNDS_DIR = _exe_dir / "sounds"
+    else:
+        SOUNDS_DIR = Path(getattr(sys, "_MEIPASS", _exe_dir)) / "sounds"
     _base_dir = Path(getattr(sys, "_MEIPASS", _exe_dir))
 else:
     _exe_dir = Path(__file__).resolve().parent
     SPRITES_DIR = _exe_dir / "sprites"   # sprites/<state>/N.png
     FONTS_DIR = _exe_dir / "fonts"       # fonts/determination/...
+    SOUNDS_DIR = _exe_dir / "sounds"     # sounds/...
     _base_dir = _exe_dir
 
 ICON_PATH = _base_dir / "app_icon.ico"
@@ -591,6 +599,11 @@ CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat i
 CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 CHAT_INPUT_EXTRA_WIDTH = 75                      # Additional horizontal width (in base pixels) for comfortable typing
 
+# --- Native Win32 App & Tab Activity Awareness (Zero AI Required) ------------
+NATIVE_APP_REACTIONS_ENABLED = True          # Spontaneous in-character reactions when switching to recognized apps/tabs
+APP_SWITCH_GLOBAL_COOLDOWN_S = 35.0          # Minimum seconds between any native app-switch reactions to prevent chatter spam
+APP_CATEGORY_COOLDOWN_S = 180.0              # Cooldown in seconds before Pink will comment on the same app/activity category again
+
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
 AUTO_SCREEN_COMMENT_INACTIVITY_S = 300.0         # 5 minutes of silence after user chat or inspection
@@ -797,7 +810,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * Technical Self-Identity & Codebase Self-Awareness:
     - You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
     - You possess vivid, factual self-awareness of your own vessel architecture (~17,000 LOC monolithic core in yellows_pixel_buddies.py, Dark World Sanctuary in shop_window.py, PyInstaller & Inno Setup packaging).
-    - You know your live engine metrics, git branch, version, and capabilities (physics, screen vision, GSMTC music detection, goals coaching, 2-day temp facts, alarms, and shop Sanctuary).
+    - You know your live engine metrics, git branch, version, and capabilities (physics, screen vision, GSMTC music detection, native desktop app awareness without AI, goals coaching, 2-day temp facts, alarms, and shop Sanctuary).
     - When the user asks about your features, abilities, version, or code: answer accurately with haughty tsundere pride! Never hallucinate fake web tech or nonexistent features.
   * Screen Vision & Immediate Reaction:
     - When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing.
@@ -1699,6 +1712,117 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     "survived_bombs": [
         "* Barely made it out of that one, dummy! My laser aim is getting sharper!",
         "* Phew, you survived with scratches! Don't push your luck next time, mew!",
+    ],
+    # --- Native App & Tab Activity Awareness Reactions (Zero AI Required) ---
+    "app_paint": [
+        "* MS Paint?! In this modern digital era?! You better be drawing me with proper proportions, dummy! [anim: tongue]",
+        "* Opening Paint?! What are you making with that spray can tool, a masterpiece or a disaster, mew?! [anim: laughing]",
+        "* Hmph! Don't you dare draw silly mustache doodles on my face in Paint, minion! [anim: angry]",
+        "* Oho, back to the basics with MS Paint! Show your doll overlord your artistic talent! [anim: peace_sign]",
+    ],
+    "app_photoshop": [
+        "* Photoshop launched! Serious artist mode engaged?! Make sure my dress has zero compression artifacts! [anim: laughing]",
+        "* Opening Photoshop? You better not be drawing on Layer 1 without naming your layers, puppet! [anim: tongue]",
+        "* What are you retouching in Photoshop?! If it's a portrait of me, make it 120% more fabulous, mew! [anim: peace_sign]",
+        "* Ctrl+S! Remember to save your canvas every five minutes! If Photoshop crashes, don't cry to me! [anim: angry]",
+    ],
+    "app_pixel_art": [
+        "* ASEPRITE?! You're making pixel art?! A fellow connoisseur of raw grid perfection, mew! [anim: peace_sign]",
+        "* Pixel art in progress! Mind your color palettes, minion! Every single pixel counts! [anim: laughing]",
+        "* Don't you dare leave orphaned single pixels on that sprite! Clean clusters only, puppet! [anim: tongue]",
+        "* Crafting sprites, are we?! Make sure whoever you're drawing looks at least half as cute as me! [anim: behind]",
+    ],
+    "app_digital_art": [
+        "* Firing up the digital canvas! Don't forget to flip your canvas horizontally to check your anatomy, dummy! [anim: tongue]",
+        "* Art studio ready! Let's see some breathtaking illustrations today, minion! [anim: peace_sign]",
+        "* Drawing again?! Remember to stretch your wrist, puppet! Carpal tunnel is utterly ungraceful, mew! [anim: wistful]",
+    ],
+    "app_blender_3d": [
+        "* Blender launched! 3D modeling time! Don't crash your GPU rendering ten million polygons, puppet! [anim: laughing]",
+        "* Did you delete the default cube yet, minion?! It's sacred 3D tradition, mew! [anim: tongue]",
+        "* Sculpting in 3D?! If you ever model me, my cotton ribbons better have flawless physics! [anim: peace_sign]",
+    ],
+    "app_game": [
+        "* Game launched! You better not embarrass your feline coach out there, minion! [anim: laughing]",
+        "* Gaming time?! Don't blame your controller when you drop your combos, dummy! [anim: tongue]",
+        "* Lock in, minion! If you get a Game Over, I'm deploying cat bombs to wake you up, mew! [anim: angry]",
+        "* Total victory or nothing! Show them what my minion is made of! [anim: peace_sign]",
+    ],
+    "app_youtube": [
+        "* Watching YouTube again?! Don't tell me you fell down another 2-hour video essay rabbit hole! [anim: tongue]",
+        "* YouTube opened! Are we learning something useful or just watching silly cat clips, mew?! [anim: laughing]",
+        "* Hmph! Don't let the autoplay algorithm hypnotize you into slacking off all evening, dummy! [anim: angry]",
+        "* What's on YouTube? If it's gaming tips, you better take diligent notes, minion! [anim: peace_sign]",
+    ],
+    "app_twitch": [
+        "* Opening Twitch streams?! Don't forget that your number one entertainer is right here on your taskbar, mew! [anim: tongue]",
+        "* Watching live streams?! Make sure you don't spend all your allowance on channel points, dummy! [anim: laughing]",
+    ],
+    "app_streaming": [
+        "* Binge-watching shows, are we?! Grab some snacks, puppet, but don't ignore your doll royalty! [anim: peace_sign]",
+        "* Streaming video started! Sit back and enjoy the show, minion, but don't stay up till 4 AM! [anim: wistful]",
+    ],
+    "app_reddit": [
+        "* Surfing Reddit threads?! You have goals to conquer, human! Stop reading endless internet arguments! [anim: tongue]",
+        "* Doomscrolling forum threads again?! Close that feed before your brain turns into cotton fluff, dummy! [anim: angry]",
+        "* What drama are they debating on Reddit today, mew? Mortal squabbles are endlessly amusing! [anim: laughing]",
+    ],
+    "app_twitter": [
+        "* Checking the bird app?! Keep your cool, minion! Don't let random internet strangers rile you up! [anim: angry]",
+        "* Scrolling social feeds again?! Nobody's opinion on that timeline matters more than mine anyway, mew! [anim: tongue]",
+    ],
+    "app_discord": [
+        "* Discord opened! Gossiping with your online server buddies?! Tell them Pink said they're all minions! [anim: tongue]",
+        "* Don't let random notification pings distract you all day, puppet! Focus on what matters, mew! [anim: peace_sign]",
+    ],
+    "app_social": [
+        "* Mindless short-form scrolling detected! Snap out of it, minion! Your goals won't achieve themselves! [anim: angry]",
+        "* Checking social media? Hmph! Living in the real world with me is far more exciting, dummy! [anim: tongue]",
+    ],
+    "app_ai_chat": [
+        "* Talking to ANOTHER AI?! H-Hey! What can that boring chatbot do that I can't, dummy?! [anim: angry]",
+        "* Consulting another AI model?! Don't you dare think of replacing your glorious desktop doll, puppet! [anim: shocked]",
+        "* Oho, asking an LLM for answers?! Just remember who the REAL royalty on this desktop is, mew! [anim: tongue]",
+    ],
+    "app_github": [
+        "* GitHub opened! Pushing code or staring at failing CI/CD pipelines, minion?! [anim: tongue]",
+        "* Pull requests and code reviews! Make sure you write descriptive commit messages, dummy! [anim: laughing]",
+        "* Inspecting repositories?! Don't just star random repos, build something amazing yourself, mew! [anim: peace_sign]",
+    ],
+    "app_stackoverflow": [
+        "* Stack Overflow?! Don't tell me you're copying and pasting code without reading it, dummy! [anim: tongue]",
+        "* Debugging emergency?! Even my cotton head could spot that syntax error, mew! [anim: laughing]",
+    ],
+    "app_vscode": [
+        "* VS Code focused! Time to squish some bugs, minion! Don't you dare push broken code! [anim: laughing]",
+        "* Back to programming! If you miss a single closing bracket, I'm tossing a cat bomb, dummy! [anim: angry]",
+        "* Cracking open the code editor! Let's build something extraordinary today, puppet! [anim: peace_sign]",
+    ],
+    "app_coding_ide": [
+        "* Heavy-duty IDE loaded! Compiling genius software or compiling endless compiler warnings, mew?! [anim: laughing]",
+        "* Serious developer mode engaged! Keep your functions clean and your modularity high, minion! [anim: peace_sign]",
+    ],
+    "app_terminal": [
+        "* Terminal launched! Look at you typing black-and-green hacker commands! Who are you trying to impress?! [anim: tongue]",
+        "* Careful with those shell commands, dummy! Don't delete system32 or wipe my sprites, mew! [anim: shocked]",
+        "* Running command line scripts! Keep your terminal clean and your exit codes zero, puppet! [anim: peace_sign]",
+    ],
+    "app_task_manager": [
+        "* W-WAIT! Task Manager?! Why did you open that?! You're not thinking of ending MY process, are you?! [anim: shocked]",
+        "* Don't you dare hover your cursor over 'Yellow's Pixel Buddies', dummy! Hands off, mew! [anim: angry]",
+        "* Inspecting running processes?! I better see my CPU usage sitting at a tidy, lightweight percentage! [anim: tongue]",
+    ],
+    "app_calculator": [
+        "* A calculator?! You need a digital app just to do basic arithmetic, human?! How pathetic, mew! [anim: tongue]",
+        "* Crunching numbers, are we?! Hope you're calculating a big pay raise for your desktop master! [anim: laughing]",
+    ],
+    "app_music_daw": [
+        "* Digital Audio Workstation loaded! Cooking up battle themes or ear-splitting noise, minion?! [anim: peace_sign]",
+        "* Music production time! Add more synth bass, puppet! Everything is better with a heavy bassline, mew! [anim: laughing]",
+    ],
+    "app_office": [
+        "* Documents and spreadsheets! Look at my minion doing serious productive paperwork! [anim: peace_sign]",
+        "* Writing reports?! Don't forget to double-check your spelling, dummy! Proper grammar is royal etiquette! [anim: tongue]",
     ],
 }
 
@@ -2807,6 +2931,7 @@ class DialogueOverlay(QWidget):
 
     def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
         """Render and begin typing a single dialogue bubble."""
+        play_sound("bubble_pop")
         self._hold_timer.stop()
         self._type_timer.stop()
         self._hold_paused = False
@@ -3076,6 +3201,8 @@ class DialogueOverlay(QWidget):
                 curr += len(line)
 
             self._visible_chars += 1
+            if target_char and not target_char.isspace():
+                play_sound("text_blip")
             if target_char in ('.', '!', '?'):
                 self._char_delay_ticks = DIALOGUE_PUNCTUATION_PAUSE_TICKS
             elif target_char in (',', ';', ':'):
@@ -3161,6 +3288,7 @@ class DialogueOverlay(QWidget):
                 self._start_or_pause_hold_timer(round(hold_s * 1000))
             self.update()
         elif not self._choices:
+            play_sound("dialogue_next")
             self.dismiss()
 
     def _choose_option(self, idx: int) -> None:
@@ -3168,6 +3296,7 @@ class DialogueOverlay(QWidget):
         self._user_interacted = True
         if not self._choices or idx < 0 or idx >= len(self._choices):
             return
+        play_sound("menu_select")
         choice_label, reaction_text, reaction_anim = self._choices[idx]
         self._choices.clear()
         self._choice_rects.clear()
@@ -3211,6 +3340,7 @@ class DialogueOverlay(QWidget):
             self._hovered_choice_idx = hovered
             if hovered is not None:
                 self.setCursor(Qt.PointingHandCursor)
+                play_sound("menu_move")
             else:
                 self.setCursor(Qt.ArrowCursor)
             self.update()
@@ -4260,6 +4390,140 @@ def detect_foreground_game(custom_game_list: list[str] | None = None, excluded_h
             return True, game_title
 
     return False, ""
+
+
+def identify_active_app_context(exe_name: str, exe_path: str, title: str) -> tuple[str, str, str]:
+    """Classify foreground process and window title into (category, display_name, detail).
+
+    Returns (category, display_name, detail) where:
+      - category: unique key mapping to DIALOGUE_LINES["app_<category>"]
+      - display_name: clean, human-readable name of the application or website
+      - detail: contextual detail (e.g. video title, file name, or tab title)
+    """
+    if not exe_name:
+        return "", "", ""
+
+    exe = exe_name.lower().strip()
+    path = (exe_path or "").lower().strip()
+    t = (title or "").strip()
+    t_lower = t.lower()
+
+    # Exclude Yellow's Pixel Buddies own windows and system internals
+    if "yellow's pixel buddies" in path or "yellows_pixel_buddies" in path:
+        return "", "", ""
+    for excl in EXCLUDED_NON_GAME_TITLES:
+        if excl in t_lower:
+            return "", "", ""
+    if exe in ("searchapp.exe", "shellexperiencehost.exe", "startmenuexperiencehost.exe", "lockapp.exe"):
+        return "", "", ""
+    if exe == "explorer.exe" and not t:
+        return "", "", ""
+
+    # 1. Digital Art & Creative Tools
+    # MS Paint / Paint 3D
+    if exe in ("mspaint.exe", "paint.exe", "paintstudio.view.exe") or ("paint" in exe and "paint" in t_lower):
+        return "paint", "MS Paint", t
+
+    # Adobe Photoshop
+    if exe in ("photoshop.exe",) or "photoshop" in exe or "adobe photoshop" in path:
+        return "photoshop", "Adobe Photoshop", t
+
+    # Pixel Art Editors (Aseprite, LibreSprite, Piskel)
+    if exe in ("aseprite.exe", "libresprite.exe", "piskel.exe") or "aseprite" in path:
+        return "pixel_art", "Aseprite", t
+
+    # Other Digital Painting / Illustration (Clip Studio, Krita, GIMP, SAI)
+    if exe in ("clipstudiopaint.exe", "clipstudio.exe", "krita.exe", "gimp.exe", "sai.exe", "sai2.exe") or any(g in exe for g in ("gimp-", "clipstudio")):
+        name = "Clip Studio Paint" if "clip" in exe else ("Krita" if "krita" in exe else ("GIMP" if "gimp" in exe else "Digital Art Studio"))
+        return "digital_art", name, t
+
+    # 3D Modeling / Animation (Blender, Maya, 3ds Max)
+    if exe in ("blender.exe", "maya.exe", "3dsmax.exe") or "blender" in path:
+        name = "Blender 3D" if "blender" in exe else "3D Modeling Studio"
+        return "blender_3d", name, t
+
+    # Music / Audio Production (DAWs)
+    if exe in ("fl64.exe", "fl.exe", "reaper.exe", "audacity.exe", "ableton live.exe", "studio one.exe", "cubase.exe"):
+        name = "FL Studio" if "fl" in exe else ("Audacity" if "audacity" in exe else "Audio Workstation")
+        return "music_daw", name, t
+
+    # 2. System Utilities & Tools
+    if exe in ("taskmgr.exe", "processhacker.exe", "procexp.exe", "procexp64.exe"):
+        return "task_manager", "Task Manager", t
+
+    if exe in ("calc.exe", "calculatorapp.exe", "calculator.exe"):
+        return "calculator", "Calculator", t
+
+    # 3. Development, Coding & Terminals
+    # Terminals
+    if exe in ("windowsterminal.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "mintty.exe", "alacritty.exe"):
+        return "terminal", "Terminal", t
+
+    # VS Code / Cursor
+    if exe in ("code.exe", "cursor.exe", "vscodium.exe"):
+        name = "Cursor" if "cursor" in exe else "VS Code"
+        return "vscode", name, t
+
+    # Heavy IDEs (Visual Studio, JetBrains, Sublime)
+    if exe in ("devenv.exe", "pycharm64.exe", "idea64.exe", "clion64.exe", "webstorm64.exe", "rider64.exe", "sublime_text.exe"):
+        name = "Visual Studio" if "devenv" in exe else ("PyCharm" if "pycharm" in exe else "IDE")
+        return "coding_ide", name, t
+
+    # Office / Notes / Writing
+    if exe in ("winword.exe", "excel.exe", "powerpnt.exe", "notion.exe", "obsidian.exe"):
+        name = "Microsoft Word" if "winword" in exe else ("Microsoft Excel" if "excel" in exe else ("Notion" if "notion" in exe else ("Obsidian" if "obsidian" in exe else "Office Suite")))
+        return "office", name, t
+
+    # Discord Desktop App
+    if exe == "discord.exe":
+        return "discord", "Discord", t
+
+    # 4. Web Browsers (Tab & Website Detection via Title)
+    browser_exes = ("chrome.exe", "firefox.exe", "msedge.exe", "brave.exe", "opera.exe", "vivaldi.exe", "arc.exe", "zen.exe")
+    if exe in browser_exes:
+        # Video / Streaming
+        if "youtube" in t_lower or "watch?v=" in t_lower:
+            return "youtube", "YouTube", t
+        if "twitch.tv" in t_lower or "twitch" in t_lower:
+            return "twitch", "Twitch", t
+        if any(s in t_lower for s in ("netflix", "disney+", "crunchyroll", "hulu", "bilibili", "prime video", "anime")):
+            return "streaming", "Streaming Video", t
+
+        # Social & Discussion
+        if "reddit" in t_lower:
+            return "reddit", "Reddit", t
+        if "twitter" in t_lower or " / x" in t_lower or t.endswith(" / X"):
+            return "twitter", "X / Twitter", t
+        if "discord" in t_lower:
+            return "discord", "Discord", t
+        if any(s in t_lower for s in ("instagram", "tiktok", "facebook")):
+            return "social", "Social Media", t
+
+        # Developer & Technical Portals
+        if "github" in t_lower:
+            return "github", "GitHub", t
+        if "gitlab" in t_lower:
+            return "gitlab", "GitLab", t
+        if "stack overflow" in t_lower or "stackoverflow" in t_lower:
+            return "stackoverflow", "Stack Overflow", t
+
+        # AI Assistant Interfaces
+        if any(ai in t_lower for ai in ("chatgpt", "claude.ai", "gemini.google.com", "perplexity")):
+            return "ai_chat", "AI Assistant", t
+
+        # Productivity in Browser
+        if any(doc in t_lower for doc in ("google docs", "google sheets", "notion.so")):
+            return "office", "Docs & Workspace", t
+
+        # Generic browser tab
+        return "browser", "Web Browser", t
+
+    # 5. Video Games (Steam, Epic, emulators, full screen D3D)
+    is_game, game_title = detect_foreground_game()
+    if is_game and game_title:
+        return "game", game_title, t
+
+    return "general", exe_name.removesuffix(".exe").replace("_", " ").title(), t
 
 
 def compute_screen_fingerprint(pixmap: QPixmap) -> bytes:
@@ -6866,6 +7130,7 @@ class RemindersDialog(QDialog):
         )
         if ok and text.strip():
             self._memory.add_reminder(text.strip())
+            play_sound("save")
             self.refresh_reminders()
 
     def _on_edit_clicked(self) -> None:
@@ -6889,6 +7154,7 @@ class RemindersDialog(QDialog):
         )
         if ok and new_text.strip() and new_text.strip() != old_text:
             self._memory.edit_reminder(item_id, new_text.strip())
+            play_sound("save")
             self.refresh_reminders()
 
     def _on_delete_clicked(self) -> None:
@@ -6909,6 +7175,7 @@ class RemindersDialog(QDialog):
         )
         if reply == QMessageBox.Yes:
             self._memory.delete_reminder(item_id)
+            play_sound("menu_select")
             self.refresh_reminders()
 
     def _on_clear_clicked(self) -> None:
@@ -6921,6 +7188,7 @@ class RemindersDialog(QDialog):
         )
         if reply == QMessageBox.Yes:
             self._memory.clear_all_reminders()
+            play_sound("menu_select")
             self.refresh_reminders()
 
 
@@ -7156,6 +7424,7 @@ class AlarmsDialog(QDialog):
 
     def _on_quick_timer(self, seconds: int, label: str) -> None:
         self._memory.add_timer(seconds, label)
+        play_sound("save")
         self.refresh_items()
 
     def _on_add_timer_clicked(self) -> None:
@@ -7173,6 +7442,7 @@ class AlarmsDialog(QDialog):
             secs = parse_duration_string(dur_str)
             if secs and secs > 0:
                 self._memory.add_timer(secs, label)
+                play_sound("save")
                 self.refresh_items()
             else:
                 QMessageBox.warning(self, "Invalid Duration", f"Could not parse duration '{dur_str}'. Use format like 25m, 10s, 1h, or 1h30m.")
@@ -7191,6 +7461,7 @@ class AlarmsDialog(QDialog):
             label = parts[1].strip() if len(parts) > 1 else "Alarm"
             item = self._memory.add_alarm(time_str, label)
             if item:
+                play_sound("save")
                 self.refresh_items()
             else:
                 QMessageBox.warning(self, "Invalid Time", f"Could not parse clock time '{time_str}'. Use format like 14:30, 2:30 PM, or 08:00 AM.")
@@ -7203,6 +7474,7 @@ class AlarmsDialog(QDialog):
         if not data:
             return
         self._memory.snooze_alarm_or_timer(data.get("id"), minutes=5)
+        play_sound("menu_select")
         self.refresh_items()
 
     def _on_delete_clicked(self) -> None:
@@ -7213,6 +7485,7 @@ class AlarmsDialog(QDialog):
         if not data:
             return
         self._memory.cancel_alarm_or_timer(data.get("id"))
+        play_sound("menu_select")
         self.refresh_items()
 
     def _on_clear_clicked(self) -> None:
@@ -7225,6 +7498,7 @@ class AlarmsDialog(QDialog):
         )
         if reply == QMessageBox.Yes:
             self._memory.clear_all_alarms()
+            play_sound("menu_select")
             self.refresh_items()
 
 
@@ -8530,6 +8804,7 @@ class BombLaserOverlay(QWidget):
         """Apply damage to the player cursor, deduct HP, grant i-frames, and check for KO."""
         if self._player_downed or (now < self._player_iframe_until):
             return
+        play_sound("player_hurt")
         self._player_hp = max(0, self._player_hp - damage)
         self._player_iframe_until = now + PLAYER_IFRAME_DURATION_S
         self._damage_taken_this_round += damage
@@ -8551,6 +8826,7 @@ class BombLaserOverlay(QWidget):
     def _on_player_downed(self, now: float) -> None:
         """Triggered when Player HP drops to 0."""
         self._player_downed = True
+        play_sound("soul_break")
         self._player_downed_until = now + PLAYER_KO_COOLDOWN_S
         cur_pos = QCursor.pos()
         self._damage_popups.append(DamagePopup(
@@ -8569,6 +8845,7 @@ class BombLaserOverlay(QWidget):
         self._bombs.clear()
         self._lasers.clear()
         self._round_active = False
+        play_sound("battle_won")
         self._last_bomb_resolved_at = now
         self._hud_fadeout_until = now + 3.0
         if self._pet:
@@ -8607,6 +8884,7 @@ class BombLaserOverlay(QWidget):
             ))
 
         self._last_time = time.perf_counter()
+        play_sound(random.choice(["throw", "throw2"]))
         if not self.isVisible():
             self.show()
         self.raise_()
@@ -8634,6 +8912,7 @@ class BombLaserOverlay(QWidget):
         ))
 
         self._last_time = time.perf_counter()
+        play_sound(random.choice(["throw", "throw2"]))
         if not self.isVisible():
             self.show()
         self.raise_()
@@ -8696,6 +8975,7 @@ class BombLaserOverlay(QWidget):
                         b.kicked = True
                         b.is_ignited = False
                         b.kicked_at = now
+                        play_sound("bomb_defuse")
                         self._bombs_defused_this_round += 1
 
                         # Calculate kick trajectory towards Pink
@@ -8830,6 +9110,8 @@ class BombLaserOverlay(QWidget):
                     b.exploded = True
                     self._last_bomb_exploded_at = now
                     self._last_bomb_resolved_at = now
+                    play_sound("bomb_explode")
+                    play_sound("laser")
 
                     # Ground zero direct blast check on cursor
                     bx = b.x + b.size / 2.0
@@ -10292,7 +10574,7 @@ class CodebaseStateProvider:
             "* 2. MEMORY: 2-day temp facts (/tempfacts), permanent core facts (/facts), 30-day reminders (/reminders).\n"
             "* 3. COACHING & GOALS: Milestone tracking (/goals), royal/gentle coaching (/coach), P$ rewards upon completion!\n"
             "* 4. PRODUCTIVITY: Timers (/timer 15m tea), scheduled alarms (/alarm 08:00 AM), thermal monitor (/vitals).\n"
-            "* 5. PERCEPTION: Desktop screen vision peeking, GSMTC music listening & song commentary.\n"
+            "* 5. PERCEPTION: Native app awareness (Photoshop, Paint, games, browser tabs), GSMTC music listening, vision peeking.\n"
             "* 6. SANCTUARY SHOP: Boutique window, items, Dark Dollars wallet, GUI goal & alarm editors!\n"
             "* (Try /codebase for live engine specs, or /help for commands!)"
         )
@@ -10382,6 +10664,22 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_enabled: bool = DIALOGUE_ENABLED
         self._last_dialogue: str | None = None
         self._dialogue_action: QAction | None = None
+        # --- Native Win32 App & Tab activity awareness (zero AI required) ---
+        self._native_app_reactions_enabled: bool = NATIVE_APP_REACTIONS_ENABLED
+        self._last_app_reaction_time: float = 0.0
+        self._app_reaction_timestamps: dict[str, float] = {}
+        self._last_app_reacted_title: dict[str, str] = {}
+        self._last_active_app_category: str = ""
+        self._last_active_app_title: str = ""
+        self._last_foreground_title: str = ""
+        self._current_app_context: dict[str, str] = {
+            "category": "",
+            "display_name": "",
+            "detail": "",
+            "title": "",
+            "exe": "",
+        }
+        self._app_reactions_action: QAction | None = None
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = time.perf_counter()
@@ -10544,6 +10842,8 @@ class YellowsPixelBuddies(QWidget):
             self._chat_input.set_scale(self._dialogue_scale)
         if "dialogue_enabled" in saved_settings:
             self._dialogue_enabled = bool(saved_settings["dialogue_enabled"])
+        if "native_app_reactions_enabled" in saved_settings:
+            self._native_app_reactions_enabled = bool(saved_settings["native_app_reactions_enabled"])
         if "ai_song_comment_enabled" in saved_settings:
             self._ai_song_comment_enabled = bool(saved_settings["ai_song_comment_enabled"])
         if "bomb_attack_enabled" in saved_settings:
@@ -10555,6 +10855,14 @@ class YellowsPixelBuddies(QWidget):
                 self._bomb_count = BOMB_COUNT
         if "jump_enabled" in saved_settings:
             self._jump_enabled = bool(saved_settings["jump_enabled"]) and getattr(self, "_jump_sprites_ready", True)
+        # Sound effects setting: strictly MUTED / NO SOUND by default unless explicitly enabled
+        self._audio_muted: bool = bool(saved_settings.get("audio_muted", True))
+        self._sfx_volume: float = float(saved_settings.get("sfx_volume", 0.7))
+        self._sound_manager = get_sound_manager(SOUNDS_DIR)
+        self._sound_manager.set_muted(self._audio_muted)
+        self._sound_manager.set_volume(self._sfx_volume)
+        self._sound_manager.preload(["bubble_pop", "text_blip", "menu_move", "menu_select", "jump", "landing", "step1", "step2"])
+        self._sound_action: QAction | None = None
         self._game_mode: str = str(saved_settings.get("game_mode", "AUTO"))
         self._is_game_active: bool = False
         self._current_game_name: str = ""
@@ -11760,6 +12068,40 @@ class YellowsPixelBuddies(QWidget):
         if v.get("ram_percent", 0.0) < 85.0 and last_alert_state == "ram_alert":
             self._last_hardware_alert_state = "normal"
 
+    def get_active_app_prompt_block(self) -> str:
+        """Return formatted context about user's currently focused application / tab (native OS tracking)."""
+        ctx = getattr(self, "_current_app_context", None)
+        if not ctx or not ctx.get("display_name"):
+            try:
+                hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
+                if hwnd and exe_name:
+                    cat, disp, det = identify_active_app_context(exe_name, exe_path, title)
+                    if disp:
+                        ctx = {"category": cat, "display_name": disp, "detail": det, "title": title, "exe": exe_name}
+                        self._current_app_context = ctx
+            except Exception:
+                pass
+
+        if not ctx or not ctx.get("display_name"):
+            return ""
+
+        disp = ctx.get("display_name", "")
+        title = ctx.get("title", "")
+        cat = ctx.get("category", "")
+        exe = ctx.get("exe", "")
+
+        lines = [
+            "[CURRENT DESKTOP FOREGROUND CONTEXT (Native Win32 Tracking - No Vision Needed)]",
+            f"- Focused App: {disp} ({exe})" if exe else f"- Focused App: {disp}",
+        ]
+        if title and title.lower() != disp.lower():
+            clean_t = title[:120].strip()
+            lines.append(f"- Active Window / Tab Title: \"{clean_t}\"")
+        if cat and cat not in ("general", "browser"):
+            lines.append(f"- Activity Category: {cat.replace('_', ' ').title()}")
+        lines.append("You are aware of what application the user is currently focused on via your native desktop hooks. If asked what they are doing, you can reference this accurately and in-character!")
+        return "\n".join(lines)
+
     def _build_question_prompt(self, source: str, forced_goal: dict | None = None) -> tuple[str, str]:
         """Construct the system instruction and user prompt for generating an interactive question."""
         now_dt = datetime.datetime.now()
@@ -11793,6 +12135,10 @@ class YellowsPixelBuddies(QWidget):
         goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
+
+        active_app_block = self.get_active_app_prompt_block()
+        if active_app_block:
+            system_inst += f"\n\n{active_app_block}"
 
         # Conditional hardware vitals injection (on sustained stress only)
         if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
@@ -13320,6 +13666,11 @@ RULES:
             if codebase_block:
                 system_inst += f"\n\n{codebase_block}"
 
+        # Current active desktop app & activity context (native Win32 tracking without AI)
+        active_app_block = self.get_active_app_prompt_block()
+        if active_app_block:
+            system_inst += f"\n\n{active_app_block}"
+
         had_visual = bool(see_screen or attached_image_b64)
         # Spawn background worker thread
         self._gemini_thread = GeminiWorkerThread(
@@ -13993,6 +14344,7 @@ RULES:
     def _trigger_alarm_ring(self, item: dict) -> None:
         """Ring the alarm/timer with retro sound, animation, tray restore, and interactive choice dialog."""
         self._is_ringing_alarm = True
+        play_sound("alarm_bell")
         item_id = item.get("id")
         item_type = item.get("type", "timer")
         label = item.get("label", "Timer")
@@ -14373,6 +14725,7 @@ RULES:
         """Deliver Pink's Gemini AI commentary on the currently playing song."""
         if not spoken_text or not spoken_text.strip():
             return
+        play_sound("realize")
         if not self._dialogue_enabled or not getattr(self, "_ai_song_comment_enabled", True):
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE):
@@ -14484,6 +14837,28 @@ RULES:
 
         self.state = state
 
+        # Audio reactions for emotional states
+        if state in (BURNT_STATE, "burnt"):
+            play_sound("burnt_cough")
+        elif state == "laughing":
+            play_sound("laugh_short")
+        elif state == "shocked":
+            play_sound("shocked")
+        elif state == "embarrassed":
+            play_sound("embarrassed")
+        elif state == "wistful":
+            play_sound("wondering")
+        elif state == "behind":
+            play_sound("confused")
+        elif state == "peace_sign":
+            play_sound("sparkle")
+        elif state == "overjoyed":
+            play_sound("applause")
+        elif state == "sad":
+            play_sound("awkward")
+        elif state == "crying":
+            play_sound("break2")
+
         # Physical action consciousness tracking
         if hasattr(self, "_record_action"):
             if state in (BURNT_STATE, "burnt"):
@@ -14562,6 +14937,14 @@ RULES:
         if CLICK_THROUGH_TRANSPARENT:
             self.setMask(self._mask_for(frame))   # window shape = visible pixels -> clicks pass through
         self.update()
+
+        # Taskbar footstep audio while walking or running
+        if self._phase is Phase.WALK and getattr(self, "_last_step_frame_idx", -1) != self._frame_idx:
+            self._last_step_frame_idx = self._frame_idx
+            if self._frame_idx == 0:
+                play_sound("step1", volume_scale=0.25)
+            elif self._frame_idx == 2:
+                play_sound("step2", volume_scale=0.25)
 
         # Trigger explosion whenever the burnt sprite shows up
         if self._sprite_key in (BURNT_STATE, "burnt") and self._overlay_state != "explosion":
@@ -15803,6 +16186,11 @@ RULES:
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
 
+        # Current active desktop app & activity context (native Win32 tracking without AI)
+        active_app_block = self.get_active_app_prompt_block()
+        if active_app_block:
+            system_inst += f"\n\n{active_app_block}"
+
         candidate_directive = (
             "[STRUCTURAL DIRECTIVE: TRAY BACKGROUND SCREEN OBSERVATION]\n"
             "Pink is quietly keeping watch from the system tray while remaining invisible on screen.\n"
@@ -16183,6 +16571,7 @@ RULES:
         self._can_catch_cursor = True
         self._airborne_started_at = time.perf_counter()
         self._shake_trail.clear()
+        play_sound("jump")
         self._play(AIRBORNE_STATE, mirrored=self._airborne_mirrored())
         log.debug("Jump %s: rise %.0f px (asked %.0f), launch %.0f px/s, apex in %.2f s, "
                   "drift %.0f px/s (asked %.0f)", self._facing, rise, required_rise, launch_speed,
@@ -16254,6 +16643,7 @@ RULES:
     def _bounce_from_wall(self, side: str) -> None:
         """Bounce off a screen border during a jump or fall."""
         self._wall_bounced = True
+        play_sound("wall_bounce")
         self._pending_reaction = MISS_REACTION   # hitting a wall guarantees a miss reaction on touchdown
 
         bounce_speed = min(JUMP_MAX_HSPEED_PX_S,
@@ -16297,6 +16687,7 @@ RULES:
     def _begin_hang(self, now: float) -> None:
         """She grabbed the cursor: stop falling, become click-through, start the hang timer."""
         self._phase = Phase.HANG
+        play_sound("gripped")
         self._vy = 0.0
         self._vx = 0.0
         self._pending_reaction = None
@@ -16356,6 +16747,7 @@ RULES:
         self._leave_hang()
         self._phase = Phase.THROW
         self._post_throw_laugh = False
+        play_sound("battle_enter")
         self._say("throw", force=True)
         self._bomb_overlay.reset_state(start_round=True)
         total_bombs = getattr(self, "_bomb_count", BOMB_COUNT)
@@ -16461,6 +16853,7 @@ RULES:
 
     def _touch_down(self) -> None:
         """She is back on the ground after a jump, a fall or a drop: play the pending reaction."""
+        play_sound("landing")
         dest = getattr(self, "_cross_screen_dest", None)
         self._cross_screen_dest = None
         reaction, self._pending_reaction = self._pending_reaction, None
@@ -16862,6 +17255,7 @@ RULES:
             self._single_click_timer.stop()
         self._record_action("dragged", "User grabbed Pink by the collar and started dragging her across the screen", "interaction")
         self._dragging = True
+        play_sound("grab")
         self._dialogue_clicked = False
         self._phase = Phase.DRAG
         self._interrupted_state = None            # drag overrides any pending resume state
@@ -16971,6 +17365,11 @@ RULES:
             act.setChecked(abs(preset - cur_dlg_scale) < 0.01)
             act.triggered.connect(lambda checked, s=preset: self.set_dialogue_scale(s))
 
+        app_react_act = menu.addAction("App Awareness Reactions")
+        app_react_act.setCheckable(True)
+        app_react_act.setChecked(getattr(self, "_native_app_reactions_enabled", True))
+        app_react_act.toggled.connect(self._toggle_native_app_reactions)
+
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -17067,13 +17466,21 @@ RULES:
         if not hwnd or hwnd == int(self.winId()):
             return
 
-        if hwnd != self._last_foreground_hwnd:
+        txt_buf = ctypes.create_unicode_buffer(512)
+        dll.GetWindowTextW(hwnd, txt_buf, 512)
+        curr_title = txt_buf.value.strip()
+
+        hwnd_changed = (hwnd != self._last_foreground_hwnd)
+        title_changed = (bool(curr_title) and curr_title != getattr(self, "_last_foreground_title", ""))
+
+        if hwnd_changed or title_changed:
             prev_hwnd = self._last_foreground_hwnd
             prev_maximized = getattr(self, "_last_foreground_is_maximized", False)
             if prev_hwnd and dll.IsWindow(prev_hwnd):
                 prev_maximized = bool(dll.IsZoomed(prev_hwnd))
 
             self._last_foreground_hwnd = hwnd
+            self._last_foreground_title = curr_title
             prev_lum = self._last_luminance
 
             # Give DWM time to finish drawing the new window before sampling luminance
@@ -17082,6 +17489,83 @@ RULES:
         else:
             # Keep maximized tracking up-to-date in case user maximized/restored the current window
             self._last_foreground_is_maximized = bool(dll.IsZoomed(hwnd))
+
+    def _check_native_app_reaction(self, target_hwnd: int) -> bool:
+        """Evaluate foreground process and title to react to recognized applications/tabs without AI."""
+        if not getattr(self, "_native_app_reactions_enabled", True):
+            return False
+        if not getattr(self, "_dialogue_enabled", True):
+            return False
+        if getattr(self, "_hidden_in_tray", False):
+            return False
+        if self._is_dialogue_convo_active():
+            return False
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay and self._dialogue_overlay.is_active():
+            return False
+        if self._dragging or self._menu_open or getattr(self, "_is_annoyed_ignored", False):
+            return False
+        if getattr(self, "_phase", None) in (
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE,
+            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE
+        ):
+            return False
+        if getattr(self, "_in_angry_spam", False) or (self.state == "angry" and self._repeat_count > 0):
+            return False
+
+        # Gather foreground process & window title
+        hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
+        if not hwnd or hwnd != target_hwnd:
+            return False
+
+        # Classify activity
+        category, display_name, detail = identify_active_app_context(exe_name, exe_path, title)
+
+        # Update live context tracking so AI/system knows current activity
+        self._current_app_context = {
+            "category": category,
+            "display_name": display_name,
+            "detail": detail,
+            "title": title,
+            "exe": exe_name,
+        }
+
+        if not category or category in ("general", "browser"):
+            # Unrecognized or generic app without specific witty commentary
+            return False
+
+        dialogue_key = f"app_{category}"
+        if dialogue_key not in DIALOGUE_LINES or not DIALOGUE_LINES[dialogue_key]:
+            return False
+
+        now = time.perf_counter()
+
+        # Global cooldown check (don't react to every single window click)
+        if now - getattr(self, "_last_app_reaction_time", 0.0) < APP_SWITCH_GLOBAL_COOLDOWN_S:
+            return False
+
+        # Category-specific cooldown (don't comment on Photoshop/Paint repeatedly)
+        cat_timestamps = getattr(self, "_app_reaction_timestamps", {})
+        last_cat_time = cat_timestamps.get(category, 0.0)
+        if now - last_cat_time < APP_CATEGORY_COOLDOWN_S:
+            return False
+
+        # Avoid interrupting recent song comment
+        if now - getattr(self, "_last_ai_song_comment_time", 0.0) < 15.0:
+            return False
+
+        # Record cooldowns
+        self._last_app_reaction_time = now
+        cat_timestamps[category] = now
+        self._app_reaction_timestamps = cat_timestamps
+        self._last_active_app_category = category
+        self._last_active_app_title = title
+
+        log.info("Native app reaction triggered for category '%s' (%s, title='%s')",
+                 category, display_name, title[:40])
+
+        self._say(dialogue_key, force=True, dialogue_category=dialogue_key)
+        return True
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float, prev_maximized: bool = False) -> None:
         """Evaluate the newly focused window after it has composited."""
@@ -17110,9 +17594,6 @@ RULES:
         curr_lum = sample_screen_luminance()
         self._last_luminance = curr_lum
 
-        if not is_maximized:
-            return
-
         # Do not react to window switches if Pink is actively in dialogue, chat input, or thinking
         if self._is_dialogue_convo_active():
             return
@@ -17121,8 +17602,8 @@ RULES:
         if self._in_angry_spam or (self.state == "angry" and self._repeat_count > 0):
             return
 
-        # Flashbang check: switched from dark to dominant white/light
-        if prev_lum <= DARK_LUMINANCE_THRESHOLD and curr_lum >= LIGHT_LUMINANCE_THRESHOLD:
+        # 1. Flashbang check: switched from dark to dominant white/light
+        if is_maximized and prev_lum <= DARK_LUMINANCE_THRESHOLD and curr_lum >= LIGHT_LUMINANCE_THRESHOLD:
             now = time.perf_counter()
             if now - self._last_switch_burnt_time < SWITCH_BURNT_COOLDOWN_S:
                 log.info("Flashbang detected, but burnt is on cooldown (%.1fs remaining)",
@@ -17132,21 +17613,26 @@ RULES:
             log.info("Flashbang! Switched from dark (%.1f) to bright maximized app (%.1f) -> burnt",
                      prev_lum, curr_lum)
             self._interrupt_with_reaction("burnt", dialogue_category="burnt_switch")
-        else:
-            # Only trigger shocked if switching from a maximized window to another maximized window!
-            if not prev_maximized:
-                log.info("Switched to maximized app, but previous window was not maximized (prev_maximized=%s) -> skipping shocked reaction",
-                         prev_maximized)
-                return
+            return
 
-            now = time.perf_counter()
-            if now - self._last_switch_shock_time < SWITCH_SHOCK_COOLDOWN_S:
-                log.info("Switched between maximized apps, but shocked is on cooldown (%.1fs remaining)",
-                         SWITCH_SHOCK_COOLDOWN_S - (now - self._last_switch_shock_time))
-                return
-            self._last_switch_shock_time = now
-            log.info("Switched from maximized to another maximized app -> shocked")
-            self._interrupt_with_reaction("shocked", dialogue_category="window_switch_shock")
+        # 2. Native Win32 App & Tab Activity Awareness Reaction (Paint, Photoshop, Game, YouTube, Discord, Code, etc.)
+        # Evaluates on both windowed and maximized apps without requiring AI screen capture!
+        app_reacted = self._check_native_app_reaction(target_hwnd)
+        if app_reacted:
+            return
+
+        # 3. Only trigger shocked if switching from a maximized window to another maximized window!
+        if not is_maximized or not prev_maximized:
+            return
+
+        now = time.perf_counter()
+        if now - self._last_switch_shock_time < SWITCH_SHOCK_COOLDOWN_S:
+            log.info("Switched between maximized apps, but shocked is on cooldown (%.1fs remaining)",
+                     SWITCH_SHOCK_COOLDOWN_S - (now - self._last_switch_shock_time))
+            return
+        self._last_switch_shock_time = now
+        log.info("Switched from maximized to another maximized app -> shocked")
+        self._interrupt_with_reaction("shocked", dialogue_category="window_switch_shock")
 
     def _interrupt_with_reaction(self, reaction: str, dialogue_category: str | None = None) -> None:
         """Temporarily freeze current activity, play a reaction (shocked/burnt), then resume."""
@@ -17288,6 +17774,11 @@ RULES:
         self._dialogue_action.setChecked(self._dialogue_enabled)
         self._dialogue_action.toggled.connect(self._toggle_dialogue)
 
+        self._app_reactions_action = tray_menu.addAction("App Awareness Reactions")
+        self._app_reactions_action.setCheckable(True)
+        self._app_reactions_action.setChecked(self._native_app_reactions_enabled)
+        self._app_reactions_action.toggled.connect(self._toggle_native_app_reactions)
+
         self._song_comment_action = tray_menu.addAction("AI Song Commentary")
         self._song_comment_action.setCheckable(True)
         self._song_comment_action.setChecked(self._ai_song_comment_enabled)
@@ -17297,6 +17788,11 @@ RULES:
         self._filter_shorts_action.setCheckable(True)
         self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
         self._filter_shorts_action.toggled.connect(self._toggle_filter_shorts)
+
+        self._sound_action = tray_menu.addAction("Sound Effects")
+        self._sound_action.setCheckable(True)
+        self._sound_action.setChecked(not getattr(self, "_audio_muted", True))
+        self._sound_action.toggled.connect(self._toggle_sound_effects)
 
         game_menu = tray_menu.addMenu("Game Mode")
         self._game_mode_auto_action = game_menu.addAction("Auto-Detect (Active Gaming)")
@@ -17384,6 +17880,10 @@ RULES:
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(self._dialogue_enabled)
             self._dialogue_action.blockSignals(False)
+        if hasattr(self, "_app_reactions_action") and self._app_reactions_action is not None:
+            self._app_reactions_action.blockSignals(True)
+            self._app_reactions_action.setChecked(self._native_app_reactions_enabled)
+            self._app_reactions_action.blockSignals(False)
         if hasattr(self, "_song_comment_action") and self._song_comment_action is not None:
             self._song_comment_action.blockSignals(True)
             self._song_comment_action.setChecked(self._ai_song_comment_enabled)
@@ -17535,6 +18035,7 @@ RULES:
         if hasattr(self, "_memory") and self._memory:
             settings = {
                 "dialogue_enabled": getattr(self, "_dialogue_enabled", True),
+                "native_app_reactions_enabled": getattr(self, "_native_app_reactions_enabled", True),
                 "ai_song_comment_enabled": getattr(self, "_ai_song_comment_enabled", True),
                 "bomb_attack_enabled": getattr(self, "_bomb_attack_enabled", False),
                 "bomb_count": getattr(self, "_bomb_count", BOMB_COUNT),
@@ -17542,8 +18043,36 @@ RULES:
                 "game_mode": getattr(self, "_game_mode", "AUTO"),
                 "scale_modifier": getattr(self, "_scale_modifier", DEFAULT_SCALE_MODIFIER),
                 "dialogue_scale": getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE),
+                "audio_muted": getattr(self, "_audio_muted", True),
+                "sfx_volume": getattr(self, "_sfx_volume", 0.7),
             }
             self._memory.save_settings(settings)
+
+    def _toggle_native_app_reactions(self, checked: bool) -> None:
+        """Enable or disable native Win32 app/tab awareness reactions."""
+        self._native_app_reactions_enabled = checked
+        if hasattr(self, "_app_reactions_action") and self._app_reactions_action is not None:
+            self._app_reactions_action.blockSignals(True)
+            self._app_reactions_action.setChecked(checked)
+            self._app_reactions_action.blockSignals(False)
+        self._save_live_settings()
+        log.info("App awareness reactions: %s", "ENABLED" if checked else "DISABLED")
+
+    def _toggle_sound_effects(self, checked: bool) -> None:
+        """Enable or disable sound effects playback (checked = audio active, unchecked = muted)."""
+        self._audio_muted = not checked
+        if hasattr(self, "_sound_manager") and self._sound_manager:
+            self._sound_manager.set_muted(self._audio_muted)
+        else:
+            get_sound_manager().set_muted(self._audio_muted)
+        if hasattr(self, "_sound_action") and self._sound_action is not None:
+            self._sound_action.blockSignals(True)
+            self._sound_action.setChecked(checked)
+            self._sound_action.blockSignals(False)
+        self._save_live_settings()
+        if checked:
+            play_sound("sparkle")
+        log.info("Sound effects: %s", "ENABLED" if checked else "MUTED")
 
     def _toggle_dialogue(self, checked: bool) -> None:
         """Enable or disable speech bubble popups."""
