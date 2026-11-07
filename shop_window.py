@@ -809,6 +809,16 @@ class DeltaruneShopWindow(QWidget):
         self._scene_timer.start()
         self.set_dialogue(self._get_root_greeting())
 
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._typewriter_timer.stop()
+        self._scene_timer.stop()
+
+    def closeEvent(self, event) -> None:
+        super().closeEvent(event)
+        self._typewriter_timer.stop()
+        self._scene_timer.stop()
+
     def close_shop(self) -> None:
         self._scene_timer.stop()
         self._typewriter_timer.stop()
@@ -817,12 +827,20 @@ class DeltaruneShopWindow(QWidget):
         self.closed.emit()
 
     def set_dialogue(self, text: str) -> None:
+        if self._dialogue_text == text and not self._is_typing():
+            return
         self._dialogue_text = text
         self._dialogue_char_idx = 0
+        if not self.isVisible():
+            self._typewriter_timer.stop()
+            return
         self._typewriter_timer.start()
         self.update()
 
     def _on_typewriter_tick(self) -> None:
+        if not self.isVisible():
+            self._typewriter_timer.stop()
+            return
         if self._dialogue_char_idx < len(self._dialogue_text):
             ch = self._dialogue_text[self._dialogue_char_idx]
             self._dialogue_char_idx += 1

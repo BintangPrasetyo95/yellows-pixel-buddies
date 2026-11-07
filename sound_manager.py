@@ -98,6 +98,8 @@ SOUND_ALIASES: Dict[str, str] = {
     "confused": "confused.wav",
     "wondering": "wondering.wav",
     "realize": "realize.wav",
+    "burnt": "snd_badexplosion.wav",
+    "burnt_explode": "snd_badexplosion.wav",
     "burnt_cough": "snd_cough.wav",
     "cough": "snd_cough.wav",
     "applause": "snd_applause.wav",

@@ -3171,9 +3171,13 @@ class DialogueOverlay(QWidget):
             self._hold_paused = False
             self._hold_remaining_ms = 0
 
+    def hideEvent(self, event) -> None:
+        self._type_timer.stop()
+        super().hideEvent(event)
+
     def _type_tick(self) -> None:
         """Advance typewriter character count, inserting subtle pauses at punctuation."""
-        if not self._active:
+        if not self._active or not self.isVisible():
             self._type_timer.stop()
             return
 
@@ -11431,6 +11435,10 @@ class YellowsPixelBuddies(QWidget):
             return
         if getattr(self, "_hidden_in_tray", False):
             return
+        if is_workstation_locked():
+            return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            return
         if getattr(self, "_is_annoyed_ignored", False) and dialogue_category != "annoyed_resolved" and not force:
             return
         if not force and (getattr(self, "_phase", None) in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW, Phase.DRAG,
@@ -13768,18 +13776,7 @@ RULES:
         is_gaming, _ = self._check_is_game_mode()
         hold_s = GAME_DIALOGUE_HOLD_S if is_gaming else None
 
-        self._say(
-            first_step.text,
-            force=True,
-            auto_dismiss=True,
-            record_memory=False,
-            is_ghost=first_step.is_ghost,
-            extra_queue=remaining_steps,
-            step_anim=first_step.anim,
-            hold_s=hold_s,
-        )
-
-        # Deliver into shop window typewriter if currently open
+        # Deliver into shop window typewriter if currently open, otherwise speak into desktop dialogue overlay
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             all_lines = [first_step.text]
             if remaining_steps:
@@ -13787,6 +13784,19 @@ RULES:
                     all_lines.append(s.text if hasattr(s, "text") else str(s))
             if hasattr(self._shop_window, "deliver_ai_reply"):
                 self._shop_window.deliver_ai_reply(all_lines)
+            else:
+                self._shop_window.set_dialogue(first_step.text)
+        else:
+            self._say(
+                first_step.text,
+                force=True,
+                auto_dismiss=True,
+                record_memory=False,
+                is_ghost=first_step.is_ghost,
+                extra_queue=remaining_steps,
+                step_anim=first_step.anim,
+                hold_s=hold_s,
+            )
 
         now = time.perf_counter()
         self._last_user_chat_time = now
@@ -14449,10 +14459,6 @@ RULES:
             self._stop_overlay()
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
-        if self._can_play("wistful"):
-            self._play("wistful")
-        elif self.state in MOVE_VELOCITY_PX_S:
-            self._play("idle")
 
         if not hasattr(self, "_shop_window") or self._shop_window is None:
             try:
@@ -14468,20 +14474,17 @@ RULES:
                 self._say("* My boutique isn't ready right now, mew! Check logs!", force=True, record_memory=False)
                 return
 
-        if self._can_play("wistful"):
-            self._play("wistful")
-        elif self._can_play("behind"):
-            self._play("behind")
-        else:
-            self._play("idle")
+        if self.state != "wistful":
+            if self._can_play("wistful"):
+                self._play("wistful")
+            elif self._can_play("behind"):
+                self._play("behind")
+            else:
+                self._play("idle")
         self._shop_window.open_shop()
 
     def _on_shop_window_closed(self) -> None:
         """Called when user exits the shop window."""
-        if self._can_play("wistful"):
-            self._play("wistful")
-        else:
-            self._play("idle")
         self._resume_walk_after_menu()
 
     def _cancel_previous_song_loading(self) -> None:
@@ -14866,29 +14869,34 @@ RULES:
         if should_adjust:
             old_hand_x, old_hand_y = self._hand_offset()
 
+        is_state_change = (getattr(self, "state", None) != state)
         self.state = state
 
-        # Audio reactions for emotional states
-        if state in (BURNT_STATE, "burnt"):
-            play_sound("burnt_cough")
-        elif state == "laughing":
-            play_sound("laugh_short")
-        elif state == "shocked":
-            play_sound("shocked")
-        elif state == "embarrassed":
-            play_sound("embarrassed")
-        elif state == "wistful":
-            play_sound("wondering")
-        elif state == "behind":
-            play_sound("confused")
-        elif state == "peace_sign":
-            play_sound("sparkle")
-        elif state == "overjoyed":
-            play_sound("applause")
-        elif state == "sad":
-            play_sound("awkward")
-        elif state == "crying":
-            play_sound("break2")
+        is_shop_open = (hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible())
+
+        # Audio reactions for emotional states (only on state transition, and suppress ambient pet sounds when shop is open)
+        if is_state_change:
+            if state in (BURNT_STATE, "burnt"):
+                play_sound("bomb_explode")
+            elif not is_shop_open:
+                if state == "laughing":
+                    play_sound("laugh_short")
+                elif state == "shocked":
+                    play_sound("shocked")
+                elif state == "embarrassed":
+                    play_sound("embarrassed")
+                elif state == "wistful":
+                    play_sound("wondering")
+                elif state == "behind":
+                    play_sound("confused")
+                elif state == "peace_sign":
+                    play_sound("sparkle")
+                elif state == "overjoyed":
+                    play_sound("applause")
+                elif state == "sad":
+                    play_sound("awkward")
+                elif state == "crying":
+                    play_sound("break2")
 
         # Physical action consciousness tracking
         if hasattr(self, "_record_action"):
@@ -15240,11 +15248,11 @@ RULES:
     def _finish_one_shot(self) -> None:
         """A special animation ended: resume previous activity or return to idle."""
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
-            if self._can_play("wistful"):
+            if self.state != "wistful" and self._can_play("wistful"):
                 self._play("wistful")
-            elif self._can_play("behind"):
+            elif self.state not in ("wistful", "behind") and self._can_play("behind"):
                 self._play("behind")
-            else:
+            elif self.state not in ("wistful", "behind"):
                 self._play("idle")
             return
 
@@ -15440,11 +15448,11 @@ RULES:
             return
 
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
-            if self._can_play("wistful"):
+            if self.state != "wistful" and self._can_play("wistful"):
                 self._play("wistful")
-            elif self._can_play("behind"):
+            elif self.state not in ("wistful", "behind") and self._can_play("behind"):
                 self._play("behind")
-            else:
+            elif self.state not in ("wistful", "behind"):
                 self._play("idle")
             return
 
@@ -15500,9 +15508,9 @@ RULES:
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
-            if self._can_play("wistful"):
+            if self.state != "wistful" and self._can_play("wistful"):
                 self._play("wistful")
-            elif self._can_play("behind"):
+            elif self.state not in ("wistful", "behind") and self._can_play("behind"):
                 self._play("behind")
             return
         if self._phase is Phase.WALK:
@@ -15950,6 +15958,8 @@ RULES:
 
     def _finish_hide_to_tray(self) -> None:
         """Landed inside the tray: hide window and activate background tray monitor."""
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay:
+            self._dialogue_overlay.dismiss(clear_queue=True)
         self.hide()
         self._hidden_in_tray = True
         self._tray_hidden_at = time.time()
@@ -16902,11 +16912,11 @@ RULES:
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
-            if self._can_play("wistful"):
+            if self.state != "wistful" and self._can_play("wistful"):
                 self._play("wistful")
-            elif self._can_play("behind"):
+            elif self.state not in ("wistful", "behind") and self._can_play("behind"):
                 self._play("behind")
-            else:
+            elif self.state not in ("wistful", "behind"):
                 self._play("idle")
             return
 
