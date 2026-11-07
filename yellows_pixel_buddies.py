@@ -10883,6 +10883,9 @@ class YellowsPixelBuddies(QWidget):
         self._sound_manager.set_volume(self._sfx_volume)
         self._sound_manager.preload(["bubble_pop", "text_blip", "menu_move", "menu_select", "jump", "landing", "step1", "step2"])
         self._sound_action: QAction | None = None
+        self._sound_volume_action: QWidgetAction | None = None
+        self._sound_volume_widget: ChanceSliderWidget | None = None
+        self._last_volume_preview_time: float = 0.0
         self._game_mode: str = str(saved_settings.get("game_mode", "AUTO"))
         self._is_game_active: bool = False
         self._current_game_name: str = ""
@@ -17412,6 +17415,30 @@ RULES:
         app_react_act.toggled.connect(self._toggle_native_app_reactions)
 
         menu.addSeparator()
+        sound_act = menu.addAction("Sound Effects")
+        sound_act.setCheckable(True)
+        is_audio_unmuted = not getattr(self, "_audio_muted", True)
+        sound_act.setChecked(is_audio_unmuted)
+
+        vol_action = QWidgetAction(menu)
+        vol_widget = ChanceSliderWidget(
+            initial_pct=round(getattr(self, "_sfx_volume", 0.7) * 100),
+            default_pct=70,
+            on_change=self._set_sound_volume_pct,
+            title_prefix="SFX Volume",
+        )
+        vol_widget.setEnabled(is_audio_unmuted)
+        vol_action.setDefaultWidget(vol_widget)
+
+        def _on_context_sound_toggled(checked: bool):
+            self._toggle_sound_effects(checked)
+            vol_widget.setEnabled(checked)
+        sound_act.toggled.connect(_on_context_sound_toggled)
+
+        menu.addAction(sound_act)
+        menu.addAction(vol_action)
+
+        menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
             jump_action = menu.addAction("Jump to cursor")
@@ -17838,6 +17865,17 @@ RULES:
         self._sound_action.setChecked(not getattr(self, "_audio_muted", True))
         self._sound_action.toggled.connect(self._toggle_sound_effects)
 
+        self._sound_volume_action = QWidgetAction(tray_menu)
+        self._sound_volume_widget = ChanceSliderWidget(
+            initial_pct=round(getattr(self, "_sfx_volume", 0.7) * 100),
+            default_pct=70,
+            on_change=self._set_sound_volume_pct,
+            title_prefix="SFX Volume",
+        )
+        self._sound_volume_widget.setEnabled(not getattr(self, "_audio_muted", True))
+        self._sound_volume_action.setDefaultWidget(self._sound_volume_widget)
+        tray_menu.addAction(self._sound_volume_action)
+
         game_menu = tray_menu.addMenu("Game Mode")
         self._game_mode_auto_action = game_menu.addAction("Auto-Detect (Active Gaming)")
         self._game_mode_auto_action.setCheckable(True)
@@ -17936,6 +17974,13 @@ RULES:
             self._filter_shorts_action.blockSignals(True)
             self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
             self._filter_shorts_action.blockSignals(False)
+        if hasattr(self, "_sound_action") and self._sound_action is not None:
+            self._sound_action.blockSignals(True)
+            self._sound_action.setChecked(not getattr(self, "_audio_muted", True))
+            self._sound_action.blockSignals(False)
+        if hasattr(self, "_sound_volume_widget") and self._sound_volume_widget is not None:
+            self._sound_volume_widget.set_value(round(getattr(self, "_sfx_volume", 0.7) * 100))
+            self._sound_volume_widget.setEnabled(not getattr(self, "_audio_muted", True))
 
     def _check_is_game_mode(self) -> tuple[bool, str]:
         """Evaluate whether game mode applies right now based on settings and foreground process."""
@@ -18113,10 +18158,30 @@ RULES:
             self._sound_action.blockSignals(True)
             self._sound_action.setChecked(checked)
             self._sound_action.blockSignals(False)
+        if hasattr(self, "_sound_volume_widget") and self._sound_volume_widget is not None:
+            self._sound_volume_widget.setEnabled(checked)
         self._save_live_settings()
         if checked:
             play_sound("sparkle")
         log.info("Sound effects: %s", "ENABLED" if checked else "MUTED")
+
+    def _set_sound_volume_pct(self, pct: int) -> None:
+        """Update master SFX volume percentage (0-100%)."""
+        self._sfx_volume = max(0.0, min(1.0, pct / 100.0))
+        if hasattr(self, "_sound_manager") and self._sound_manager:
+            self._sound_manager.set_volume(self._sfx_volume)
+        else:
+            get_sound_manager().set_volume(self._sfx_volume)
+        self._save_live_settings()
+        if hasattr(self, "_sound_volume_widget") and self._sound_volume_widget is not None:
+            self._sound_volume_widget.set_value(pct)
+        # If sound effects are unmuted, play a short test blip so user can hear the new level
+        if not getattr(self, "_audio_muted", True):
+            now = time.perf_counter()
+            if now - getattr(self, "_last_volume_preview_time", 0.0) >= 0.12:
+                self._last_volume_preview_time = now
+                play_sound("text_blip")
+        log.info("Sound volume set to %d%% (%.2f)", pct, self._sfx_volume)
 
     def _toggle_dialogue(self, checked: bool) -> None:
         """Enable or disable speech bubble popups."""

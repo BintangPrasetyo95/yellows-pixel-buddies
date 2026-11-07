@@ -1752,7 +1752,7 @@ class DeltaruneShopWindow(QWidget):
         elif self.state == ShopState.FACTS_EDIT:
             return len(self._get_facts_menu_items()) + 1  # Facts + Back
         elif self.state == ShopState.TOGGLES_MENU:
-            return 6  # 5 toggles + Back
+            return 7  # 5 toggles + SFX Volume + Back
         elif self.state == ShopState.ITEM_ACTION:
             return len(self._inspect_options)
         elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
@@ -1905,12 +1905,14 @@ class DeltaruneShopWindow(QWidget):
                 self.set_dialogue(dialogues[self._selected_index])
 
         elif self.state == ShopState.TOGGLES_MENU:
+            vol_pct = round(getattr(self._pet, "_sfx_volume", 0.7) * 100) if self._pet else round(get_sound_manager().volume * 100)
             dialogues = [
                 "* Toggle desktop speech bubble thoughts and reactions.",
                 "* Toggle real-time background song commentary.",
                 "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
                 "* Toggle feline explosive ordnance and laser defense.",
                 "* Toggle retro audio and chiptune sound effects.",
+                f"* Adjust retro sound volume (Current: {vol_pct}%). Use Left/Right keys or click to cycle.",
                 "* Return to sanctuary settings.",
             ]
             if 0 <= self._selected_index < len(dialogues):
@@ -2151,6 +2153,8 @@ class DeltaruneShopWindow(QWidget):
                     sm.set_muted(not sm.muted)
                     state_str = "MUTED" if sm.muted else "ENABLED"
                     self.set_dialogue(f"* Sound effects are now {state_str}, darling!")
+            elif self._selected_index == 5:  # SFX Volume
+                self._cycle_volume(direction=1)
             else:  # Back
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 1
@@ -2276,6 +2280,31 @@ class DeltaruneShopWindow(QWidget):
             self.set_dialogue("* Large speech bubble active! Plenty of room for my wisdom!")
         else:
             self.set_dialogue("* Giant speech bubble active! Loud and clear for the whole room, minion!")
+        self.update()
+
+    def _cycle_volume(self, direction: int = 1) -> None:
+        """Cycle or adjust master sound volume by +/- 10%."""
+        cur_vol = 0.7
+        if self._pet and hasattr(self._pet, "_sfx_volume"):
+            cur_vol = getattr(self._pet, "_sfx_volume", 0.7)
+        else:
+            cur_vol = get_sound_manager().volume
+
+        cur_pct = round(cur_vol * 100)
+        if direction > 0 and cur_pct >= 100:
+            new_pct = 0
+        elif direction < 0 and cur_pct <= 0:
+            new_pct = 100
+        else:
+            new_pct = max(0, min(100, cur_pct + direction * 10))
+
+        if self._pet and hasattr(self._pet, "_set_sound_volume_pct"):
+            self._pet._set_sound_volume_pct(new_pct)
+        else:
+            get_sound_manager().set_volume(new_pct / 100.0)
+
+        play_sound("menu_move")
+        self.set_dialogue(f"* Sound volume set to {new_pct}%, darling!")
         self.update()
 
     def _cycle_pet_scale(self, direction: int = 1) -> None:
@@ -2538,6 +2567,9 @@ class DeltaruneShopWindow(QWidget):
                 elif self._selected_index == 1:
                     self._cycle_dialogue_scale(direction=-1)
                     return
+            elif self.state == ShopState.TOGGLES_MENU and self._selected_index == 5:
+                self._cycle_volume(direction=-1)
+                return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx - 1) % len(self._inspect_options)
                 play_sound("menu_move")
@@ -2559,6 +2591,9 @@ class DeltaruneShopWindow(QWidget):
                 elif self._selected_index == 1:
                     self._cycle_dialogue_scale(direction=1)
                     return
+            elif self.state == ShopState.TOGGLES_MENU and self._selected_index == 5:
+                self._cycle_volume(direction=1)
+                return
             elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 self._inspect_choice_idx = (self._inspect_choice_idx + 1) % len(self._inspect_options)
                 play_sound("menu_move")
@@ -2722,16 +2757,17 @@ class DeltaruneShopWindow(QWidget):
                     self._scroll_down()
                     return None
 
-        # Left-side submenus: start_x = 44, start_y = 283, line_h = 36
+        # Left-side submenus: start_x = 44, start_y = 283, line_h = 36 (TOGGLES_MENU has line_h = 28)
         if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS,
                           ShopState.SETTINGS_MENU, ShopState.SCALES_MENU, ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT,
                           ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
             if 20 <= pt.x() <= 400 and 265 <= pt.y() <= 485:
+                if self.state == ShopState.TOGGLES_MENU:
+                    row = (pt.y() - 262) // 28
+                    return row if 0 <= row < 7 else None
                 row = (pt.y() - 265) // 36
                 if 0 <= row < 6:
-                    if self.state == ShopState.TOGGLES_MENU:
-                        return row
-                    elif self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU) and row < 5:
+                    if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU) and row < 5:
                         return row
                     elif self.state == ShopState.SCALES_MENU:
                         return row if row < 3 else None
@@ -3117,6 +3153,7 @@ class DeltaruneShopWindow(QWidget):
         game_mode = getattr(self._pet, "_game_mode", "AUTO") if self._pet else "AUTO"
         bomb_on = getattr(self._pet, "_bomb_attack_enabled", False) if self._pet else False
         sfx_on = not getattr(self._pet, "_audio_muted", True) if self._pet else not get_sound_manager().muted
+        vol_pct = round(getattr(self._pet, "_sfx_volume", 0.7) * 100) if self._pet else round(get_sound_manager().volume * 100)
 
         p.setFont(self._font_body)
         options = [
@@ -3125,11 +3162,12 @@ class DeltaruneShopWindow(QWidget):
             f"Game Mode: [{game_mode}]",
             f"Bomb Attack: [{'ON' if bomb_on else 'OFF'}]",
             f"Sound FX: [{'ON' if sfx_on else 'OFF'}]",
+            f"SFX Volume: [ < {vol_pct}% > ]",
             "Back",
         ]
         start_x = 44
-        start_y = 283
-        line_h = 36
+        start_y = 278
+        line_h = 28
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -3147,6 +3185,7 @@ class DeltaruneShopWindow(QWidget):
             "* Auto-detect video games for faster screen commentary & backseat catgirl banter.",
             "* Toggle feline explosive defense behavior.",
             "* Toggle retro audio and chiptune sound effects.",
+            f"* Adjust retro sound volume ({vol_pct}%). Use Left/Right keys or click to cycle.",
             "* Return to sanctuary settings.",
         ]
         desc = descriptions[self._selected_index] if 0 <= self._selected_index < len(descriptions) else ""
