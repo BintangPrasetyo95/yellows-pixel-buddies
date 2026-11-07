@@ -12148,6 +12148,11 @@ class YellowsPixelBuddies(QWidget):
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
 
+        # Current active desktop app & activity context (native Win32 tracking without AI)
+        active_app_block = self.get_active_app_prompt_block()
+        if active_app_block:
+            system_inst += f"\n\n{active_app_block}"
+
         # Feed ongoing conversation history from the active session so Pink has situational awareness
         active_session_turns = []
         if hasattr(self, "_memory") and hasattr(self._memory, "history") and self._memory.history:
