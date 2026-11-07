@@ -128,7 +128,7 @@ from sound_manager import get_sound_manager, play_sound
 # =============================================================================
 
 # --- Application Metadata & Auto-Update --------------------------------------
-APP_VERSION = "0.9.8.5"
+APP_VERSION = "0.9.8.6"
 GITHUB_REPO = "BintangPrasetyo95/yellows-pixel-buddies"
 
 # --- Paths & Sprites ---------------------------------------------------------
