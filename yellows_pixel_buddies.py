@@ -3340,6 +3340,7 @@ class DialogueOverlay(QWidget):
             self._hovered_choice_idx = hovered
             if hovered is not None:
                 self.setCursor(Qt.PointingHandCursor)
+                play_sound("menu_move")
             else:
                 self.setCursor(Qt.ArrowCursor)
             self.update()
@@ -7129,6 +7130,7 @@ class RemindersDialog(QDialog):
         )
         if ok and text.strip():
             self._memory.add_reminder(text.strip())
+            play_sound("save")
             self.refresh_reminders()
 
     def _on_edit_clicked(self) -> None:
@@ -7152,6 +7154,7 @@ class RemindersDialog(QDialog):
         )
         if ok and new_text.strip() and new_text.strip() != old_text:
             self._memory.edit_reminder(item_id, new_text.strip())
+            play_sound("save")
             self.refresh_reminders()
 
     def _on_delete_clicked(self) -> None:
@@ -7172,6 +7175,7 @@ class RemindersDialog(QDialog):
         )
         if reply == QMessageBox.Yes:
             self._memory.delete_reminder(item_id)
+            play_sound("menu_select")
             self.refresh_reminders()
 
     def _on_clear_clicked(self) -> None:
@@ -7184,6 +7188,7 @@ class RemindersDialog(QDialog):
         )
         if reply == QMessageBox.Yes:
             self._memory.clear_all_reminders()
+            play_sound("menu_select")
             self.refresh_reminders()
 
 
@@ -7419,6 +7424,7 @@ class AlarmsDialog(QDialog):
 
     def _on_quick_timer(self, seconds: int, label: str) -> None:
         self._memory.add_timer(seconds, label)
+        play_sound("save")
         self.refresh_items()
 
     def _on_add_timer_clicked(self) -> None:
@@ -7436,6 +7442,7 @@ class AlarmsDialog(QDialog):
             secs = parse_duration_string(dur_str)
             if secs and secs > 0:
                 self._memory.add_timer(secs, label)
+                play_sound("save")
                 self.refresh_items()
             else:
                 QMessageBox.warning(self, "Invalid Duration", f"Could not parse duration '{dur_str}'. Use format like 25m, 10s, 1h, or 1h30m.")
@@ -7454,6 +7461,7 @@ class AlarmsDialog(QDialog):
             label = parts[1].strip() if len(parts) > 1 else "Alarm"
             item = self._memory.add_alarm(time_str, label)
             if item:
+                play_sound("save")
                 self.refresh_items()
             else:
                 QMessageBox.warning(self, "Invalid Time", f"Could not parse clock time '{time_str}'. Use format like 14:30, 2:30 PM, or 08:00 AM.")
@@ -7466,6 +7474,7 @@ class AlarmsDialog(QDialog):
         if not data:
             return
         self._memory.snooze_alarm_or_timer(data.get("id"), minutes=5)
+        play_sound("menu_select")
         self.refresh_items()
 
     def _on_delete_clicked(self) -> None:
@@ -7476,6 +7485,7 @@ class AlarmsDialog(QDialog):
         if not data:
             return
         self._memory.cancel_alarm_or_timer(data.get("id"))
+        play_sound("menu_select")
         self.refresh_items()
 
     def _on_clear_clicked(self) -> None:
@@ -7488,6 +7498,7 @@ class AlarmsDialog(QDialog):
         )
         if reply == QMessageBox.Yes:
             self._memory.clear_all_alarms()
+            play_sound("menu_select")
             self.refresh_items()
 
 
@@ -8873,7 +8884,7 @@ class BombLaserOverlay(QWidget):
             ))
 
         self._last_time = time.perf_counter()
-        play_sound("throw")
+        play_sound(random.choice(["throw", "throw2"]))
         if not self.isVisible():
             self.show()
         self.raise_()
@@ -8901,7 +8912,7 @@ class BombLaserOverlay(QWidget):
         ))
 
         self._last_time = time.perf_counter()
-        play_sound("throw")
+        play_sound(random.choice(["throw", "throw2"]))
         if not self.isVisible():
             self.show()
         self.raise_()
@@ -10850,6 +10861,7 @@ class YellowsPixelBuddies(QWidget):
         self._sound_manager = get_sound_manager(SOUNDS_DIR)
         self._sound_manager.set_muted(self._audio_muted)
         self._sound_manager.set_volume(self._sfx_volume)
+        self._sound_manager.preload(["bubble_pop", "text_blip", "menu_move", "menu_select", "jump", "landing", "step1", "step2"])
         self._sound_action: QAction | None = None
         self._game_mode: str = str(saved_settings.get("game_mode", "AUTO"))
         self._is_game_active: bool = False
@@ -14842,6 +14854,10 @@ RULES:
             play_sound("sparkle")
         elif state == "overjoyed":
             play_sound("applause")
+        elif state == "sad":
+            play_sound("awkward")
+        elif state == "crying":
+            play_sound("break2")
 
         # Physical action consciousness tracking
         if hasattr(self, "_record_action"):
@@ -14921,6 +14937,14 @@ RULES:
         if CLICK_THROUGH_TRANSPARENT:
             self.setMask(self._mask_for(frame))   # window shape = visible pixels -> clicks pass through
         self.update()
+
+        # Taskbar footstep audio while walking or running
+        if self._phase is Phase.WALK and getattr(self, "_last_step_frame_idx", -1) != self._frame_idx:
+            self._last_step_frame_idx = self._frame_idx
+            if self._frame_idx == 0:
+                play_sound("step1", volume_scale=0.25)
+            elif self._frame_idx == 2:
+                play_sound("step2", volume_scale=0.25)
 
         # Trigger explosion whenever the burnt sprite shows up
         if self._sprite_key in (BURNT_STATE, "burnt") and self._overlay_state != "explosion":
@@ -16723,6 +16747,7 @@ RULES:
         self._leave_hang()
         self._phase = Phase.THROW
         self._post_throw_laugh = False
+        play_sound("battle_enter")
         self._say("throw", force=True)
         self._bomb_overlay.reset_state(start_round=True)
         total_bombs = getattr(self, "_bomb_count", BOMB_COUNT)
@@ -17855,6 +17880,10 @@ RULES:
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(self._dialogue_enabled)
             self._dialogue_action.blockSignals(False)
+        if hasattr(self, "_app_reactions_action") and self._app_reactions_action is not None:
+            self._app_reactions_action.blockSignals(True)
+            self._app_reactions_action.setChecked(self._native_app_reactions_enabled)
+            self._app_reactions_action.blockSignals(False)
         if hasattr(self, "_song_comment_action") and self._song_comment_action is not None:
             self._song_comment_action.blockSignals(True)
             self._song_comment_action.setChecked(self._ai_song_comment_enabled)
@@ -18041,6 +18070,8 @@ RULES:
             self._sound_action.setChecked(checked)
             self._sound_action.blockSignals(False)
         self._save_live_settings()
+        if checked:
+            play_sound("sparkle")
         log.info("Sound effects: %s", "ENABLED" if checked else "MUTED")
 
     def _toggle_dialogue(self, checked: bool) -> None:

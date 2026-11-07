@@ -50,6 +50,8 @@ SOUND_ALIASES: Dict[str, str] = {
     "player_hurt": "snd_hurt1.wav",
     "damage": "snd_damage.wav",
     "soul_break": "snd_break1.wav",
+    "break1": "snd_break1.wav",
+    "break2": "snd_break2.wav",
     "battle_enter": "snd_battleenter.wav",
     "battle_won": "snd_won.wav",
 
@@ -58,15 +60,21 @@ SOUND_ALIASES: Dict[str, str] = {
     "bubble_pop": "snd_squeaky.wav",
     "bottle_pop": "snd_bottlepop.wav",
     "dialogue_next": "snd_select.wav",
+    "voice_text": "snd_text.wav",
+    "voice_alphys": "snd_txtal.wav",
+    "voice_noelle": "snd_txtnoe.wav",
+    "voice_susie": "snd_txtsus.wav",
 
     # --- Shop & Dark World Sanctuary UI ---
     "menu_move": "snd_menumove.wav",
     "menu_select": "snd_select.wav",
     "menu_error": "snd_cantselect.wav",
+    "error": "snd_error.wav",
     "coin": "snd_coin.wav",
     "sell": "sell.wav",
     "goal_complete": "snd_levelup.wav",
     "save": "snd_save.wav",
+    "character_switch": "character_switch.wav",
     "sanctuary_open": "character_switch.wav",
 
     # --- Physics & Movement ---
@@ -127,8 +135,12 @@ DEFAULT_COOLDOWNS: Dict[str, float] = {
     "bottle_pop": 0.3,
     "coin": 0.1,
     "sell": 0.5,
-    "step1": 0.25,
-    "step2": 0.25,
+    "step1": 0.20,
+    "step2": 0.20,
+    "battle_enter": 1.0,
+    "save": 0.3,
+    "awkward": 1.2,
+    "break2": 1.5,
 }
 
 # Individual sound volume normalization multipliers
@@ -149,6 +161,18 @@ SOUND_VOLUME_NORMALIZATION: Dict[str, float] = {
     "gripped.wav": 0.80,
     "bubble_pop": 0.70,
     "snd_squeaky.wav": 0.70,
+    "step1": 0.30,
+    "snd_step1.wav": 0.30,
+    "step2": 0.30,
+    "snd_step2.wav": 0.30,
+    "battle_enter": 0.85,
+    "snd_battleenter.wav": 0.85,
+    "save": 0.80,
+    "snd_save.wav": 0.80,
+    "awkward": 0.75,
+    "snd_awkward.wav": 0.75,
+    "break2": 0.75,
+    "snd_break2.wav": 0.75,
 }
 
 
