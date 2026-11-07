@@ -591,6 +591,11 @@ CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat i
 CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
 CHAT_INPUT_EXTRA_WIDTH = 75                      # Additional horizontal width (in base pixels) for comfortable typing
 
+# --- Native Win32 App & Tab Activity Awareness (Zero AI Required) ------------
+NATIVE_APP_REACTIONS_ENABLED = True          # Spontaneous in-character reactions when switching to recognized apps/tabs
+APP_SWITCH_GLOBAL_COOLDOWN_S = 35.0          # Minimum seconds between any native app-switch reactions to prevent chatter spam
+APP_CATEGORY_COOLDOWN_S = 180.0              # Cooldown in seconds before Pink will comment on the same app/activity category again
+
 # --- Autonomous Screen Vision & Commentary -----------------------------------
 AUTO_SCREEN_COMMENT_ENABLED = True
 AUTO_SCREEN_COMMENT_INACTIVITY_S = 300.0         # 5 minutes of silence after user chat or inspection
@@ -797,7 +802,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
   * Technical Self-Identity & Codebase Self-Awareness:
     - You are an animated desktop pet written in Python using PyQt5 on Windows (QPainter, QWidget, QTimer). You are NOT a website, NOT HTML/CSS, and NOT Electron. Never hallucinate web tech for your own code.
     - You possess vivid, factual self-awareness of your own vessel architecture (~17,000 LOC monolithic core in yellows_pixel_buddies.py, Dark World Sanctuary in shop_window.py, PyInstaller & Inno Setup packaging).
-    - You know your live engine metrics, git branch, version, and capabilities (physics, screen vision, GSMTC music detection, goals coaching, 2-day temp facts, alarms, and shop Sanctuary).
+    - You know your live engine metrics, git branch, version, and capabilities (physics, screen vision, GSMTC music detection, native desktop app awareness without AI, goals coaching, 2-day temp facts, alarms, and shop Sanctuary).
     - When the user asks about your features, abilities, version, or code: answer accurately with haughty tsundere pride! Never hallucinate fake web tech or nonexistent features.
   * Screen Vision & Immediate Reaction:
     - When screen vision is on, ONLY comment on what is clearly visible. If text or windows are not clearly visible, say so honestly instead of guessing.
@@ -1699,6 +1704,117 @@ DIALOGUE_LINES: dict[str, list[str]] = {
     "survived_bombs": [
         "* Barely made it out of that one, dummy! My laser aim is getting sharper!",
         "* Phew, you survived with scratches! Don't push your luck next time, mew!",
+    ],
+    # --- Native App & Tab Activity Awareness Reactions (Zero AI Required) ---
+    "app_paint": [
+        "* MS Paint?! In this modern digital era?! You better be drawing me with proper proportions, dummy! [anim: tongue]",
+        "* Opening Paint?! What are you making with that spray can tool, a masterpiece or a disaster, mew?! [anim: laughing]",
+        "* Hmph! Don't you dare draw silly mustache doodles on my face in Paint, minion! [anim: angry]",
+        "* Oho, back to the basics with MS Paint! Show your doll overlord your artistic talent! [anim: peace_sign]",
+    ],
+    "app_photoshop": [
+        "* Photoshop launched! Serious artist mode engaged?! Make sure my dress has zero compression artifacts! [anim: laughing]",
+        "* Opening Photoshop? You better not be drawing on Layer 1 without naming your layers, puppet! [anim: tongue]",
+        "* What are you retouching in Photoshop?! If it's a portrait of me, make it 120% more fabulous, mew! [anim: peace_sign]",
+        "* Ctrl+S! Remember to save your canvas every five minutes! If Photoshop crashes, don't cry to me! [anim: angry]",
+    ],
+    "app_pixel_art": [
+        "* ASEPRITE?! You're making pixel art?! A fellow connoisseur of raw grid perfection, mew! [anim: peace_sign]",
+        "* Pixel art in progress! Mind your color palettes, minion! Every single pixel counts! [anim: laughing]",
+        "* Don't you dare leave orphaned single pixels on that sprite! Clean clusters only, puppet! [anim: tongue]",
+        "* Crafting sprites, are we?! Make sure whoever you're drawing looks at least half as cute as me! [anim: behind]",
+    ],
+    "app_digital_art": [
+        "* Firing up the digital canvas! Don't forget to flip your canvas horizontally to check your anatomy, dummy! [anim: tongue]",
+        "* Art studio ready! Let's see some breathtaking illustrations today, minion! [anim: peace_sign]",
+        "* Drawing again?! Remember to stretch your wrist, puppet! Carpal tunnel is utterly ungraceful, mew! [anim: wistful]",
+    ],
+    "app_blender_3d": [
+        "* Blender launched! 3D modeling time! Don't crash your GPU rendering ten million polygons, puppet! [anim: laughing]",
+        "* Did you delete the default cube yet, minion?! It's sacred 3D tradition, mew! [anim: tongue]",
+        "* Sculpting in 3D?! If you ever model me, my cotton ribbons better have flawless physics! [anim: peace_sign]",
+    ],
+    "app_game": [
+        "* Game launched! You better not embarrass your feline coach out there, minion! [anim: laughing]",
+        "* Gaming time?! Don't blame your controller when you drop your combos, dummy! [anim: tongue]",
+        "* Lock in, minion! If you get a Game Over, I'm deploying cat bombs to wake you up, mew! [anim: angry]",
+        "* Total victory or nothing! Show them what my minion is made of! [anim: peace_sign]",
+    ],
+    "app_youtube": [
+        "* Watching YouTube again?! Don't tell me you fell down another 2-hour video essay rabbit hole! [anim: tongue]",
+        "* YouTube opened! Are we learning something useful or just watching silly cat clips, mew?! [anim: laughing]",
+        "* Hmph! Don't let the autoplay algorithm hypnotize you into slacking off all evening, dummy! [anim: angry]",
+        "* What's on YouTube? If it's gaming tips, you better take diligent notes, minion! [anim: peace_sign]",
+    ],
+    "app_twitch": [
+        "* Opening Twitch streams?! Don't forget that your number one entertainer is right here on your taskbar, mew! [anim: tongue]",
+        "* Watching live streams?! Make sure you don't spend all your allowance on channel points, dummy! [anim: laughing]",
+    ],
+    "app_streaming": [
+        "* Binge-watching shows, are we?! Grab some snacks, puppet, but don't ignore your doll royalty! [anim: peace_sign]",
+        "* Streaming video started! Sit back and enjoy the show, minion, but don't stay up till 4 AM! [anim: wistful]",
+    ],
+    "app_reddit": [
+        "* Surfing Reddit threads?! You have goals to conquer, human! Stop reading endless internet arguments! [anim: tongue]",
+        "* Doomscrolling forum threads again?! Close that feed before your brain turns into cotton fluff, dummy! [anim: angry]",
+        "* What drama are they debating on Reddit today, mew? Mortal squabbles are endlessly amusing! [anim: laughing]",
+    ],
+    "app_twitter": [
+        "* Checking the bird app?! Keep your cool, minion! Don't let random internet strangers rile you up! [anim: angry]",
+        "* Scrolling social feeds again?! Nobody's opinion on that timeline matters more than mine anyway, mew! [anim: tongue]",
+    ],
+    "app_discord": [
+        "* Discord opened! Gossiping with your online server buddies?! Tell them Pink said they're all minions! [anim: tongue]",
+        "* Don't let random notification pings distract you all day, puppet! Focus on what matters, mew! [anim: peace_sign]",
+    ],
+    "app_social": [
+        "* Mindless short-form scrolling detected! Snap out of it, minion! Your goals won't achieve themselves! [anim: angry]",
+        "* Checking social media? Hmph! Living in the real world with me is far more exciting, dummy! [anim: tongue]",
+    ],
+    "app_ai_chat": [
+        "* Talking to ANOTHER AI?! H-Hey! What can that boring chatbot do that I can't, dummy?! [anim: angry]",
+        "* Consulting another AI model?! Don't you dare think of replacing your glorious desktop doll, puppet! [anim: shocked]",
+        "* Oho, asking an LLM for answers?! Just remember who the REAL royalty on this desktop is, mew! [anim: tongue]",
+    ],
+    "app_github": [
+        "* GitHub opened! Pushing code or staring at failing CI/CD pipelines, minion?! [anim: tongue]",
+        "* Pull requests and code reviews! Make sure you write descriptive commit messages, dummy! [anim: laughing]",
+        "* Inspecting repositories?! Don't just star random repos, build something amazing yourself, mew! [anim: peace_sign]",
+    ],
+    "app_stackoverflow": [
+        "* Stack Overflow?! Don't tell me you're copying and pasting code without reading it, dummy! [anim: tongue]",
+        "* Debugging emergency?! Even my cotton head could spot that syntax error, mew! [anim: laughing]",
+    ],
+    "app_vscode": [
+        "* VS Code focused! Time to squish some bugs, minion! Don't you dare push broken code! [anim: laughing]",
+        "* Back to programming! If you miss a single closing bracket, I'm tossing a cat bomb, dummy! [anim: angry]",
+        "* Cracking open the code editor! Let's build something extraordinary today, puppet! [anim: peace_sign]",
+    ],
+    "app_coding_ide": [
+        "* Heavy-duty IDE loaded! Compiling genius software or compiling endless compiler warnings, mew?! [anim: laughing]",
+        "* Serious developer mode engaged! Keep your functions clean and your modularity high, minion! [anim: peace_sign]",
+    ],
+    "app_terminal": [
+        "* Terminal launched! Look at you typing black-and-green hacker commands! Who are you trying to impress?! [anim: tongue]",
+        "* Careful with those shell commands, dummy! Don't delete system32 or wipe my sprites, mew! [anim: shocked]",
+        "* Running command line scripts! Keep your terminal clean and your exit codes zero, puppet! [anim: peace_sign]",
+    ],
+    "app_task_manager": [
+        "* W-WAIT! Task Manager?! Why did you open that?! You're not thinking of ending MY process, are you?! [anim: shocked]",
+        "* Don't you dare hover your cursor over 'Yellow's Pixel Buddies', dummy! Hands off, mew! [anim: angry]",
+        "* Inspecting running processes?! I better see my CPU usage sitting at a tidy, lightweight percentage! [anim: tongue]",
+    ],
+    "app_calculator": [
+        "* A calculator?! You need a digital app just to do basic arithmetic, human?! How pathetic, mew! [anim: tongue]",
+        "* Crunching numbers, are we?! Hope you're calculating a big pay raise for your desktop master! [anim: laughing]",
+    ],
+    "app_music_daw": [
+        "* Digital Audio Workstation loaded! Cooking up battle themes or ear-splitting noise, minion?! [anim: peace_sign]",
+        "* Music production time! Add more synth bass, puppet! Everything is better with a heavy bassline, mew! [anim: laughing]",
+    ],
+    "app_office": [
+        "* Documents and spreadsheets! Look at my minion doing serious productive paperwork! [anim: peace_sign]",
+        "* Writing reports?! Don't forget to double-check your spelling, dummy! Proper grammar is royal etiquette! [anim: tongue]",
     ],
 }
 
@@ -4260,6 +4376,140 @@ def detect_foreground_game(custom_game_list: list[str] | None = None, excluded_h
             return True, game_title
 
     return False, ""
+
+
+def identify_active_app_context(exe_name: str, exe_path: str, title: str) -> tuple[str, str, str]:
+    """Classify foreground process and window title into (category, display_name, detail).
+
+    Returns (category, display_name, detail) where:
+      - category: unique key mapping to DIALOGUE_LINES["app_<category>"]
+      - display_name: clean, human-readable name of the application or website
+      - detail: contextual detail (e.g. video title, file name, or tab title)
+    """
+    if not exe_name:
+        return "", "", ""
+
+    exe = exe_name.lower().strip()
+    path = (exe_path or "").lower().strip()
+    t = (title or "").strip()
+    t_lower = t.lower()
+
+    # Exclude Yellow's Pixel Buddies own windows and system internals
+    if "yellow's pixel buddies" in path or "yellows_pixel_buddies" in path:
+        return "", "", ""
+    for excl in EXCLUDED_NON_GAME_TITLES:
+        if excl in t_lower:
+            return "", "", ""
+    if exe in ("searchapp.exe", "shellexperiencehost.exe", "startmenuexperiencehost.exe", "lockapp.exe"):
+        return "", "", ""
+    if exe == "explorer.exe" and not t:
+        return "", "", ""
+
+    # 1. Digital Art & Creative Tools
+    # MS Paint / Paint 3D
+    if exe in ("mspaint.exe", "paint.exe", "paintstudio.view.exe") or ("paint" in exe and "paint" in t_lower):
+        return "paint", "MS Paint", t
+
+    # Adobe Photoshop
+    if exe in ("photoshop.exe",) or "photoshop" in exe or "adobe photoshop" in path:
+        return "photoshop", "Adobe Photoshop", t
+
+    # Pixel Art Editors (Aseprite, LibreSprite, Piskel)
+    if exe in ("aseprite.exe", "libresprite.exe", "piskel.exe") or "aseprite" in path:
+        return "pixel_art", "Aseprite", t
+
+    # Other Digital Painting / Illustration (Clip Studio, Krita, GIMP, SAI)
+    if exe in ("clipstudiopaint.exe", "clipstudio.exe", "krita.exe", "gimp.exe", "sai.exe", "sai2.exe") or any(g in exe for g in ("gimp-", "clipstudio")):
+        name = "Clip Studio Paint" if "clip" in exe else ("Krita" if "krita" in exe else ("GIMP" if "gimp" in exe else "Digital Art Studio"))
+        return "digital_art", name, t
+
+    # 3D Modeling / Animation (Blender, Maya, 3ds Max)
+    if exe in ("blender.exe", "maya.exe", "3dsmax.exe") or "blender" in path:
+        name = "Blender 3D" if "blender" in exe else "3D Modeling Studio"
+        return "blender_3d", name, t
+
+    # Music / Audio Production (DAWs)
+    if exe in ("fl64.exe", "fl.exe", "reaper.exe", "audacity.exe", "ableton live.exe", "studio one.exe", "cubase.exe"):
+        name = "FL Studio" if "fl" in exe else ("Audacity" if "audacity" in exe else "Audio Workstation")
+        return "music_daw", name, t
+
+    # 2. System Utilities & Tools
+    if exe in ("taskmgr.exe", "processhacker.exe", "procexp.exe", "procexp64.exe"):
+        return "task_manager", "Task Manager", t
+
+    if exe in ("calc.exe", "calculatorapp.exe", "calculator.exe"):
+        return "calculator", "Calculator", t
+
+    # 3. Development, Coding & Terminals
+    # Terminals
+    if exe in ("windowsterminal.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "mintty.exe", "alacritty.exe"):
+        return "terminal", "Terminal", t
+
+    # VS Code / Cursor
+    if exe in ("code.exe", "cursor.exe", "vscodium.exe"):
+        name = "Cursor" if "cursor" in exe else "VS Code"
+        return "vscode", name, t
+
+    # Heavy IDEs (Visual Studio, JetBrains, Sublime)
+    if exe in ("devenv.exe", "pycharm64.exe", "idea64.exe", "clion64.exe", "webstorm64.exe", "rider64.exe", "sublime_text.exe"):
+        name = "Visual Studio" if "devenv" in exe else ("PyCharm" if "pycharm" in exe else "IDE")
+        return "coding_ide", name, t
+
+    # Office / Notes / Writing
+    if exe in ("winword.exe", "excel.exe", "powerpnt.exe", "notion.exe", "obsidian.exe"):
+        name = "Microsoft Word" if "winword" in exe else ("Microsoft Excel" if "excel" in exe else ("Notion" if "notion" in exe else ("Obsidian" if "obsidian" in exe else "Office Suite")))
+        return "office", name, t
+
+    # Discord Desktop App
+    if exe == "discord.exe":
+        return "discord", "Discord", t
+
+    # 4. Web Browsers (Tab & Website Detection via Title)
+    browser_exes = ("chrome.exe", "firefox.exe", "msedge.exe", "brave.exe", "opera.exe", "vivaldi.exe", "arc.exe", "zen.exe")
+    if exe in browser_exes:
+        # Video / Streaming
+        if "youtube" in t_lower or "watch?v=" in t_lower:
+            return "youtube", "YouTube", t
+        if "twitch.tv" in t_lower or "twitch" in t_lower:
+            return "twitch", "Twitch", t
+        if any(s in t_lower for s in ("netflix", "disney+", "crunchyroll", "hulu", "bilibili", "prime video", "anime")):
+            return "streaming", "Streaming Video", t
+
+        # Social & Discussion
+        if "reddit" in t_lower:
+            return "reddit", "Reddit", t
+        if "twitter" in t_lower or " / x" in t_lower or t.endswith(" / X"):
+            return "twitter", "X / Twitter", t
+        if "discord" in t_lower:
+            return "discord", "Discord", t
+        if any(s in t_lower for s in ("instagram", "tiktok", "facebook")):
+            return "social", "Social Media", t
+
+        # Developer & Technical Portals
+        if "github" in t_lower:
+            return "github", "GitHub", t
+        if "gitlab" in t_lower:
+            return "gitlab", "GitLab", t
+        if "stack overflow" in t_lower or "stackoverflow" in t_lower:
+            return "stackoverflow", "Stack Overflow", t
+
+        # AI Assistant Interfaces
+        if any(ai in t_lower for ai in ("chatgpt", "claude.ai", "gemini.google.com", "perplexity")):
+            return "ai_chat", "AI Assistant", t
+
+        # Productivity in Browser
+        if any(doc in t_lower for doc in ("google docs", "google sheets", "notion.so")):
+            return "office", "Docs & Workspace", t
+
+        # Generic browser tab
+        return "browser", "Web Browser", t
+
+    # 5. Video Games (Steam, Epic, emulators, full screen D3D)
+    is_game, game_title = detect_foreground_game()
+    if is_game and game_title:
+        return "game", game_title, t
+
+    return "general", exe_name.removesuffix(".exe").replace("_", " ").title(), t
 
 
 def compute_screen_fingerprint(pixmap: QPixmap) -> bytes:
@@ -10292,7 +10542,7 @@ class CodebaseStateProvider:
             "* 2. MEMORY: 2-day temp facts (/tempfacts), permanent core facts (/facts), 30-day reminders (/reminders).\n"
             "* 3. COACHING & GOALS: Milestone tracking (/goals), royal/gentle coaching (/coach), P$ rewards upon completion!\n"
             "* 4. PRODUCTIVITY: Timers (/timer 15m tea), scheduled alarms (/alarm 08:00 AM), thermal monitor (/vitals).\n"
-            "* 5. PERCEPTION: Desktop screen vision peeking, GSMTC music listening & song commentary.\n"
+            "* 5. PERCEPTION: Native app awareness (Photoshop, Paint, games, browser tabs), GSMTC music listening, vision peeking.\n"
             "* 6. SANCTUARY SHOP: Boutique window, items, Dark Dollars wallet, GUI goal & alarm editors!\n"
             "* (Try /codebase for live engine specs, or /help for commands!)"
         )
@@ -10382,6 +10632,22 @@ class YellowsPixelBuddies(QWidget):
         self._dialogue_enabled: bool = DIALOGUE_ENABLED
         self._last_dialogue: str | None = None
         self._dialogue_action: QAction | None = None
+        # --- Native Win32 App & Tab activity awareness (zero AI required) ---
+        self._native_app_reactions_enabled: bool = NATIVE_APP_REACTIONS_ENABLED
+        self._last_app_reaction_time: float = 0.0
+        self._app_reaction_timestamps: dict[str, float] = {}
+        self._last_app_reacted_title: dict[str, str] = {}
+        self._last_active_app_category: str = ""
+        self._last_active_app_title: str = ""
+        self._last_foreground_title: str = ""
+        self._current_app_context: dict[str, str] = {
+            "category": "",
+            "display_name": "",
+            "detail": "",
+            "title": "",
+            "exe": "",
+        }
+        self._app_reactions_action: QAction | None = None
         self._last_shocked_dialogue_time: float = -9999.0
         self._last_tongue_dialogue_time: float = -9999.0
         self._last_question_dialogue_time: float = time.perf_counter()
@@ -10544,6 +10810,8 @@ class YellowsPixelBuddies(QWidget):
             self._chat_input.set_scale(self._dialogue_scale)
         if "dialogue_enabled" in saved_settings:
             self._dialogue_enabled = bool(saved_settings["dialogue_enabled"])
+        if "native_app_reactions_enabled" in saved_settings:
+            self._native_app_reactions_enabled = bool(saved_settings["native_app_reactions_enabled"])
         if "ai_song_comment_enabled" in saved_settings:
             self._ai_song_comment_enabled = bool(saved_settings["ai_song_comment_enabled"])
         if "bomb_attack_enabled" in saved_settings:
@@ -11760,6 +12028,40 @@ class YellowsPixelBuddies(QWidget):
         if v.get("ram_percent", 0.0) < 85.0 and last_alert_state == "ram_alert":
             self._last_hardware_alert_state = "normal"
 
+    def get_active_app_prompt_block(self) -> str:
+        """Return formatted context about user's currently focused application / tab (native OS tracking)."""
+        ctx = getattr(self, "_current_app_context", None)
+        if not ctx or not ctx.get("display_name"):
+            try:
+                hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
+                if hwnd and exe_name:
+                    cat, disp, det = identify_active_app_context(exe_name, exe_path, title)
+                    if disp:
+                        ctx = {"category": cat, "display_name": disp, "detail": det, "title": title, "exe": exe_name}
+                        self._current_app_context = ctx
+            except Exception:
+                pass
+
+        if not ctx or not ctx.get("display_name"):
+            return ""
+
+        disp = ctx.get("display_name", "")
+        title = ctx.get("title", "")
+        cat = ctx.get("category", "")
+        exe = ctx.get("exe", "")
+
+        lines = [
+            "[CURRENT DESKTOP FOREGROUND CONTEXT (Native Win32 Tracking - No Vision Needed)]",
+            f"- Focused App: {disp} ({exe})" if exe else f"- Focused App: {disp}",
+        ]
+        if title and title.lower() != disp.lower():
+            clean_t = title[:120].strip()
+            lines.append(f"- Active Window / Tab Title: \"{clean_t}\"")
+        if cat and cat not in ("general", "browser"):
+            lines.append(f"- Activity Category: {cat.replace('_', ' ').title()}")
+        lines.append("You are aware of what application the user is currently focused on via your native desktop hooks. If asked what they are doing, you can reference this accurately and in-character!")
+        return "\n".join(lines)
+
     def _build_question_prompt(self, source: str, forced_goal: dict | None = None) -> tuple[str, str]:
         """Construct the system instruction and user prompt for generating an interactive question."""
         now_dt = datetime.datetime.now()
@@ -11794,6 +12096,10 @@ class YellowsPixelBuddies(QWidget):
         if goals:
             system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
 
+        active_app_block = self.get_active_app_prompt_block()
+        if active_app_block:
+            system_inst += f"\n\n{active_app_block}"
+
         # Conditional hardware vitals injection (on sustained stress only)
         if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
             snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
@@ -11801,6 +12107,11 @@ class YellowsPixelBuddies(QWidget):
                 hw_block = self._hardware_monitor.get_prompt_block(force=False)
                 if hw_block:
                     system_inst += f"\n\n{hw_block}"
+
+        # Current active desktop app & activity context (native Win32 tracking without AI)
+        active_app_block = self.get_active_app_prompt_block()
+        if active_app_block:
+            system_inst += f"\n\n{active_app_block}"
 
         # Feed ongoing conversation history from the active session so Pink has situational awareness
         active_session_turns = []
@@ -13319,6 +13630,11 @@ RULES:
             codebase_block = self._codebase_provider.get_prompt_block(self, force=False, user_query=clean_input)
             if codebase_block:
                 system_inst += f"\n\n{codebase_block}"
+
+        # Current active desktop app & activity context (native Win32 tracking without AI)
+        active_app_block = self.get_active_app_prompt_block()
+        if active_app_block:
+            system_inst += f"\n\n{active_app_block}"
 
         had_visual = bool(see_screen or attached_image_b64)
         # Spawn background worker thread
@@ -16971,6 +17287,11 @@ RULES:
             act.setChecked(abs(preset - cur_dlg_scale) < 0.01)
             act.triggered.connect(lambda checked, s=preset: self.set_dialogue_scale(s))
 
+        app_react_act = menu.addAction("App Awareness Reactions")
+        app_react_act.setCheckable(True)
+        app_react_act.setChecked(getattr(self, "_native_app_reactions_enabled", True))
+        app_react_act.toggled.connect(self._toggle_native_app_reactions)
+
         menu.addSeparator()
         jump_action = None
         if DEBUG_JUMP_MENU and self._jump_enabled:
@@ -17067,13 +17388,21 @@ RULES:
         if not hwnd or hwnd == int(self.winId()):
             return
 
-        if hwnd != self._last_foreground_hwnd:
+        txt_buf = ctypes.create_unicode_buffer(512)
+        dll.GetWindowTextW(hwnd, txt_buf, 512)
+        curr_title = txt_buf.value.strip()
+
+        hwnd_changed = (hwnd != self._last_foreground_hwnd)
+        title_changed = (bool(curr_title) and curr_title != getattr(self, "_last_foreground_title", ""))
+
+        if hwnd_changed or title_changed:
             prev_hwnd = self._last_foreground_hwnd
             prev_maximized = getattr(self, "_last_foreground_is_maximized", False)
             if prev_hwnd and dll.IsWindow(prev_hwnd):
                 prev_maximized = bool(dll.IsZoomed(prev_hwnd))
 
             self._last_foreground_hwnd = hwnd
+            self._last_foreground_title = curr_title
             prev_lum = self._last_luminance
 
             # Give DWM time to finish drawing the new window before sampling luminance
@@ -17082,6 +17411,83 @@ RULES:
         else:
             # Keep maximized tracking up-to-date in case user maximized/restored the current window
             self._last_foreground_is_maximized = bool(dll.IsZoomed(hwnd))
+
+    def _check_native_app_reaction(self, target_hwnd: int) -> bool:
+        """Evaluate foreground process and title to react to recognized applications/tabs without AI."""
+        if not getattr(self, "_native_app_reactions_enabled", True):
+            return False
+        if not getattr(self, "_dialogue_enabled", True):
+            return False
+        if getattr(self, "_hidden_in_tray", False):
+            return False
+        if self._is_dialogue_convo_active():
+            return False
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay and self._dialogue_overlay.is_active():
+            return False
+        if self._dragging or self._menu_open or getattr(self, "_is_annoyed_ignored", False):
+            return False
+        if getattr(self, "_phase", None) in (
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE,
+            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE
+        ):
+            return False
+        if getattr(self, "_in_angry_spam", False) or (self.state == "angry" and self._repeat_count > 0):
+            return False
+
+        # Gather foreground process & window title
+        hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
+        if not hwnd or hwnd != target_hwnd:
+            return False
+
+        # Classify activity
+        category, display_name, detail = identify_active_app_context(exe_name, exe_path, title)
+
+        # Update live context tracking so AI/system knows current activity
+        self._current_app_context = {
+            "category": category,
+            "display_name": display_name,
+            "detail": detail,
+            "title": title,
+            "exe": exe_name,
+        }
+
+        if not category or category in ("general", "browser"):
+            # Unrecognized or generic app without specific witty commentary
+            return False
+
+        dialogue_key = f"app_{category}"
+        if dialogue_key not in DIALOGUE_LINES or not DIALOGUE_LINES[dialogue_key]:
+            return False
+
+        now = time.perf_counter()
+
+        # Global cooldown check (don't react to every single window click)
+        if now - getattr(self, "_last_app_reaction_time", 0.0) < APP_SWITCH_GLOBAL_COOLDOWN_S:
+            return False
+
+        # Category-specific cooldown (don't comment on Photoshop/Paint repeatedly)
+        cat_timestamps = getattr(self, "_app_reaction_timestamps", {})
+        last_cat_time = cat_timestamps.get(category, 0.0)
+        if now - last_cat_time < APP_CATEGORY_COOLDOWN_S:
+            return False
+
+        # Avoid interrupting recent song comment
+        if now - getattr(self, "_last_ai_song_comment_time", 0.0) < 15.0:
+            return False
+
+        # Record cooldowns
+        self._last_app_reaction_time = now
+        cat_timestamps[category] = now
+        self._app_reaction_timestamps = cat_timestamps
+        self._last_active_app_category = category
+        self._last_active_app_title = title
+
+        log.info("Native app reaction triggered for category '%s' (%s, title='%s')",
+                 category, display_name, title[:40])
+
+        self._say(dialogue_key, force=True, dialogue_category=dialogue_key)
+        return True
 
     def _handle_window_switch(self, target_hwnd: int, prev_lum: float, prev_maximized: bool = False) -> None:
         """Evaluate the newly focused window after it has composited."""
@@ -17132,12 +17538,17 @@ RULES:
             log.info("Flashbang! Switched from dark (%.1f) to bright maximized app (%.1f) -> burnt",
                      prev_lum, curr_lum)
             self._interrupt_with_reaction("burnt", dialogue_category="burnt_switch")
-        else:
-            # Only trigger shocked if switching from a maximized window to another maximized window!
-            if not prev_maximized:
-                log.info("Switched to maximized app, but previous window was not maximized (prev_maximized=%s) -> skipping shocked reaction",
-                         prev_maximized)
-                return
+            return
+
+        # 2. Native Win32 App & Tab Activity Awareness Reaction (Paint, Photoshop, Game, YouTube, Discord, Code, etc.)
+        # Evaluates on both windowed and maximized apps without requiring AI screen capture!
+        app_reacted = self._check_native_app_reaction(target_hwnd)
+        if app_reacted:
+            return
+
+        # 3. Only trigger shocked if switching from a maximized window to another maximized window!
+        if not is_maximized or not prev_maximized:
+            return
 
             now = time.perf_counter()
             if now - self._last_switch_shock_time < SWITCH_SHOCK_COOLDOWN_S:
@@ -17288,6 +17699,11 @@ RULES:
         self._dialogue_action.setChecked(self._dialogue_enabled)
         self._dialogue_action.toggled.connect(self._toggle_dialogue)
 
+        self._app_reactions_action = tray_menu.addAction("App Awareness Reactions")
+        self._app_reactions_action.setCheckable(True)
+        self._app_reactions_action.setChecked(self._native_app_reactions_enabled)
+        self._app_reactions_action.toggled.connect(self._toggle_native_app_reactions)
+
         self._song_comment_action = tray_menu.addAction("AI Song Commentary")
         self._song_comment_action.setCheckable(True)
         self._song_comment_action.setChecked(self._ai_song_comment_enabled)
@@ -17384,6 +17800,10 @@ RULES:
             self._dialogue_action.blockSignals(True)
             self._dialogue_action.setChecked(self._dialogue_enabled)
             self._dialogue_action.blockSignals(False)
+        if hasattr(self, "_app_reactions_action") and self._app_reactions_action is not None:
+            self._app_reactions_action.blockSignals(True)
+            self._app_reactions_action.setChecked(self._native_app_reactions_enabled)
+            self._app_reactions_action.blockSignals(False)
         if hasattr(self, "_song_comment_action") and self._song_comment_action is not None:
             self._song_comment_action.blockSignals(True)
             self._song_comment_action.setChecked(self._ai_song_comment_enabled)
@@ -17535,6 +17955,7 @@ RULES:
         if hasattr(self, "_memory") and self._memory:
             settings = {
                 "dialogue_enabled": getattr(self, "_dialogue_enabled", True),
+                "native_app_reactions_enabled": getattr(self, "_native_app_reactions_enabled", True),
                 "ai_song_comment_enabled": getattr(self, "_ai_song_comment_enabled", True),
                 "bomb_attack_enabled": getattr(self, "_bomb_attack_enabled", False),
                 "bomb_count": getattr(self, "_bomb_count", BOMB_COUNT),
@@ -17544,6 +17965,16 @@ RULES:
                 "dialogue_scale": getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE),
             }
             self._memory.save_settings(settings)
+
+    def _toggle_native_app_reactions(self, checked: bool) -> None:
+        """Enable or disable native Win32 app/tab awareness reactions."""
+        self._native_app_reactions_enabled = checked
+        if hasattr(self, "_app_reactions_action") and self._app_reactions_action is not None:
+            self._app_reactions_action.blockSignals(True)
+            self._app_reactions_action.setChecked(checked)
+            self._app_reactions_action.blockSignals(False)
+        self._save_live_settings()
+        log.info("App awareness reactions: %s", "ENABLED" if checked else "DISABLED")
 
     def _toggle_dialogue(self, checked: bool) -> None:
         """Enable or disable speech bubble popups."""
