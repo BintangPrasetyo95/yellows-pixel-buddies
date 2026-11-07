@@ -32,7 +32,7 @@
   ```
 - **Install dependencies**:
   ```powershell
-  pip install PyQt5 requests
+  pip install PyQt5 requests pygame
   # Optional for Windows GSMTC media playback detection:
   pip install winrt-runtime winrt-Windows.Media.Control
   ```
