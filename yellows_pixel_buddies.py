@@ -2931,6 +2931,20 @@ class DialogueOverlay(QWidget):
 
     def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
         """Render and begin typing a single dialogue bubble."""
+        # Sanitize metadata tags so [anim: ...] or [mode: ...] never display in typewriter bubble
+        text = re.sub(
+            r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|emotion|think|thought):\s*[^\]]+\]",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        if not text or text in ("*", "* ...", ""):
+            self._type_timer.stop()
+            self._hold_timer.stop()
+            self._active = False
+            self.hide()
+            return
+
         play_sound("bubble_pop")
         self._hold_timer.stop()
         self._type_timer.stop()
@@ -2939,9 +2953,6 @@ class DialogueOverlay(QWidget):
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
 
-        # Sanitize metadata tags so [anim: ...] or [mode: ...] never display in typewriter bubble
-        text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", text).strip()
-        text = re.sub(r"\[mode:\s*[^\\\]]+\]", "", text).strip()
         self._full_text = text
         self._visible_chars = 0
         self._char_delay_ticks = 0
@@ -12442,6 +12453,10 @@ RULES:
 
     def _on_ai_question_ready(self, q_item: QuestionItem, source_type: str) -> None:
         """Display AI-generated interactive question dialogue with choices."""
+        if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
+            return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            return
         if self._is_user_chat_or_choice_active():
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
                 if self._dialogue_overlay._full_text == "* ...?":
@@ -12496,6 +12511,11 @@ RULES:
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             if self._dialogue_overlay._full_text == "* ...?":
                 self._dialogue_overlay.dismiss(clear_queue=True)
+
+        if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
+            return
+        if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            return
 
         if QUESTION_ITEMS:
             candidates = [q for q in QUESTION_ITEMS if q.question != self._last_dialogue]

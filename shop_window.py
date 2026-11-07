@@ -826,14 +826,16 @@ class DeltaruneShopWindow(QWidget):
         self.hide()
         self.closed.emit()
 
-    def set_dialogue(self, text: str) -> None:
-        if self._dialogue_text == text and not self._is_typing():
+    def set_dialogue(self, text: str, typewriter: bool = True) -> None:
+        if self._dialogue_text == text:
             return
         self._dialogue_text = text
-        self._dialogue_char_idx = 0
-        if not self.isVisible():
+        if not typewriter or not self.isVisible():
+            self._dialogue_char_idx = len(text)
             self._typewriter_timer.stop()
+            self.update()
             return
+        self._dialogue_char_idx = 0
         self._typewriter_timer.start()
         self.update()
 
@@ -1816,15 +1818,15 @@ class DeltaruneShopWindow(QWidget):
                 "* Exit back to the outside world.",
             ]
             if 0 <= self._selected_index < len(dialogues):
-                self.set_dialogue(dialogues[self._selected_index])
+                self.set_dialogue(dialogues[self._selected_index], typewriter=False)
 
         elif self.state == ShopState.CHARACTER:
             if self._selected_index == 0:
-                self.set_dialogue("* Pink (Equipped):\n* The one and only companion in this world!")
+                self.set_dialogue("* Pink (Equipped):\n* The one and only companion in this world!", typewriter=False)
             elif self._selected_index < 4:
-                self.set_dialogue("* (COMING SOON)\n* Tailoring in progress... Coming in a future update!")
+                self.set_dialogue("* (COMING SOON)\n* Tailoring in progress... Coming in a future update!", typewriter=False)
             else:
-                self.set_dialogue("* Return to the main parlour.")
+                self.set_dialogue("* Return to the main parlour.", typewriter=False)
 
         elif self.state == ShopState.TASKS_SUBMENU:
             dialogues = [
@@ -1835,50 +1837,50 @@ class DeltaruneShopWindow(QWidget):
                 "* Return to the main parlour.",
             ]
             if 0 <= self._selected_index < len(dialogues):
-                self.set_dialogue(dialogues[self._selected_index])
+                self.set_dialogue(dialogues[self._selected_index], typewriter=False)
 
         elif self.state == ShopState.TASKS:
             if self._tasks_tab == 0:  # Goals
                 goals = self._get_goals()
                 if self._selected_index == 0:
-                    self.set_dialogue("* Log a new personal milestone objective for Pink to evaluate!")
+                    self.set_dialogue("* Log a new personal milestone objective for Pink to evaluate!", typewriter=False)
                 elif self._selected_index <= len(goals):
                     g = goals[self._selected_index - 1]
                     val = self.evaluate_goal_value(g)
-                    self.set_dialogue(f"* Milestone: \"{g}\"\n* Pink's Valuation: +P$ {val:02d} upon completion!")
+                    self.set_dialogue(f"* Milestone: \"{g}\"\n* Pink's Valuation: +P$ {val:02d} upon completion!", typewriter=False)
                 else:
-                    self.set_dialogue("* Return to Tasks & Alarms menu.")
+                    self.set_dialogue("* Return to Tasks & Alarms menu.", typewriter=False)
 
             elif self._tasks_tab == 1:  # Tasks
                 reminders = self._get_active_reminders()
                 if self._selected_index == 0:
-                    self.set_dialogue("* Register a new chore to complete for Pink Dollars!")
+                    self.set_dialogue("* Register a new chore to complete for Pink Dollars!", typewriter=False)
                 elif self._selected_index <= len(reminders):
                     t = reminders[self._selected_index - 1]
                     val = evaluate_task_value(t)
-                    self.set_dialogue(f"* Chore: \"{t}\"\n* Pink's Valuation: +P$ {val:02d} upon verification!")
+                    self.set_dialogue(f"* Chore: \"{t}\"\n* Pink's Valuation: +P$ {val:02d} upon verification!", typewriter=False)
                 else:
-                    self.set_dialogue("* Return to Tasks & Alarms menu.")
+                    self.set_dialogue("* Return to Tasks & Alarms menu.", typewriter=False)
 
             elif self._tasks_tab == 2:  # Alarms
                 alarms = self._get_scheduled_alarms()
                 if self._selected_index == 0:
-                    self.set_dialogue("* Prime a new wall-clock alarm (e.g. 08:30 AM Meeting)!")
+                    self.set_dialogue("* Prime a new wall-clock alarm (e.g. 08:30 AM Meeting)!", typewriter=False)
                 elif self._selected_index == 1:
-                    self.set_dialogue("* Clear all scheduled alarms from the memory log.")
+                    self.set_dialogue("* Clear all scheduled alarms from the memory log.", typewriter=False)
                 elif self._selected_index - 2 < len(alarms):
                     al = alarms[self._selected_index - 2]
-                    self.set_dialogue(f"* Clock Alarm: [{al.get('clock_time')}] \"{al.get('label')}\"")
+                    self.set_dialogue(f"* Clock Alarm: [{al.get('clock_time')}] \"{al.get('label')}\"", typewriter=False)
                 else:
-                    self.set_dialogue("* Return to Tasks & Alarms menu.")
+                    self.set_dialogue("* Return to Tasks & Alarms menu.", typewriter=False)
 
             elif self._tasks_tab == 3:  # Timers
                 timers = self._get_timers_menu_items()
                 if self._selected_index < len(timers):
                     it = timers[self._selected_index]
-                    self.set_dialogue(f"* Focus Timer: {it.get('label')}")
+                    self.set_dialogue(f"* Focus Timer: {it.get('label')}", typewriter=False)
                 else:
-                    self.set_dialogue("* Return to Tasks & Alarms menu.")
+                    self.set_dialogue("* Return to Tasks & Alarms menu.", typewriter=False)
 
         elif self.state == ShopState.SETTINGS_MENU:
             dialogues = [
@@ -1889,7 +1891,7 @@ class DeltaruneShopWindow(QWidget):
                 "* Return to the main parlour.",
             ]
             if 0 <= self._selected_index < len(dialogues):
-                self.set_dialogue(dialogues[self._selected_index])
+                self.set_dialogue(dialogues[self._selected_index], typewriter=False)
 
         elif self.state == ShopState.SCALES_MENU:
             cur_pet_s = getattr(self._pet, "_scale_modifier", 1.0) if self._pet else 1.0
@@ -1902,7 +1904,7 @@ class DeltaruneShopWindow(QWidget):
                 "* Return to sanctuary settings.",
             ]
             if 0 <= self._selected_index < len(dialogues):
-                self.set_dialogue(dialogues[self._selected_index])
+                self.set_dialogue(dialogues[self._selected_index], typewriter=False)
 
         elif self.state == ShopState.TOGGLES_MENU:
             vol_pct = round(getattr(self._pet, "_sfx_volume", 0.7) * 100) if self._pet else round(get_sound_manager().volume * 100)
@@ -1916,36 +1918,36 @@ class DeltaruneShopWindow(QWidget):
                 "* Return to sanctuary settings.",
             ]
             if 0 <= self._selected_index < len(dialogues):
-                self.set_dialogue(dialogues[self._selected_index])
+                self.set_dialogue(dialogues[self._selected_index], typewriter=False)
 
         elif self.state == ShopState.FACTS_EDIT:
             notes = self._get_fact_notes()
             if self._selected_index == 0:
-                self.set_dialogue(f"* Change your nickname (current: {self._get_user_name()}).")
+                self.set_dialogue(f"* Change your nickname (current: {self._get_user_name()}).", typewriter=False)
             elif self._selected_index == 1:
-                self.set_dialogue("* Inscribe a new permanent fact note into Pink's logs.")
+                self.set_dialogue("* Inscribe a new permanent fact note into Pink's logs.", typewriter=False)
             elif self._selected_index - 2 < len(notes):
                 full_note = notes[self._selected_index - 2]
-                self.set_dialogue(f"* Fact Note #{self._selected_index - 1}:\n* \"{full_note}\"")
+                self.set_dialogue(f"* Fact Note #{self._selected_index - 1}:\n* \"{full_note}\"", typewriter=False)
             else:
-                self.set_dialogue("* Return to sanctuary settings.")
+                self.set_dialogue("* Return to sanctuary settings.", typewriter=False)
 
         elif self.state == ShopState.TALK_MENU:
             if self._selected_index < len(TALK_TOPICS) - 1:
                 title, key = TALK_TOPICS[self._selected_index]
                 if key == "chat_history":
-                    self.set_dialogue("* Review conversation archives and sights from past sessions.\n* Press Enter or Z to inspect.")
+                    self.set_dialogue("* Review conversation archives and sights from past sessions.\n* Press Enter or Z to inspect.", typewriter=False)
                 else:
-                    self.set_dialogue(f"* Talk topic: {title}\n* Press Enter or Z to listen.")
+                    self.set_dialogue(f"* Talk topic: {title}\n* Press Enter or Z to listen.", typewriter=False)
             else:
-                self.set_dialogue("* Return to the main parlour.")
+                self.set_dialogue("* Return to the main parlour.", typewriter=False)
         elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
             if self._selected_index < len(self._session_summaries):
                 sess = self._session_summaries[self._selected_index]
                 seen_str = f"\n* Sights: {sess['seen_summary']}" if sess.get('seen_summary') else ""
-                self.set_dialogue(f"* Timeline: {sess['label']}\n* {sess['turn_count']} dialogue turns.{seen_str}")
+                self.set_dialogue(f"* Timeline: {sess['label']}\n* {sess['turn_count']} dialogue turns.{seen_str}", typewriter=False)
             else:
-                self.set_dialogue("* Return to the talk topics menu.")
+                self.set_dialogue("* Return to the talk topics menu.", typewriter=False)
 
     def _confirm_selection(self) -> None:
         play_sound("menu_select")
@@ -1953,19 +1955,19 @@ class DeltaruneShopWindow(QWidget):
             if self._selected_index == 0:  # CHARACTER
                 self.state = ShopState.CHARACTER
                 self._selected_index = 0
-                self.set_dialogue("* Characters are coming soon! Only one companion in this world for now.")
+                self.set_dialogue("* Characters are coming soon! Only one companion in this world for now.", typewriter=False)
             elif self._selected_index == 1:  # TASKS & ALARMS
                 self.state = ShopState.TASKS_SUBMENU
                 self._selected_index = 0
-                self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
+                self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?", typewriter=False)
             elif self._selected_index == 2:  # TALK
                 self.state = ShopState.TALK_MENU
                 self._selected_index = 0
-                self.set_dialogue(CANON_TALK_ENTER)
+                self.set_dialogue(CANON_TALK_ENTER, typewriter=False)
             elif self._selected_index == 3:  # CONFIG & SETTINGS
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 0
-                self.set_dialogue("* Sanctuary settings & permanent memory fact sheet.")
+                self.set_dialogue("* Sanctuary settings & permanent memory fact sheet.", typewriter=False)
             elif self._selected_index == 4:  # EXIT
                 self._start_exit()
 
@@ -1975,31 +1977,31 @@ class DeltaruneShopWindow(QWidget):
                 self._tasks_tab = 0
                 self._selected_index = 0
                 self._goals_scroll_offset = 0
-                self.set_dialogue("* Target Milestones & Long-term Goals board.")
+                self.set_dialogue("* Target Milestones & Long-term Goals board.", typewriter=False)
             elif self._selected_index == 1:  # Tasks
                 self.state = ShopState.TASKS
                 self._tasks_tab = 1
                 self._selected_index = 0
                 self._tasks_scroll_offset = 0
-                self.set_dialogue("* Chores & Reminders board. Complete tasks for Pink Dollars!")
+                self.set_dialogue("* Chores & Reminders board. Complete tasks for Pink Dollars!", typewriter=False)
             elif self._selected_index == 2:  # Alarms (COMING SOON)
-                self.set_dialogue("* (Under construction...)\n* Scheduled alarms are temporarily offline, minion!")
+                self.set_dialogue("* (Under construction...)\n* Scheduled alarms are temporarily offline, minion!", typewriter=False)
             elif self._selected_index == 3:  # Timers (COMING SOON)
-                self.set_dialogue("* (Under construction...)\n* Focus timers are being rebuilt for the next version, darling!")
+                self.set_dialogue("* (Under construction...)\n* Focus timers are being rebuilt for the next version, darling!", typewriter=False)
             else:  # Back
                 self.state = ShopState.ROOT
                 self._selected_index = 1
-                self.set_dialogue(self._get_root_greeting())
+                self.set_dialogue(self._get_root_greeting(), typewriter=False)
 
         elif self.state == ShopState.CHARACTER:
             if self._selected_index == 0:
-                self.set_dialogue("* That's me, darling! You are already equipped with Pink!")
+                self.set_dialogue("* That's me, darling! You are already equipped with Pink!", typewriter=False)
             elif self._selected_index < 4:
-                self.set_dialogue("* Other companions are still under construction, darling! Coming soon!")
+                self.set_dialogue("* Other companions are still under construction, darling! Coming soon!", typewriter=False)
             else:  # Back
                 self.state = ShopState.ROOT
                 self._selected_index = 0
-                self.set_dialogue(self._get_root_greeting())
+                self.set_dialogue(self._get_root_greeting(), typewriter=False)
 
         elif self.state == ShopState.TASKS:
             if self._tasks_tab == 0:  # GOALS
@@ -2012,7 +2014,7 @@ class DeltaruneShopWindow(QWidget):
                 else:  # Back
                     self.state = ShopState.TASKS_SUBMENU
                     self._selected_index = self._tasks_tab
-                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?", typewriter=False)
 
             elif self._tasks_tab == 1:  # TASKS
                 reminder_objs = self._get_active_reminder_objects()
@@ -2025,7 +2027,7 @@ class DeltaruneShopWindow(QWidget):
                 else:  # Back
                     self.state = ShopState.TASKS_SUBMENU
                     self._selected_index = self._tasks_tab
-                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?", typewriter=False)
 
             elif self._tasks_tab == 2:  # ALARMS
                 alarms = self._get_scheduled_alarms()
@@ -2038,7 +2040,7 @@ class DeltaruneShopWindow(QWidget):
                 else:  # Back
                     self.state = ShopState.TASKS_SUBMENU
                     self._selected_index = self._tasks_tab
-                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?", typewriter=False)
 
             elif self._tasks_tab == 3:  # TIMERS
                 items = self._get_timers_menu_items()
@@ -2057,33 +2059,33 @@ class DeltaruneShopWindow(QWidget):
                         if mem and hasattr(mem, "clear_all_alarms"):
                             mem.clear_all_alarms()
                         self.stop_timer()
-                        self.set_dialogue("* All active timers halted, minion!")
+                        self.set_dialogue("* All active timers halted, minion!", typewriter=False)
                 else:  # Back
                     self.state = ShopState.TASKS_SUBMENU
                     self._selected_index = self._tasks_tab
-                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
+                    self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?", typewriter=False)
 
         elif self.state == ShopState.SETTINGS_MENU:
             if self._selected_index == 0:  # Scale Modifiers
                 self.state = ShopState.SCALES_MENU
                 self._selected_index = 0
-                self.set_dialogue("* Adjust desktop scale modifiers for Pink and dialogue bubbles.")
+                self.set_dialogue("* Adjust desktop scale modifiers for Pink and dialogue bubbles.", typewriter=False)
             elif self._selected_index == 1:  # Companion Toggles
                 self.state = ShopState.TOGGLES_MENU
                 self._selected_index = 0
-                self.set_dialogue("* Toggle companion autonomous behaviors in real time.")
+                self.set_dialogue("* Toggle companion autonomous behaviors in real time.", typewriter=False)
             elif self._selected_index == 2:  # Edit Facts
                 self.state = ShopState.FACTS_EDIT
                 self._selected_index = 0
                 self._notes_scroll_offset = 0
-                self.set_dialogue("* Permanent memory fact sheet & nickname manager.")
+                self.set_dialogue("* Permanent memory fact sheet & nickname manager.", typewriter=False)
             elif self._selected_index == 3:  # Uninstall Pink
                 if self._pet and hasattr(self._pet, "_handle_uninstall"):
                     self._pet._handle_uninstall()
             else:  # Back
                 self.state = ShopState.ROOT
                 self._selected_index = 3
-                self.set_dialogue(self._get_root_greeting())
+                self.set_dialogue(self._get_root_greeting(), typewriter=False)
 
         elif self.state == ShopState.SCALES_MENU:
             if self._selected_index == 0:  # Pet Scale
@@ -2093,7 +2095,7 @@ class DeltaruneShopWindow(QWidget):
             else:  # Back
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 0
-                self.set_dialogue("* Back to sanctuary settings.")
+                self.set_dialogue("* Back to sanctuary settings.", typewriter=False)
 
         elif self.state == ShopState.FACTS_EDIT:
             items = self._get_facts_menu_items()
@@ -2109,7 +2111,7 @@ class DeltaruneShopWindow(QWidget):
             else:  # Back
                 self.state = ShopState.SETTINGS_MENU
                 self._selected_index = 2
-                self.set_dialogue("* Back to sanctuary settings.")
+                self.set_dialogue("* Back to sanctuary settings.", typewriter=False)
 
         elif self.state == ShopState.TOGGLES_MENU:
             if self._selected_index == 0:  # Dialogue Bubbles
@@ -2117,7 +2119,7 @@ class DeltaruneShopWindow(QWidget):
                     new_val = not getattr(self._pet, "_dialogue_enabled", True)
                     self._pet._toggle_dialogue(new_val)
                     state_str = "ENABLED" if new_val else "DISABLED"
-                    self.set_dialogue(f"* Dialogue bubbles are now {state_str}, mew!")
+                    self.set_dialogue(f"* Dialogue bubbles are now {state_str}, mew!", typewriter=False)
             elif self._selected_index == 1:  # Song Commentary
                 if self._pet:
                     new_val = not getattr(self._pet, "_ai_song_comment_enabled", True)
@@ -2125,34 +2127,34 @@ class DeltaruneShopWindow(QWidget):
                     if hasattr(self._pet, "_save_live_settings"):
                         self._pet._save_live_settings()
                     state_str = "ENABLED" if new_val else "DISABLED"
-                    self.set_dialogue(f"* Autonomous song reactions are now {state_str}, darling!")
+                    self.set_dialogue(f"* Autonomous song reactions are now {state_str}, darling!", typewriter=False)
             elif self._selected_index == 2:  # Game Mode
                 if self._pet and hasattr(self._pet, "_cycle_game_mode"):
                     new_mode = self._pet._cycle_game_mode()
                     if new_mode == "AUTO":
-                        self.set_dialogue("* Game Mode: AUTO! I'll watch closely whenever you launch a game, mew!")
+                        self.set_dialogue("* Game Mode: AUTO! I'll watch closely whenever you launch a game, mew!", typewriter=False)
                     elif new_mode == "ON":
-                        self.set_dialogue("* Game Mode: ON! Full gaming focus & backseat spectating active, darling!")
+                        self.set_dialogue("* Game Mode: ON! Full gaming focus & backseat spectating active, darling!", typewriter=False)
                     else:
-                        self.set_dialogue("* Game Mode: OFF! Reverted to standard desktop pacing.")
+                        self.set_dialogue("* Game Mode: OFF! Reverted to standard desktop pacing.", typewriter=False)
                 self.update()
             elif self._selected_index == 3:  # Bomb Mode
                 if self._pet:
                     new_val = not getattr(self._pet, "_bomb_attack_enabled", False)
                     self._pet._toggle_bomb_attack(new_val)
                     state_str = "ARMED" if new_val else "DISARMED"
-                    self.set_dialogue(f"* Cat-head bombs are now {state_str}, mew!")
+                    self.set_dialogue(f"* Cat-head bombs are now {state_str}, mew!", typewriter=False)
             elif self._selected_index == 4:  # Sound FX
                 if self._pet and hasattr(self._pet, "_toggle_sound_effects"):
                     is_muted = getattr(self._pet, "_audio_muted", True)
                     self._pet._toggle_sound_effects(is_muted)  # un-mute if muted, mute if unmuted
                     state_str = "MUTED" if not is_muted else "ENABLED"
-                    self.set_dialogue(f"* Sound effects are now {state_str}, darling!")
+                    self.set_dialogue(f"* Sound effects are now {state_str}, darling!", typewriter=False)
                 else:
                     sm = get_sound_manager()
                     sm.set_muted(not sm.muted)
                     state_str = "MUTED" if sm.muted else "ENABLED"
-                    self.set_dialogue(f"* Sound effects are now {state_str}, darling!")
+                    self.set_dialogue(f"* Sound effects are now {state_str}, darling!", typewriter=False)
             elif self._selected_index == 5:  # SFX Volume
                 self._cycle_volume(direction=1)
             else:  # Back
@@ -2271,15 +2273,15 @@ class DeltaruneShopWindow(QWidget):
         new_scale = self._pet.cycle_dialogue_scale(direction=direction)
         play_sound("menu_move")
         if new_scale <= 1.0:
-            self.set_dialogue("* Compact speech bubble! Nice and tidy, mew!")
+            self.set_dialogue("* Compact speech bubble! Nice and tidy, mew!", typewriter=False)
         elif new_scale <= 1.25:
-            self.set_dialogue("* Small bubble scale set, darling!")
+            self.set_dialogue("* Small bubble scale set, darling!", typewriter=False)
         elif new_scale <= 1.5:
-            self.set_dialogue("* Standard bubble scale restored! Clear and classic, mew!")
+            self.set_dialogue("* Standard bubble scale restored! Clear and classic, mew!", typewriter=False)
         elif new_scale <= 1.75:
-            self.set_dialogue("* Large speech bubble active! Plenty of room for my wisdom!")
+            self.set_dialogue("* Large speech bubble active! Plenty of room for my wisdom!", typewriter=False)
         else:
-            self.set_dialogue("* Giant speech bubble active! Loud and clear for the whole room, minion!")
+            self.set_dialogue("* Giant speech bubble active! Loud and clear for the whole room, minion!", typewriter=False)
         self.update()
 
     def _cycle_volume(self, direction: int = 1) -> None:
@@ -2304,7 +2306,7 @@ class DeltaruneShopWindow(QWidget):
             get_sound_manager().set_volume(new_pct / 100.0)
 
         play_sound("menu_move")
-        self.set_dialogue(f"* Sound volume set to {new_pct}%, darling!")
+        self.set_dialogue(f"* Sound volume set to {new_pct}%, darling!", typewriter=False)
         self.update()
 
     def _cycle_pet_scale(self, direction: int = 1) -> None:
@@ -2313,17 +2315,17 @@ class DeltaruneShopWindow(QWidget):
         new_scale = self._pet.cycle_scale_modifier(direction=direction)
         play_sound("menu_move")
         if new_scale <= 0.5:
-            self.set_dialogue("* Tiny mode engaged! I'm smol but mighty, mew!")
+            self.set_dialogue("* Tiny mode engaged! I'm smol but mighty, mew!", typewriter=False)
         elif new_scale <= 0.75:
-            self.set_dialogue("* Compact mode! Sleek and stealthy, darling!")
+            self.set_dialogue("* Compact mode! Sleek and stealthy, darling!", typewriter=False)
         elif new_scale <= 1.0:
-            self.set_dialogue("* Standard scale restored! Just right, darling!")
+            self.set_dialogue("* Standard scale restored! Just right, darling!", typewriter=False)
         elif new_scale <= 1.25:
-            self.set_dialogue("* Comfort mode! Easier on your eyes, mew!")
+            self.set_dialogue("* Comfort mode! Easier on your eyes, mew!", typewriter=False)
         elif new_scale <= 1.5:
-            self.set_dialogue("* Large mode! Can you feel my overwhelming aura?")
+            self.set_dialogue("* Large mode! Can you feel my overwhelming aura?", typewriter=False)
         else:
-            self.set_dialogue("* Giant mode active! Bow before my majestic presence, minion!")
+            self.set_dialogue("* Giant mode active! Bow before my majestic presence, minion!", typewriter=False)
         self.update()
 
     def _cancel_or_back(self) -> None:
@@ -2334,37 +2336,37 @@ class DeltaruneShopWindow(QWidget):
         if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.SETTINGS_MENU, ShopState.TALK_MENU):
             self.state = ShopState.ROOT
             self._selected_index = 0
-            self.set_dialogue(self._get_root_greeting())
+            self.set_dialogue(self._get_root_greeting(), typewriter=False)
         elif self.state == ShopState.TASKS:
             self.state = ShopState.TASKS_SUBMENU
             self._selected_index = self._tasks_tab
-            self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?")
+            self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?", typewriter=False)
         elif self.state in (ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU, ShopState.SCALES_MENU):
             self.state = ShopState.SETTINGS_MENU
             self._selected_index = 0 if self.state == ShopState.SCALES_MENU else (1 if self.state == ShopState.TOGGLES_MENU else 2)
-            self.set_dialogue("* Sanctuary settings.")
+            self.set_dialogue("* Sanctuary settings.", typewriter=False)
         elif self.state == ShopState.ITEM_ACTION:
             if self._inspect_item_kind in ("goal", "task", "alarm", "timer"):
                 self.state = ShopState.TASKS
             else:
                 self.state = ShopState.FACTS_EDIT
-            self.set_dialogue("* Back.")
+            self.set_dialogue("* Back.", typewriter=False)
         elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
             self.state = ShopState.TASKS
             self._tasks_tab = 1
             self._selected_index = 0
-            self.set_dialogue(CANON_SELL_REFUSE)
+            self.set_dialogue(CANON_SELL_REFUSE, typewriter=False)
         elif self.state == ShopState.CHAT_HISTORY_VIEW:
             self.state = ShopState.CHAT_HISTORY_SESSIONS
-            self.set_dialogue("* Returned to session archive.")
+            self.set_dialogue("* Returned to session archive.", typewriter=False)
         elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
             self.state = ShopState.TALK_MENU
             chat_idx = next((i for i, (_, k) in enumerate(TALK_TOPICS) if k == "chat_history"), 0)
             self._selected_index = chat_idx
-            self.set_dialogue(CANON_TALK_ENTER)
+            self.set_dialogue(CANON_TALK_ENTER, typewriter=False)
         elif self.state == ShopState.TALK_DIALOGUE:
             self.state = ShopState.TALK_MENU
-            self.set_dialogue(CANON_TALK_ENTER)
+            self.set_dialogue(CANON_TALK_ENTER, typewriter=False)
         elif self.state == ShopState.ROOT:
             self._start_exit()
         elif self.state == ShopState.EXITING:
@@ -2605,7 +2607,7 @@ class DeltaruneShopWindow(QWidget):
                 play_sound("menu_move")
                 self.update()
         elif key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Z, Qt.Key_Space):
-            if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW) and self._is_typing():
+            if self._is_typing():
                 self._finish_typing()
                 return
             self._confirm_selection()
@@ -2618,20 +2620,19 @@ class DeltaruneShopWindow(QWidget):
         if event.button() == Qt.LeftButton:
             pos_canvas = self._screen_to_canvas(event.pos())
 
-            # 1. Exit Mode: click again to close
-            if self.state == ShopState.EXITING:
-                if self._is_typing():
-                    self._finish_typing()
-                else:
-                    self.close_shop()
+            # 1. Skip typewriter immediately on any left click if typing
+            if self._is_typing():
+                self._finish_typing()
                 return
 
-            # 2. Dialogue skip typing without dismissing
+            # 2. Exit Mode: click again to close
+            if self.state == ShopState.EXITING:
+                self.close_shop()
+                return
+
+            # 3. Dialogue advance in talking states
             if self._is_dialogue_rect(pos_canvas):
-                if self._is_typing():
-                    self._finish_typing()
-                    return
-                elif self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW, ShopState.EXITING):
+                if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW, ShopState.EXITING):
                     self._confirm_selection()
                     return
 
