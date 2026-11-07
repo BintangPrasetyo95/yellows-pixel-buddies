@@ -10355,11 +10355,14 @@ class CodebaseStateProvider:
         self._memory = memory
         self._git_cache: dict[str, Any] | None = None
         self._last_git_check_time: float = 0.0
-        self._git_cache_ttl: float = 15.0
+        self._git_cache_ttl: float = 60.0
 
     def get_git_info(self) -> dict[str, Any] | None:
         """Query active Git branch, latest commit, and working tree status (cached)."""
         if getattr(sys, "frozen", False):
+            return None
+
+        if not (_exe_dir / ".git").is_dir():
             return None
 
         now = time.time()
@@ -10368,24 +10371,37 @@ class CodebaseStateProvider:
 
         git_info: dict[str, Any] = {"branch": "", "commit": "", "is_dirty": False, "dirty_count": 0}
         try:
+            extra_kwargs: dict[str, Any] = {
+                "cwd": str(_exe_dir),
+                "text": True,
+                "timeout": 0.8,
+                "stderr": subprocess.DEVNULL,
+            }
+            if os.name == "nt":
+                extra_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                sinfo = subprocess.STARTUPINFO()
+                sinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                sinfo.wShowWindow = subprocess.SW_HIDE
+                extra_kwargs["startupinfo"] = sinfo
+
             # Current branch
             branch_out = subprocess.check_output(
                 ["git", "branch", "--show-current"],
-                text=True, timeout=0.8, stderr=subprocess.DEVNULL
+                **extra_kwargs
             ).strip()
             git_info["branch"] = branch_out or "detached"
 
             # Last commit
             commit_out = subprocess.check_output(
                 ["git", "log", "-1", "--format=%h - %s (%cr)"],
-                text=True, timeout=0.8, stderr=subprocess.DEVNULL
+                **extra_kwargs
             ).strip()
             git_info["commit"] = commit_out
 
             # Status / uncommitted changes
             status_out = subprocess.check_output(
                 ["git", "status", "--porcelain"],
-                text=True, timeout=0.8, stderr=subprocess.DEVNULL
+                **extra_kwargs
             ).strip()
             if status_out:
                 lines = [l for l in status_out.splitlines() if l.strip()]
@@ -14260,12 +14276,22 @@ RULES:
         """Update the repository via git pull in development/source environments."""
         self._say("* Running git pull to update Pink... hang tight, mew!", force=True, record_memory=False)
         try:
+            extra_kwargs: dict[str, Any] = {
+                "cwd": str(_exe_dir),
+                "capture_output": True,
+                "text": True,
+                "timeout": 30,
+            }
+            if os.name == "nt":
+                extra_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                sinfo = subprocess.STARTUPINFO()
+                sinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                sinfo.wShowWindow = subprocess.SW_HIDE
+                extra_kwargs["startupinfo"] = sinfo
+
             result = subprocess.run(
                 ["git", "pull"],
-                cwd=str(_exe_dir),
-                capture_output=True,
-                text=True,
-                timeout=30
+                **extra_kwargs
             )
             if result.returncode == 0:
                 self._say(f"* Update to {version} complete! Restarting Pink now, mew!!", force=True, record_memory=False)
@@ -17596,8 +17622,11 @@ RULES:
 
         is_maximized = bool(dll.IsZoomed(target_hwnd))
         self._last_foreground_is_maximized = is_maximized
-        curr_lum = sample_screen_luminance()
-        self._last_luminance = curr_lum
+        if is_maximized and prev_lum <= DARK_LUMINANCE_THRESHOLD:
+            curr_lum = sample_screen_luminance()
+            self._last_luminance = curr_lum
+        else:
+            curr_lum = prev_lum
 
         # Do not react to window switches if Pink is actively in dialogue, chat input, or thinking
         if self._is_dialogue_convo_active():
