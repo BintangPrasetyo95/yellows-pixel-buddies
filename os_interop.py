@@ -568,6 +568,26 @@ def focus_window(hwnd: int) -> bool:
                 user32.AttachThreadInput(cur_thread, fg_thread, False)
 
 
+def set_window_input_transparent(target: Any, enabled: bool = True) -> bool:
+    """Toggle WS_EX_TRANSPARENT so mouse clicks pass straight through the window."""
+    if not IS_WINDOWS or not user32:
+        return False
+    try:
+        hwnd = int(target.winId()) if hasattr(target, "winId") else int(target)
+        GWL_EXSTYLE = -20
+        WS_EX_TRANSPARENT = 0x00000020
+        get_style = getattr(user32, "GetWindowLongPtrW", None) or user32.GetWindowLongW
+        set_style = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
+        old_style = get_style(hwnd, GWL_EXSTYLE)
+        new_style = (old_style | WS_EX_TRANSPARENT) if enabled else (old_style & ~WS_EX_TRANSPARENT)
+        if new_style != old_style:
+            set_style(hwnd, GWL_EXSTYLE, new_style)
+        return True
+    except Exception as e:
+        log.warning("Failed to set window input transparency: %s", e)
+        return False
+
+
 def launch_or_focus(query: str, uri_fallback: Optional[str] = None) -> Optional[WindowInfo]:
     """Find an open window or launch it via URI / executable path, then focus it.
 

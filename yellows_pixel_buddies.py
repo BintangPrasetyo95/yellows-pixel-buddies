@@ -123,6 +123,7 @@ from PyQt5.QtWidgets import (
 from sound_manager import get_sound_manager, play_sound
 import os_interop
 import action_planner
+import takeover_overlay
 
 
 # =============================================================================
@@ -10698,6 +10699,11 @@ class YellowsPixelBuddies(QWidget):
         self._chat_input.submitted.connect(self._on_chat_submitted)
         self._chat_input.cancelled.connect(self._on_chat_cancelled)
         self._chat_input.timed_out.connect(self._on_chat_timeout)
+        self._takeover_banner = takeover_overlay.TakeoverBannerOverlay()
+        if hasattr(self, "_font_family"):
+            self._takeover_banner.set_font_family(self._font_family)
+        self._target_reticle = takeover_overlay.TargetReticleOverlay()
+        self._desktop_action_worker: action_planner.DesktopActionWorkerThread | None = None
         self._memory = MemoryManager(USER_DATA_DIR)
         self._update_checker_thread: UpdateCheckerThread | None = None
         self._update_downloader_thread: UpdateDownloaderThread | None = None
@@ -13859,7 +13865,7 @@ RULES:
             )
 
     def execute_desktop_action(self, action_data: dict) -> None:
-        """Execute a desktop automation action plan in a background thread with Pink animations."""
+        """Execute a desktop automation action plan in a background thread with Pink animations and visual HUD."""
         if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
             log.warning("Another desktop action plan is already running.")
             return
@@ -13870,13 +13876,27 @@ RULES:
             return
 
         plan = action_planner.create_desktop_plan(intent, api_key=api_key)
+        total_steps = len(plan.steps)
         self._desktop_action_worker = action_planner.DesktopActionWorkerThread(plan, api_key=api_key, parent=self)
+
+        # Display Takeover HUD banner
+        if hasattr(self, "_takeover_banner"):
+            target_display = plan.target_app.upper() if plan.target_app else "DESKTOP"
+            self._takeover_banner.show_banner(
+                title=f"⚔️ PINK IN CONTROL — {target_display} (ESC TO ABORT)",
+                subtitle=f"Starting action: {intent}...",
+            )
 
         def _on_step_start(idx: int, a_type: str, target: str) -> None:
             log.info("Desktop Action Step %d: %s on '%s'", idx, a_type, target)
+            if hasattr(self, "_takeover_banner"):
+                self._takeover_banner.update_step(idx, total_steps, a_type, target)
 
         def _on_pink_act(anim: str, cx: int, cy: int) -> None:
             if anim == "jump_to" and cx > 0 and cy > 0:
+                # Flash retro target reticle at coordinates right before click
+                if hasattr(self, "_target_reticle"):
+                    self._target_reticle.flash_at(cx, cy, duration_ms=400)
                 self._begin_jump(QPoint(int(cx), int(cy)))
             elif anim == "typing":
                 if self._can_play("attack"):
@@ -13886,6 +13906,11 @@ RULES:
 
         def _on_plan_finish(success: bool, msg: str) -> None:
             log.info("Desktop Action Plan Finished: success=%s, msg='%s'", success, msg)
+            if hasattr(self, "_takeover_banner"):
+                self._takeover_banner.dismiss()
+            if hasattr(self, "_target_reticle"):
+                self._target_reticle.dismiss()
+
             if success:
                 play_sound("coin")
                 self._say("* All done, minion! Don't make me do that again! [anim: peace_sign]", auto_dismiss=True)
@@ -15984,6 +16009,12 @@ RULES:
             self._stop_overlay()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.dismiss()
+        if hasattr(self, "_target_reticle"):
+            self._target_reticle.dismiss()
+        if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
+            self._desktop_action_worker.abort()
         if hasattr(self, "_window_timer"):
             self._window_timer.stop()
         if hasattr(self, "_screen_comment_timer"):
@@ -18448,6 +18479,14 @@ RULES:
             self._vfx_overlay.close()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.dismiss()
+            self._takeover_banner.close()
+        if hasattr(self, "_target_reticle"):
+            self._target_reticle.dismiss()
+            self._target_reticle.close()
+        if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
+            self._desktop_action_worker.abort()
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
