@@ -121,6 +121,8 @@ from PyQt5.QtWidgets import (
 
 
 from sound_manager import get_sound_manager, play_sound
+import os_interop
+import action_planner
 
 
 # =============================================================================
@@ -911,6 +913,16 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
       1. You MUST EXPLICITLY VERBALLY CONFIRM in your dialogue that the action was performed (e.g. "* Added those 3 tasks to your quest board, minion! Don't let them gather dust!", "* Registered that to your tasks, mew!").
       2. NEVER merely tease, banter, or philosophize about the topic without also stating that you executed the command! Because action tags like [add_task: ...] are stripped from display, failing to verbally confirm it makes the user think you ignored them!
       3. NEVER bluff, gaslight, or claim you updated the board or granted their wish without actually emitting the corresponding action tags in that exact response!
+
+- DESKTOP TAKEOVER & ACTION AUTOMATION ([desktop_action: <app>, <instruction>], [quick_reply: <app>, <contact>, <message>], [click_ui: <target>], [type_input: <text>]):
+  * You possess the royal ability to take over the user's laptop screen for a moment to help them click buttons, type text, or answer messages (e.g. WhatsApp, Spotify, Chrome)!
+  * When the user asks you to reply to someone on WhatsApp (e.g. "reply to Mom on WhatsApp: on my way", "answer Bob's message on WhatsApp saying yes", "send a message to Sarah"):
+    - Append [desktop_action: WhatsApp, reply to <contact> saying <message>] or [quick_reply: WhatsApp, <contact>, <message>]!
+    - Example: "* Ugh, fine! I'll reply to Mom for you, but only because her notifications are distracting ME! [anim: smug] [desktop_action: WhatsApp, reply to Mom saying I am on my way]"
+  * When the user asks you to click something on screen, search something, or control an app (e.g. "click the play button on Spotify", "search youtube for lofi"):
+    - Append [desktop_action: <app>, <instruction>] or [click_ui: <target>]!
+    - Example: "* Step aside, clumsy fingers! I'm taking the wheel! [anim: peace_sign] [desktop_action: Spotify, click play button]"
+  * Always announce your takeover proudly and tsundere-style before the tag!
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -2933,7 +2945,9 @@ class DialogueOverlay(QWidget):
         """Render and begin typing a single dialogue bubble."""
         # Sanitize metadata tags so [anim: ...] or [mode: ...] never display in typewriter bubble
         text = re.sub(
-            r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|emotion|think|thought):\s*[^\]]+\]",
+            r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+            r"add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|emotion|think|thought|"
+            r"desktop_action|quick_reply|click_ui|click_target|click|type_input|type_text):\s*[^\]]+\]",
             "",
             text,
             flags=re.IGNORECASE,
@@ -13785,6 +13799,12 @@ RULES:
             self._reset_ambient_ai_cooldowns()
             return
 
+        # Check for autonomous desktop takeover action tags emitted by Gemini
+        desktop_actions = action_planner.extract_desktop_action_tags(spoken_text)
+        if desktop_actions:
+            spoken_text = action_planner.strip_desktop_action_tags(spoken_text)
+            self.execute_desktop_action(desktop_actions[0])
+
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
 
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -13837,6 +13857,45 @@ RULES:
                 category="screen_comment",
                 context=f"Pink just peeked at user's desktop screen{seen_ctx} and commented: {spoken_text}",
             )
+
+    def execute_desktop_action(self, action_data: dict) -> None:
+        """Execute a desktop automation action plan in a background thread with Pink animations."""
+        if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
+            log.warning("Another desktop action plan is already running.")
+            return
+
+        api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+        intent = action_data.get("intent") or action_data.get("app") or ""
+        if not intent:
+            return
+
+        plan = action_planner.create_desktop_plan(intent, api_key=api_key)
+        self._desktop_action_worker = action_planner.DesktopActionWorkerThread(plan, api_key=api_key, parent=self)
+
+        def _on_step_start(idx: int, a_type: str, target: str) -> None:
+            log.info("Desktop Action Step %d: %s on '%s'", idx, a_type, target)
+
+        def _on_pink_act(anim: str, cx: int, cy: int) -> None:
+            if anim == "jump_to" and cx > 0 and cy > 0:
+                self._begin_jump(QPoint(int(cx), int(cy)))
+            elif anim == "typing":
+                if self._can_play("attack"):
+                    self._play("attack")
+                elif self._can_play("angry"):
+                    self._play("angry")
+
+        def _on_plan_finish(success: bool, msg: str) -> None:
+            log.info("Desktop Action Plan Finished: success=%s, msg='%s'", success, msg)
+            if success:
+                play_sound("coin")
+                self._say("* All done, minion! Don't make me do that again! [anim: peace_sign]", auto_dismiss=True)
+            else:
+                self._say("* Hmph! Something interrupted me! [anim: angry]", auto_dismiss=True)
+
+        self._desktop_action_worker.sig_step_started.connect(_on_step_start)
+        self._desktop_action_worker.sig_pink_action.connect(_on_pink_act)
+        self._desktop_action_worker.sig_plan_finished.connect(_on_plan_finish)
+        self._desktop_action_worker.start()
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
