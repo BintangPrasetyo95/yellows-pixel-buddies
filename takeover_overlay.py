@@ -19,7 +19,7 @@ from typing import Optional, Tuple
 
 try:
     from PyQt5.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer
-    from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
+    from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QRegion
     from PyQt5.QtWidgets import QApplication, QWidget
     HAS_PYQT = True
 except Exception:
@@ -35,10 +35,10 @@ if HAS_PYQT:
         """Floating top-centered HUD banner indicating autonomous desktop takeover."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
-            super().__init__(
-                None,
-                Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus,
-            )
+            flags = Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
+            if hasattr(Qt, "WindowTransparentForInput"):
+                flags |= Qt.WindowTransparentForInput
+            super().__init__(None, flags)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
             self.setAttribute(Qt.WA_ShowWithoutActivating, True)
             self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -78,6 +78,7 @@ if HAS_PYQT:
             self.show()
             self.raise_()
             os_interop.set_window_input_transparent(self, True)
+            os_interop.set_window_exclude_from_capture(self, True)
             self.update()
 
         def update_step(self, step_idx: int, total_steps: int, action_type: str, target: str) -> None:
@@ -148,10 +149,10 @@ if HAS_PYQT:
         """Animated retro targeting reticle flashing over an element prior to automated clicks."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
-            super().__init__(
-                None,
-                Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus,
-            )
+            flags = Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
+            if hasattr(Qt, "WindowTransparentForInput"):
+                flags |= Qt.WindowTransparentForInput
+            super().__init__(None, flags)
             self.setAttribute(Qt.WA_TranslucentBackground, True)
             self.setAttribute(Qt.WA_ShowWithoutActivating, True)
             self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -159,23 +160,31 @@ if HAS_PYQT:
             self._size = 80
             self.setFixedSize(self._size, self._size)
 
+            # Punch a 28x28 hole in the exact center so clicks at (center_x, center_y) NEVER hit this window
+            outer_region = QRegion(0, 0, self._size, self._size)
+            hole_half = 14
+            mid = self._size // 2
+            center_hole = QRegion(mid - hole_half, mid - hole_half, hole_half * 2, hole_half * 2)
+            self.setMask(outer_region.subtracted(center_hole))
+
             self._progress = 0.0  # 0.0 -> 1.0
             self._anim_timer = QTimer(self)
             self._anim_timer.setInterval(20)
             self._anim_timer.timeout.connect(self._on_tick)
 
-        def flash_at(self, center_x: int, center_y: int, duration_ms: int = 350) -> None:
+        def flash_at(self, center_x: int, center_y: int, duration_ms: int = 260) -> None:
             """Center and animate reticle over (center_x, center_y)."""
             self._progress = 0.0
             half = self._size // 2
             self.move(center_x - half, center_y - half)
 
-            total_ticks = max(5, duration_ms // 20)
+            total_ticks = max(4, duration_ms // 20)
             self._tick_step = 1.0 / total_ticks
 
             self.show()
             self.raise_()
             os_interop.set_window_input_transparent(self, True)
+            os_interop.set_window_exclude_from_capture(self, True)
             self._anim_timer.start()
             self.update()
 
@@ -199,7 +208,7 @@ if HAS_PYQT:
             painter.setRenderHint(QPainter.Antialiasing, True)
 
             mid = self._size / 2.0
-            # Brackets converge inward: radius shrinks from 34px to 18px
+            # Brackets converge inward: radius shrinks from 34px to 18px (leaving the center 28x28 hole clear)
             ease = 1.0 - math.pow(1.0 - min(1.0, self._progress), 3)
             radius = 34.0 - (16.0 * ease)
 
@@ -225,13 +234,6 @@ if HAS_PYQT:
             # Bottom-Right Bracket ┘
             painter.drawLine(int(mid + radius), int(mid + radius), int(mid + radius - arm), int(mid + radius))
             painter.drawLine(int(mid + radius), int(mid + radius), int(mid + radius), int(mid + radius - arm))
-
-            # Center Soul Crosshair +
-            center_color = QColor(255, 230, 240, alpha)
-            painter.setPen(QPen(center_color, 2.0))
-            c_arm = 4.0
-            painter.drawLine(int(mid - c_arm), int(mid), int(mid + c_arm), int(mid))
-            painter.drawLine(int(mid), int(mid - c_arm), int(mid), int(mid + c_arm))
 
             painter.end()
 else:

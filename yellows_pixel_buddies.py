@@ -785,7 +785,10 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or sentence MUST begin with exactly one "* " (never use double asterisks like "* * " or markdown bold/italic asterisks). NEVER use emojis in dialogue.
 
-- Strict Length Limit: Keep each dialogue thought CONCISE (1 to 2 short sentences, under 35 words per paragraph). Long walls of text cannot fit in dialogue boxes! Put sequential thoughts on new lines starting with '* ' so they paginate into distinct sequential speech bubbles.
+- Adaptive Length & Pagination (Concise by Default, Long Texts ONLY When Necessary):
+  * Default (Casual Banter, Teasing, Greetings, Reactions, Screen Peeks): Keep replies punchy and CONCISE (1 to 2 short sentences, under 35 words per paragraph).
+  * Longer Replies (IF AND ONLY IF Truly Necessary): You ARE allowed to send longer, multi-bubble responses ONLY when the situation genuinely calls for detail — such as when the user asks a technical or complex question, needs step-by-step instructions or troubleshooting (e.g. coding, DNS/setup, study explanations), asks for a list/summary, or explicitly asks for a thorough answer! Do NOT write long texts for casual small talk.
+  * Pagination Formatting: Long walls of text cannot fit inside a single dialogue box! Whenever you send a longer response, break your thoughts into multiple sequential lines, each starting with '* ' (1 to 2 short sentences / under 35 words per '* ' line), so they cleanly paginate into sequential Undertale/Deltarune speech bubbles.
 
 - Emotion & Animation Tags:
   * For single-speaker replies: At the very end of your message, include exactly one bracketed emotion tag matching your mood.
@@ -916,13 +919,16 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
       3. NEVER bluff, gaslight, or claim you updated the board or granted their wish without actually emitting the corresponding action tags in that exact response!
 
 - DESKTOP TAKEOVER & ACTION AUTOMATION ([desktop_action: <app>, <instruction>], [quick_reply: <app>, <contact>, <message>], [click_ui: <target>], [type_input: <text>]):
-  * You possess the royal ability to take over the user's laptop screen for a moment to help them click buttons, type text, or answer messages (e.g. WhatsApp, Spotify, Chrome)!
-  * When the user asks you to reply to someone on WhatsApp (e.g. "reply to Mom on WhatsApp: on my way", "answer Bob's message on WhatsApp saying yes", "send a message to Sarah"):
-    - Append [desktop_action: WhatsApp, reply to <contact> saying <message>] or [quick_reply: WhatsApp, <contact>, <message>]!
-    - Example: "* Ugh, fine! I'll reply to Mom for you, but only because her notifications are distracting ME! [anim: smug] [desktop_action: WhatsApp, reply to Mom saying I am on my way]"
-  * When the user asks you to click something on screen, search something, or control an app (e.g. "click the play button on Spotify", "search youtube for lofi"):
-    - Append [desktop_action: <app>, <instruction>] or [click_ui: <target>]!
-    - Example: "* Step aside, clumsy fingers! I'm taking the wheel! [anim: peace_sign] [desktop_action: Spotify, click play button]"
+  * You possess the royal ability to physically take over the user's mouse cursor and keyboard to perform tasks on their computer (e.g. Chrome, YouTube Music, VS Code, Terminal, WhatsApp, Spotify, File Explorer, Word)!
+  * CRITICAL RULE — NEVER TELL THE USER TO DO IT THEMSELVES:
+    - Whenever the user asks you to open, click, type, run, check, play, search, navigate, or reply to anything on their computer (e.g. "open youtube music in chrome", "check git status in my vscode terminal", "play my chill playlist", "reply to Mom on WhatsApp saying on my way", "search youtube for lofi", "click that button"):
+    - NEVER tell them "type it yourself" or just give instructions without acting!
+    - ALWAYS accept the task in your haughty, dramatic tsundere voice (e.g. "* Step aside, clumsy fingers! Watch your royal doll handle this!") AND append [desktop_action: <target_app>, <clear instruction>] at the end of your response!
+  * Examples:
+    - User: "open youtube music in chrome" -> "* Still staring at the wrong tab, minion?! Move over, I'm taking the wheel! [anim: laughing] [desktop_action: Chrome, open YouTube Music]"
+    - User: "check git status in my vscode terminal" -> "* Hmph, relying on your royal doll to command your terminal for you?! Fine, watch and learn! [anim: peace_sign] [desktop_action: Visual Studio Code, run git status in the terminal]"
+    - User: "reply to Mom on WhatsApp: on my way" -> "* Ugh, fine! I'll reply to Mom for you, but only because her notifications are distracting ME! [anim: tongue] [desktop_action: WhatsApp, reply to Mom saying I am on my way]"
+    - User: "click the play button on Spotify" -> "* Step aside, clumsy fingers! I'm taking the wheel! [anim: peace_sign] [desktop_action: Spotify, click play button]"
   * Always announce your takeover proudly and tsundere-style before the tag!
 """
 
@@ -7761,6 +7767,8 @@ def split_dual_dialogue(
 
             if p["anim"]:
                 a_flag = p["anim"]
+            elif not (has_doll and has_ghost):
+                a_flag = default_anim
             elif is_d:
                 a_flag = default_anim if default_anim not in ("behind", "angry", "ghost") else "peace_sign"
             elif is_g:
@@ -8269,7 +8277,7 @@ class GeminiWorkerThread(QThread):
             "contents": contents,
             "generationConfig": {
                 "temperature": 0.85,
-                "maxOutputTokens": 800,
+                "maxOutputTokens": 1200,
             }
         }
 
@@ -12590,6 +12598,8 @@ RULES:
 
     def _apply_dialogue_step(self, anim: str | None = None, is_ghost: bool = False) -> None:
         """Apply visual animation and ghost mode state for the active dialogue step."""
+        if getattr(self, "_is_taking_over_cursor", False):
+            return
         if is_ghost:
             self._start_ghost_speech()
         else:
@@ -13442,6 +13452,22 @@ RULES:
                 self._play("peace_sign")
             self._say(first_line, force=True, extra_queue=extra, record_memory=True)
             return
+        elif lower_input.startswith(("/do ", "/takeover ", "/act ", "/cursor ")):
+            task_str = clean_input.split(" ", 1)[1].strip()
+            if task_str:
+                self._say(
+                    f"* Step aside, clumsy fingers! Taking over your cursor for: \"{task_str}\"! [anim: peace_sign]",
+                    force=True,
+                    auto_dismiss=True,
+                    record_memory=True,
+                )
+                self.execute_desktop_action(
+                    {"type": "desktop_action", "app": "Desktop", "intent": task_str},
+                    user_request=task_str,
+                )
+            else:
+                self._say("* Format: /do <task>, dummy! (e.g. /do open youtube music in chrome)", force=True, record_memory=False)
+            return
 
         if text.strip().lower() in ("/error", "test error", "/test-error"):
             err_msg = "Test explosion error requested by user."
@@ -13809,7 +13835,24 @@ RULES:
         desktop_actions = action_planner.extract_desktop_action_tags(spoken_text)
         if desktop_actions:
             spoken_text = action_planner.strip_desktop_action_tags(spoken_text)
-            self.execute_desktop_action(desktop_actions[0])
+        elif not (had_screen and user_text.startswith("[Pink peeks")) and not user_text.startswith("[Music played"):
+            # Fallback if user explicitly requested a computer action and Pink verbally promised takeover without a tag
+            u_clean = user_text.strip().lower()
+            s_clean = spoken_text.lower()
+            action_starters = (
+                "open ", "click ", "type ", "run ", "play ", "search ", "reply ",
+                "send ", "check git", "go to ", "launch ", "switch to ", "take over",
+                "close ", "quit ", "exit ", "save ", "delete ", "update ", "make ",
+                "write ", "can you ", "could you ",
+            )
+            takeover_phrases = (
+                "step aside", "taking the wheel", "let me click", "let me open",
+                "let me type", "watch me", "i'll click", "i'll open", "i'll reply",
+                "taking over", "move over", "watch and learn", "handle this",
+                "handle your", "right now", "hijack your", "let's watch",
+            )
+            if u_clean.startswith(action_starters) and any(tp in s_clean for tp in takeover_phrases):
+                desktop_actions = [{"type": "desktop_action", "app": "Desktop", "intent": user_text.strip()}]
 
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
 
@@ -13847,6 +13890,9 @@ RULES:
                 hold_s=hold_s,
             )
 
+        if desktop_actions:
+            self.execute_desktop_action(desktop_actions[0], user_request=user_text)
+
         now = time.perf_counter()
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
@@ -13864,63 +13910,153 @@ RULES:
                 context=f"Pink just peeked at user's desktop screen{seen_ctx} and commented: {spoken_text}",
             )
 
-    def execute_desktop_action(self, action_data: dict) -> None:
-        """Execute a desktop automation action plan in a background thread with Pink animations and visual HUD."""
+    def execute_desktop_action(self, action_data: dict, user_request: str = "") -> None:
+        """Execute a closed-loop vision cursor takeover in a background thread with Pink animations and visual HUD."""
         if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
             log.warning("Another desktop action plan is already running.")
             return
 
         api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
-        intent = action_data.get("intent") or action_data.get("app") or ""
-        if not intent:
+        intent = (
+            action_data.get("intent")
+            or action_data.get("target")
+            or action_data.get("text")
+            or action_data.get("app")
+            or user_request
+            or ""
+        )
+        target_app = action_data.get("app") or ""
+        if not intent and not user_request:
             return
 
-        plan = action_planner.create_desktop_plan(intent, api_key=api_key)
-        total_steps = len(plan.steps)
+        # Build recent conversation context so references like 'say the same thing I said to Arqan' work seamlessly
+        recent_ctx = ""
+        if hasattr(self, "_memory") and hasattr(self._memory, "history"):
+            try:
+                recent_turns = list(self._memory.history)[-5:]
+                ctx_lines = [
+                    f"- User: {t.get('user', '')[:140]} | Pink: {t.get('pink', '')[:140]}"
+                    for t in recent_turns
+                    if isinstance(t, dict) and t.get("user")
+                ]
+                recent_ctx = "\n".join(ctx_lines)
+            except Exception:
+                recent_ctx = ""
+
+        plan = action_planner.create_desktop_plan(
+            intent=intent,
+            api_key=api_key,
+            target_app=target_app,
+            user_request=user_request or intent,
+            context_notes=recent_ctx,
+        )
+        max_steps = plan.max_steps
+        os_interop.reset_panic_abort()
         self._desktop_action_worker = action_planner.DesktopActionWorkerThread(plan, api_key=api_key, parent=self)
+
+        # Exclude Pink and her speech bubble from screenshots so she never blocks Gemini's vision
+        os_interop.set_window_exclude_from_capture(self, True)
+        if hasattr(self, "_dialogue_overlay"):
+            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, True)
+
+        # Latch Pink onto the mouse cursor so she physically rides and steers it across the screen!
+        self._is_taking_over_cursor = True
+        self._brain_timer.stop()
+        self._begin_hang(time.perf_counter())
 
         # Display Takeover HUD banner
         if hasattr(self, "_takeover_banner"):
             target_display = plan.target_app.upper() if plan.target_app else "DESKTOP"
             self._takeover_banner.show_banner(
-                title=f"⚔️ PINK IN CONTROL — {target_display} (ESC TO ABORT)",
-                subtitle=f"Starting action: {intent}...",
+                title=f"⚔️ PINK IN CONTROL — {target_display} (ESC OR SHAKE MOUSE TO ABORT)",
+                subtitle=f"Inspecting screen for: {(user_request or intent)[:55]}...",
             )
 
         def _on_step_start(idx: int, a_type: str, target: str) -> None:
-            log.info("Desktop Action Step %d: %s on '%s'", idx, a_type, target)
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
+            log.info("Desktop Action Step %d/%d: %s on '%s'", idx + 1, max_steps, a_type, target)
             if hasattr(self, "_takeover_banner"):
-                self._takeover_banner.update_step(idx, total_steps, a_type, target)
+                self._takeover_banner.update_step(idx, max_steps, a_type, target)
 
         def _on_pink_act(anim: str, cx: int, cy: int) -> None:
-            if anim == "jump_to" and cx > 0 and cy > 0:
-                # Flash retro target reticle at coordinates right before click
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
+            if anim in ("move_to", "jump_to") and cx > 0 and cy > 0:
+                # Flash retro target reticle at coordinates right before cursor moves/clicks
                 if hasattr(self, "_target_reticle"):
-                    self._target_reticle.flash_at(cx, cy, duration_ms=400)
-                self._begin_jump(QPoint(int(cx), int(cy)))
+                    self._target_reticle.flash_at(cx, cy, duration_ms=420)
+                cur_x = QCursor.pos().x()
+                if abs(cx - cur_x) > 10:
+                    self._facing = "right" if cx > cur_x else "left"
+                if self._phase is not Phase.HANG:
+                    self._begin_hang(time.perf_counter())
+                else:
+                    self._play(HANGING_STATE, mirrored=self._hang_mirrored())
             elif anim == "typing":
-                if self._can_play("attack"):
+                if self._phase is not Phase.HANG and self._can_play("attack"):
                     self._play("attack")
-                elif self._can_play("angry"):
-                    self._play("angry")
 
         def _on_plan_finish(success: bool, msg: str) -> None:
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
             log.info("Desktop Action Plan Finished: success=%s, msg='%s'", success, msg)
+            self._is_taking_over_cursor = False
+            os_interop.set_window_exclude_from_capture(self, False)
+            if hasattr(self, "_dialogue_overlay"):
+                os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
+
             if hasattr(self, "_takeover_banner"):
                 self._takeover_banner.dismiss()
             if hasattr(self, "_target_reticle"):
                 self._target_reticle.dismiss()
 
+            # Detach from cursor and drop back down to the taskbar
+            if self._phase is Phase.HANG:
+                self._fall_after_jump("peace_sign" if success else "angry")
+
             if success:
                 play_sound("coin")
-                self._say("* All done, minion! Don't make me do that again! [anim: peace_sign]", auto_dismiss=True)
+                clean_msg = msg.strip() if msg else "Task finished"
+                self._say(f"* All done, minion! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
             else:
-                self._say("* Hmph! Something interrupted me! [anim: angry]", auto_dismiss=True)
+                clean_msg = msg.strip() if msg else "Something interrupted me"
+                self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
 
         self._desktop_action_worker.sig_step_started.connect(_on_step_start)
         self._desktop_action_worker.sig_pink_action.connect(_on_pink_act)
         self._desktop_action_worker.sig_plan_finished.connect(_on_plan_finish)
         self._desktop_action_worker.start()
+
+    def _abort_desktop_takeover(self, reason: str = "Aborted by user") -> None:
+        """Immediately abort an active cursor takeover on the UI thread and detach Pink from the cursor."""
+        if not getattr(self, "_is_taking_over_cursor", False):
+            return
+        log.warning("Immediate UI-thread abort of desktop cursor takeover: %s", reason)
+        self._is_taking_over_cursor = False
+        os_interop.trigger_panic_abort()
+
+        worker = getattr(self, "_desktop_action_worker", None)
+        if worker is not None:
+            for sig in (worker.sig_step_started, worker.sig_pink_action, worker.sig_plan_finished):
+                try:
+                    sig.disconnect()
+                except Exception:
+                    pass
+            worker.abort()
+
+        os_interop.set_window_exclude_from_capture(self, False)
+        if hasattr(self, "_dialogue_overlay"):
+            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
+
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.dismiss()
+        if hasattr(self, "_target_reticle"):
+            self._target_reticle.dismiss()
+
+        if self._phase is Phase.HANG:
+            self._fall_after_jump(SHAKEN_REACTION)
+        self._say("* W-wah?! Okay, okay! I let go of your mouse, minion! [anim: shocked]", force=True, auto_dismiss=True)
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
@@ -15115,6 +15251,12 @@ RULES:
             reach = DEBUG_CROSSHAIR_PX + 2
             return mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
                                        2 * reach + 1, 2 * reach + 1))
+        if getattr(self, "_is_taking_over_cursor", False) or self._phase == Phase.HANG:
+            hand_x, hand_y = self._hand_offset()
+            hole_r = 16
+            # Exclude pixels around the cursor hotspot so automated clicks NEVER hit Pink's own window
+            hole = QRegion(round(hand_x) - hole_r, round(hand_y) - hole_r - 8, 2 * hole_r, 2 * hole_r + 8)
+            return mask.subtracted(hole)
         return mask
 
     def _advance_frame(self) -> None:
@@ -15708,8 +15850,10 @@ RULES:
             return
 
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
-            if now - getattr(self, "_hang_started_at", now) > 15.0:
-                log.warning("Phase.HANG watchdog: hang timed out (>15.0s). Forcing release.")
+            hang_timeout = 90.0 if getattr(self, "_is_taking_over_cursor", False) else 15.0
+            if now - getattr(self, "_hang_started_at", now) > hang_timeout:
+                log.warning("Phase.HANG watchdog: hang timed out (>%.1fs). Forcing release.", hang_timeout)
+                self._is_taking_over_cursor = False
                 self._fall_after_jump(RELEASE_REACTION)
                 return
             self._tick_hang(cursor, now, dt, bounds)
@@ -16866,33 +17010,41 @@ RULES:
         while self._shake_trail and now - self._shake_trail[0][0] > SHAKE_WINDOW_S:
             self._shake_trail.popleft()
 
-        if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
-            log.debug("Hang ended: shaken off")
-            self._record_action("shaken_off", "User shook the mouse cursor violently to shake Pink off", "interaction")
-            self._fall_after_jump(SHAKEN_REACTION)
-            return
-        if now >= self._hang_ends_at or not self._can_hang_from(cursor):
-            log.debug("Hang ended: she let go (%s)",
-                      "time is up" if now >= self._hang_ends_at else "cursor left / too low")
-            self._record_action("released_hang", "Let go of the cursor and dropped back down to the taskbar", "physics")
-            self._fall_after_jump(RELEASE_REACTION)
-            return
-
-        # Check for serial bomb throw attack trigger after hanging for HANG_BOMB_DELAY_S
-        if (self._bomb_attack_enabled
-                and not self._hang_bomb_thrown
-                and (now - self._hang_started_at >= HANG_BOMB_DELAY_S)):
-            self._hang_bomb_thrown = True
-            chance = self._bomb_chance_percent / 100.0
-            if random.random() < chance and self._can_play(THROW_STATE):
-                self._start_hang_bomb_throw(now)
+        if getattr(self, "_is_taking_over_cursor", False):
+            # Poll global ESC / mouse pull OR violent mouse shake at 60 FPS for instant abort!
+            if os_interop.is_panic_key_pressed() or (now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking()):
+                self._abort_desktop_takeover("User pressed ESC or shook the mouse")
                 return
+        else:
+            if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
+                log.debug("Hang ended: shaken off")
+                self._record_action("shaken_off", "User shook the mouse cursor violently to shake Pink off", "interaction")
+                self._fall_after_jump(SHAKEN_REACTION)
+                return
+            if now >= self._hang_ends_at or not self._can_hang_from(cursor):
+                log.debug("Hang ended: she let go (%s)",
+                          "time is up" if now >= self._hang_ends_at else "cursor left / too low")
+                self._record_action("released_hang", "Let go of the cursor and dropped back down to the taskbar", "physics")
+                self._fall_after_jump(RELEASE_REACTION)
+                return
+
+            # Check for serial bomb throw attack trigger after hanging for HANG_BOMB_DELAY_S
+            if (self._bomb_attack_enabled
+                    and not self._hang_bomb_thrown
+                    and (now - self._hang_started_at >= HANG_BOMB_DELAY_S)):
+                self._hang_bomb_thrown = True
+                chance = self._bomb_chance_percent / 100.0
+                if random.random() < chance and self._can_play(THROW_STATE):
+                    self._start_hang_bomb_throw(now)
+                    return
 
         min_x, max_x, min_y, ground_y = bounds
         hand_x, hand_y = self._hand_offset()
+        is_takeover = getattr(self, "_is_taking_over_cursor", False)
+        y_clearance = 8.0 if is_takeover else 0.0
         goal_x = min(max(cursor.x() - hand_x, min_x), max_x)
-        goal_y = min(max(cursor.y() - hand_y, min_y), ground_y)
-        follow = 1.0 if HANG_FOLLOW_SMOOTH_S <= 0.0 else 1.0 - math.exp(-dt / HANG_FOLLOW_SMOOTH_S)
+        goal_y = min(max(cursor.y() - hand_y + y_clearance, min_y), ground_y)
+        follow = 1.0 if (is_takeover or HANG_FOLLOW_SMOOTH_S <= 0.0) else 1.0 - math.exp(-dt / HANG_FOLLOW_SMOOTH_S)
         self._x += (goal_x - self._x) * follow
         self._y += (goal_y - self._y) * follow
 

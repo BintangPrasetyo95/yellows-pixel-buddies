@@ -20,7 +20,7 @@ import time
 from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Callable, Generator, List, Optional, Tuple
+from typing import Any, Callable, Generator, List, Optional, Tuple
 
 log = logging.getLogger("yellows_pixel_buddies.os_interop")
 
@@ -83,9 +83,47 @@ VIRTUAL_KEY_MAP = {
     "alt": VK_MENU,
     "win": VK_LWIN,
     "windows": VK_LWIN,
+    "super": VK_LWIN,
+    "meta": VK_LWIN,
+    "cmd": VK_CONTROL,
+    "plus": 0xBB,
+    "=": 0xBB,
+    "minus": 0xBD,
+    "-": 0xBD,
+    "comma": 0xBC,
+    ",": 0xBC,
+    "period": 0xBE,
+    ".": 0xBE,
+    "slash": 0xBF,
+    "/": 0xBF,
+    "backtick": 0xC0,
+    "grave": 0xC0,
+    "`": 0xC0,
+    "~": 0xC0,
+    "lbracket": 0xDB,
+    "[": 0xDB,
+    "backslash": 0xDC,
+    "\\": 0xDC,
+    "rbracket": 0xDD,
+    "]": 0xDD,
+    "semicolon": 0xBA,
+    ";": 0xBA,
+    "quote": 0xDE,
+    "'": 0xDE,
+    "volume_mute": 0xAD,
+    "volume_down": 0xAE,
+    "volume_up": 0xAF,
+    "media_next": 0xB0,
+    "media_prev": 0xB1,
+    "media_stop": 0xB2,
+    "media_play_pause": 0xB3,
 }
 for i in range(1, 13):
     VIRTUAL_KEY_MAP[f"f{i}"] = 0x6F + i
+for _ch_code in range(ord("a"), ord("z") + 1):
+    VIRTUAL_KEY_MAP[chr(_ch_code)] = _ch_code - 32  # 0x41..0x5A
+for _d_code in range(ord("0"), ord("9") + 1):
+    VIRTUAL_KEY_MAP[chr(_d_code)] = _d_code          # 0x30..0x39
 
 EXTENDED_KEYS = {
     VK_INSERT,
@@ -449,12 +487,17 @@ def get_window_info(hwnd: int) -> Optional[WindowInfo]:
     )
 
 
-def list_windows(visible_only: bool = True, exclude_cloaked: bool = True) -> List[WindowInfo]:
+def list_windows(
+    visible_only: bool = True,
+    exclude_cloaked: bool = True,
+    exclude_self: bool = True,
+) -> List[WindowInfo]:
     """Enumerate top-level desktop windows."""
     if not IS_WINDOWS or not user32:
         return []
 
     windows: List[WindowInfo] = []
+    self_pid = os.getpid()
 
     with ensure_input_desktop():
         def enum_callback(hwnd: int, _: int) -> bool:
@@ -463,6 +506,9 @@ def list_windows(visible_only: bool = True, exclude_cloaked: bool = True) -> Lis
 
             info = get_window_info(hwnd)
             if not info:
+                return True
+
+            if exclude_self and info.process_id == self_pid:
                 return True
 
             if exclude_cloaked and info.is_cloaked:
@@ -481,8 +527,30 @@ def list_windows(visible_only: bool = True, exclude_cloaked: bool = True) -> Lis
     return windows
 
 
+APP_SEARCH_ALIASES = {
+    "vscode": ("visual studio code", "code.exe", "antigravity"),
+    "vs code": ("visual studio code", "code.exe", "antigravity"),
+    "code": ("visual studio code", "code.exe", "antigravity"),
+    "chrome": ("google chrome", "chrome.exe"),
+    "browser": ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"),
+    "edge": ("microsoft edge", "msedge.exe"),
+    "firefox": ("mozilla firefox", "firefox.exe"),
+    "whatsapp": ("whatsapp", "chrome.exe", "msedge.exe"),
+    "youtube music": ("youtube music", "music.youtube", "chrome.exe", "msedge.exe"),
+    "youtube": ("youtube", "chrome.exe", "msedge.exe"),
+    "spotify": ("spotify", "spotify.exe"),
+    "terminal": ("windowsterminal.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "visual studio code", "code.exe"),
+    "powershell": ("powershell.exe", "pwsh.exe", "windowsterminal.exe"),
+    "explorer": ("file explorer", "explorer.exe"),
+    "files": ("file explorer", "explorer.exe"),
+    "word": ("winword.exe", "word"),
+    "excel": ("excel.exe", "excel"),
+    "discord": ("discord", "discord.exe"),
+}
+
+
 def find_window(query: str, app_name: Optional[str] = None, exact: bool = False) -> Optional[WindowInfo]:
-    """Find the best matching window by title substring or process executable name.
+    """Find the best matching window by title substring, alias, or process executable name.
 
     Example:
         find_window("WhatsApp")
@@ -491,7 +559,7 @@ def find_window(query: str, app_name: Optional[str] = None, exact: bool = False)
     q_lower = query.strip().lower()
     app_lower = app_name.strip().lower() if app_name else None
 
-    candidates = list_windows(visible_only=True, exclude_cloaked=True)
+    candidates = list_windows(visible_only=True, exclude_cloaked=True, exclude_self=True)
 
     # 1. Exact title match
     for w in candidates:
@@ -514,6 +582,13 @@ def find_window(query: str, app_name: Optional[str] = None, exact: bool = False)
     if q_lower:
         for w in candidates:
             if q_lower in w.process_name.lower():
+                return w
+
+    # 5. Alias lookup (e.g. "vscode" -> "Visual Studio Code" / "code.exe")
+    alias_terms = APP_SEARCH_ALIASES.get(q_lower, ())
+    for term in alias_terms:
+        for w in candidates:
+            if term in w.title.lower() or term in w.process_name.lower():
                 return w
 
     return None
@@ -569,27 +644,63 @@ def focus_window(hwnd: int) -> bool:
 
 
 def set_window_input_transparent(target: Any, enabled: bool = True) -> bool:
-    """Toggle WS_EX_TRANSPARENT so mouse clicks pass straight through the window."""
+    """Toggle WS_EX_TRANSPARENT | WS_EX_LAYERED so mouse clicks pass straight through the window."""
     if not IS_WINDOWS or not user32:
         return False
     try:
         hwnd = int(target.winId()) if hasattr(target, "winId") else int(target)
         GWL_EXSTYLE = -20
         WS_EX_TRANSPARENT = 0x00000020
+        WS_EX_LAYERED = 0x00080000
+        WS_EX_NOACTIVATE = 0x08000000
         get_style = getattr(user32, "GetWindowLongPtrW", None) or user32.GetWindowLongW
         set_style = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
+        get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        set_style.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+        set_style.restype = ctypes.c_ssize_t
+
         old_style = get_style(hwnd, GWL_EXSTYLE)
-        new_style = (old_style | WS_EX_TRANSPARENT) if enabled else (old_style & ~WS_EX_TRANSPARENT)
+        if enabled:
+            new_style = old_style | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE
+        else:
+            new_style = old_style & ~WS_EX_TRANSPARENT
         if new_style != old_style:
             set_style(hwnd, GWL_EXSTYLE, new_style)
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            HWND_TOPMOST = -1
+            user32.SetWindowPos(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_void_p(HWND_TOPMOST),
+                0, 0, 0, 0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
         return True
     except Exception as e:
         log.warning("Failed to set window input transparency: %s", e)
         return False
 
 
-def launch_or_focus(query: str, uri_fallback: Optional[str] = None) -> Optional[WindowInfo]:
-    """Find an open window or launch it via URI / executable path, then focus it.
+def set_window_exclude_from_capture(target: Any, enabled: bool = True) -> bool:
+    """Exclude window from screen captures (WDA_EXCLUDEFROMCAPTURE) while keeping it visible to the user."""
+    if not IS_WINDOWS or not user32:
+        return False
+    try:
+        hwnd = int(target.winId()) if hasattr(target, "winId") else int(target)
+        WDA_NONE = 0x00000000
+        WDA_EXCLUDEFROMCAPTURE = 0x00000011
+        affinity = WDA_EXCLUDEFROMCAPTURE if enabled else WDA_NONE
+        return bool(user32.SetWindowDisplayAffinity(hwnd, affinity))
+    except Exception as e:
+        log.debug("SetWindowDisplayAffinity not available: %s", e)
+        return False
+
+
+def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_menu: bool = True) -> Optional[WindowInfo]:
+    """Find an open window or launch it via URI / Start menu search, then focus it.
 
     Example:
         launch_or_focus("WhatsApp", uri_fallback="whatsapp://")
@@ -597,16 +708,34 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None) -> Optional[
     win = find_window(query)
     if win:
         focus_window(win.hwnd)
-        time.sleep(0.1)
+        time.sleep(0.2)
         return win
 
     if uri_fallback:
         try:
             os.startfile(uri_fallback)
-            time.sleep(1.0)
-            return find_window(query)
+            time.sleep(1.2)
+            win = find_window(query)
+            if win:
+                focus_window(win.hwnd)
+                return win
         except Exception as e:
-            log.warning("Failed to start URI '%s': %s", uri_fallback, e)
+            log.debug("URI fallback '%s' did not launch directly: %s", uri_fallback, e)
+
+    if use_start_menu and query.strip():
+        try:
+            press_key("win")
+            time.sleep(0.45)
+            type_text(query.strip(), delay_between_chars_s=0.02)
+            time.sleep(0.45)
+            press_key("enter")
+            time.sleep(1.2)
+            win = find_window(query)
+            if win:
+                focus_window(win.hwnd)
+                return win
+        except Exception as e:
+            log.warning("Start menu launch failed for '%s': %s", query, e)
 
     return None
 
@@ -615,25 +744,65 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None) -> Optional[
 # Safety & Panic Abort Killswitch
 # ---------------------------------------------------------------------------
 
-def is_panic_key_pressed() -> bool:
-    """Check if the user is pressing the emergency Escape key."""
+_PANIC_ABORT_TRIGGERED: bool = False
+_LAST_AUTOMATED_CURSOR_POS: Optional[Tuple[int, int]] = None
+_IS_AUTOMATED_MOVE_IN_PROGRESS: bool = False
+_ABORT_SHAKE_THRESHOLD_PX: int = 280
+
+
+def reset_panic_abort() -> None:
+    """Reset the emergency abort latch at the start of a new automation session."""
+    global _PANIC_ABORT_TRIGGERED, _LAST_AUTOMATED_CURSOR_POS, _IS_AUTOMATED_MOVE_IN_PROGRESS
+    _PANIC_ABORT_TRIGGERED = False
+    _IS_AUTOMATED_MOVE_IN_PROGRESS = False
+    if IS_WINDOWS and user32:
+        # Clear any stale 0x0001 transition bit on VK_ESCAPE from before this session started
+        user32.GetAsyncKeyState(VK_ESCAPE)
+    _LAST_AUTOMATED_CURSOR_POS = None
+
+
+def trigger_panic_abort() -> None:
+    """Explicitly latch the global emergency abort state."""
+    global _PANIC_ABORT_TRIGGERED
+    _PANIC_ABORT_TRIGGERED = True
+
+
+def is_panic_key_pressed(check_mouse_pull: bool = False) -> bool:
+    """Check if the user pressed Escape (even briefly) or yanked the physical mouse away."""
+    global _PANIC_ABORT_TRIGGERED
+    if _PANIC_ABORT_TRIGGERED:
+        return True
     if not IS_WINDOWS or not user32:
         return False
-    # Check high-order bit of GetAsyncKeyState(VK_ESCAPE)
-    return bool(user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000)
+
+    # 0x8000 = currently held down; 0x0001 = pressed since last GetAsyncKeyState call
+    if bool(user32.GetAsyncKeyState(VK_ESCAPE) & 0x8001):
+        _PANIC_ABORT_TRIGGERED = True
+        return True
+
+    if check_mouse_pull and not _IS_AUTOMATED_MOVE_IN_PROGRESS and _LAST_AUTOMATED_CURSOR_POS is not None:
+        cur_x, cur_y = get_cursor_pos()
+        dist = math.hypot(cur_x - _LAST_AUTOMATED_CURSOR_POS[0], cur_y - _LAST_AUTOMATED_CURSOR_POS[1])
+        if dist > _ABORT_SHAKE_THRESHOLD_PX:
+            log.info("User pulled mouse %dpx away from automated cursor position %s -> triggering abort.", int(dist), _LAST_AUTOMATED_CURSOR_POS)
+            _PANIC_ABORT_TRIGGERED = True
+            return True
+
+    return False
 
 
 def check_emergency_abort(
     expected_cursor_pos: Optional[Tuple[int, int]] = None,
-    shake_threshold_px: int = 200,
+    shake_threshold_px: int = 280,
 ) -> None:
     """Check for user-initiated abort (Escape key pressed or user jerking the physical mouse).
 
     Raises:
         EmergencyAbortError: If abort condition is triggered.
     """
-    if is_panic_key_pressed():
-        raise EmergencyAbortError("Emergency abort triggered: ESCAPE key pressed by user.")
+    global _PANIC_ABORT_TRIGGERED
+    if is_panic_key_pressed(check_mouse_pull=(expected_cursor_pos is None)):
+        raise EmergencyAbortError("Emergency abort triggered by user (ESC or mouse pull).")
 
     if expected_cursor_pos is not None:
         current_pos = get_cursor_pos()
@@ -641,6 +810,7 @@ def check_emergency_abort(
         dy = current_pos[1] - expected_cursor_pos[1]
         dist = math.hypot(dx, dy)
         if dist > shake_threshold_px:
+            _PANIC_ABORT_TRIGGERED = True
             raise EmergencyAbortError(
                 f"Emergency abort triggered: Mouse moved {int(dist)}px away from target."
             )
@@ -662,10 +832,14 @@ def get_cursor_pos() -> Tuple[int, int]:
 
 def set_cursor_pos(x: int, y: int) -> bool:
     """Instantly teleport cursor to (x, y)."""
+    global _LAST_AUTOMATED_CURSOR_POS
     if not IS_WINDOWS or not user32:
         return False
     with ensure_input_desktop():
-        return bool(user32.SetCursorPos(int(x), int(y)))
+        ok = bool(user32.SetCursorPos(int(x), int(y)))
+        if ok:
+            _LAST_AUTOMATED_CURSOR_POS = (int(x), int(y))
+        return ok
 
 
 def _send_mouse_input(dw_flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> bool:
@@ -689,43 +863,53 @@ def _send_mouse_input(dw_flags: int, dx: int = 0, dy: int = 0, data: int = 0) ->
 
 def move_mouse(x: int, y: int) -> bool:
     """Move cursor to (x, y) absolute desktop coordinates using SendInput."""
+    global _LAST_AUTOMATED_CURSOR_POS
     norm_x, norm_y = coords_to_normalized_virtual(x, y)
     flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
-    return _send_mouse_input(flags, dx=norm_x, dy=norm_y)
+    _LAST_AUTOMATED_CURSOR_POS = (int(x), int(y))
+    ok = _send_mouse_input(flags, dx=norm_x, dy=norm_y)
+    return ok
 
 
 def smooth_move_mouse(
     target_x: int,
     target_y: int,
-    duration_s: float = 0.25,
+    duration_s: float = 0.28,
     steps: int = 25,
     abort_on_shake: bool = True,
 ) -> bool:
     """Smoothly glide mouse cursor to (target_x, target_y) with cubic ease-out."""
+    global _IS_AUTOMATED_MOVE_IN_PROGRESS
     start_x, start_y = get_cursor_pos()
     if start_x == target_x and start_y == target_y:
         return True
 
     steps = max(5, steps)
     interval = duration_s / steps
+    expected_pos = (start_x, start_y)
 
-    for step in range(1, steps + 1):
-        if abort_on_shake:
-            check_emergency_abort()
+    _IS_AUTOMATED_MOVE_IN_PROGRESS = True
+    try:
+        for step in range(1, steps + 1):
+            if abort_on_shake:
+                check_emergency_abort(expected_cursor_pos=expected_pos, shake_threshold_px=280)
 
-        # Cubic ease-out: 1 - (1 - t)^3
-        t = step / steps
-        ease = 1.0 - math.pow(1.0 - t, 3)
+            # Cubic ease-out: 1 - (1 - t)^3
+            t = step / steps
+            ease = 1.0 - math.pow(1.0 - t, 3)
 
-        curr_x = int(round(start_x + (target_x - start_x) * ease))
-        curr_y = int(round(start_y + (target_y - start_y) * ease))
+            curr_x = int(round(start_x + (target_x - start_x) * ease))
+            curr_y = int(round(start_y + (target_y - start_y) * ease))
 
-        move_mouse(curr_x, curr_y)
-        time.sleep(interval)
+            move_mouse(curr_x, curr_y)
+            expected_pos = (curr_x, curr_y)
+            time.sleep(interval)
 
-    # Ensure precision on final point
-    move_mouse(target_x, target_y)
-    return True
+        # Ensure precision on final point
+        move_mouse(target_x, target_y)
+        return True
+    finally:
+        _IS_AUTOMATED_MOVE_IN_PROGRESS = False
 
 
 def mouse_down(button: str = "left") -> bool:
@@ -804,10 +988,28 @@ def _send_key_input(vk: int = 0, scan: int = 0, flags: int = 0) -> bool:
         return res == 1
 
 
-def key_down(key: str) -> bool:
-    """Press down a virtual key (e.g. 'enter', 'tab', 'ctrl')."""
+def _resolve_vk(key: str) -> Optional[int]:
+    """Resolve a human-readable key name or single character to a Win32 Virtual-Key code."""
     k_lower = key.lower().strip()
     vk = VIRTUAL_KEY_MAP.get(k_lower)
+    if vk:
+        return vk
+    if len(k_lower) == 1:
+        ch_code = ord(k_lower)
+        if ord("a") <= ch_code <= ord("z"):
+            return ch_code - 32
+        if ord("0") <= ch_code <= ord("9"):
+            return ch_code
+        if IS_WINDOWS and user32:
+            scan_res = user32.VkKeyScanW(ch_code)
+            if scan_res != -1:
+                return scan_res & 0xFF
+    return None
+
+
+def key_down(key: str) -> bool:
+    """Press down a virtual key (e.g. 'enter', 'tab', 'ctrl', 'l')."""
+    vk = _resolve_vk(key)
     if not vk:
         log.warning("Unknown key for key_down: '%s'", key)
         return False
@@ -821,8 +1023,7 @@ def key_down(key: str) -> bool:
 
 def key_up(key: str) -> bool:
     """Release a virtual key."""
-    k_lower = key.lower().strip()
-    vk = VIRTUAL_KEY_MAP.get(k_lower)
+    vk = _resolve_vk(key)
     if not vk:
         log.warning("Unknown key for key_up: '%s'", key)
         return False
