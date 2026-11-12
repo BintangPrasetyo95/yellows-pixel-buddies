@@ -730,6 +730,8 @@ APP_SEARCH_ALIASES = {
     "vs code": ("visual studio code", "code.exe", "antigravity"),
     "code": ("visual studio code", "code.exe", "antigravity"),
     "chrome": ("google chrome", "chrome.exe"),
+    "claude": ("claude", "chrome.exe", "msedge.exe"),
+    "chatgpt": ("chatgpt", "chrome.exe", "msedge.exe"),
     "browser": ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"),
     "edge": ("microsoft edge", "msedge.exe"),
     "firefox": ("mozilla firefox", "firefox.exe"),

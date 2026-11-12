@@ -206,6 +206,20 @@ APP_PROFILES: Dict[str, Dict[str, Any]] = {
         "is_chat": False,
         "terminal_toggle_hotkey": ["ctrl", "backtick"],
     },
+    "claude": {
+        "prevent_search_enter": False,
+        "multiline_shift_enter": True,
+        "is_chat": True,
+        "parent_app": "chrome",
+        "url": "https://claude.ai",
+    },
+    "chatgpt": {
+        "prevent_search_enter": False,
+        "multiline_shift_enter": True,
+        "is_chat": True,
+        "parent_app": "chrome",
+        "url": "https://chatgpt.com",
+    },
 }
 
 
@@ -764,9 +778,16 @@ CRITICAL RULES FOR RELIABLE CURSOR CONTROL & VISUAL SELF-CONFIRMATION:
   * When closing an application window (clicking the top-right `X` Close button or pressing `["alt", "f4"]`), always check the next screenshot!
   * If a `"Do you want to save your changes? [Save] [Don't Save] [Cancel]"` popup dialog appeared on screen and the user asked not to save (`"don't save"` / `"dont save"`), click the `"Don't Save"` button inside the dialog (or use `"press_key"` with `"n"`)!
   * Only return `"action": "done"` when you visually confirm on the screenshot (and in `OPEN DESKTOP WINDOWS`) that the window and any Save dialog are actually gone!
-- BROWSER NAVIGATION: If the user wants to open a website (like YouTube Music, YouTube, Google, GitHub) in Chrome/Edge and the browser is currently showing a different tab:
-  * First check if the desired site is already visible as a tab in the top tab bar or bookmarks bar—if so, "click" that tab/bookmark!
-  * Otherwise, either click the '+' (New Tab) button at the top of the browser, OR use "hotkey" with ["ctrl", "t"] (or click the address bar with "select_all_first": true), then type the URL (e.g. "https://music.youtube.com") or search query with "press_enter": true!
+- BROWSER NAVIGATION & WEB APPS (Claude, ChatGPT, YouTube, GitHub, etc.):
+  * If the user wants to navigate to a website or web app in Chrome/Edge (e.g. Claude -> "https://claude.ai", ChatGPT -> "https://chatgpt.com", YouTube -> "https://youtube.com", GitHub -> "https://github.com", WhatsApp Web -> "https://web.whatsapp.com"):
+    1. First check if the desired site is already open in an existing tab in the top tab bar or bookmarks bar—if so, "click" that tab/bookmark!
+    2. Otherwise, either use "hotkey" with ["ctrl", "t"] for a new tab (or click the '+' New Tab button, or click the address bar with "select_all_first": true), then type the direct URL (e.g. "https://claude.ai") with "press_enter": true!
+- AI CHATBOT INTERACTION (Claude, ChatGPT, Gemini web interfaces):
+  * When tasked to ask, tell, or prompt an AI on the web (e.g. "tell claude to say hi", "ask chatgpt X"):
+    1. Ensure the browser is on the chat interface (navigate to "https://claude.ai" or "https://chatgpt.com" if not already there).
+    2. Locate the main chat input field / prompt textarea (e.g. "How can Claude help you today?", "Message Claude", "Ask anything").
+    3. Use "click_and_type" on that input field with the message/prompt (e.g. "Say hi to me") and "press_enter": true!
+    4. Wait for the response to begin appearing or stream, then return action="done" with self_check="goal_confirmed_complete".
 - VS CODE / TERMINAL: If the user asks to run a command in VS Code terminal:
   * Ensure VS Code is focused ("focus_window": "Visual Studio Code").
   * If the terminal panel is visible at the bottom, use "click_and_type" on the terminal area with the command and "press_enter": true.
@@ -817,9 +838,14 @@ def create_desktop_plan(
             ("vs code", "Visual Studio Code"),
             ("visual studio code", "Visual Studio Code"),
             ("chrome", "Chrome"),
+            ("claude", "Chrome"),
+            ("chatgpt", "Chrome"),
             ("youtube music", "Chrome"),
             ("music yt", "Chrome"),
             ("yt music", "Chrome"),
+            ("youtube", "Chrome"),
+            ("github", "Chrome"),
+            ("gmail", "Chrome"),
             ("whatsapp", "WhatsApp"),
             ("spotify", "Spotify"),
             ("discord", "Discord"),
@@ -860,19 +886,64 @@ class DesktopActionExecutor:
 
     @staticmethod
     def _is_simple_open_goal(goal_text: str) -> bool:
-        """Return True if the user's goal is simply to open/focus/view an app without further interaction."""
+        """Return True if the user's goal is strictly to open/focus/view a native desktop application.
+
+        Returns False if the goal involves:
+        - Web apps, websites, or URLs inside browsers (e.g. claude, chatgpt, youtube, github)
+        - Compound or secondary actions (e.g. 'open X and do Y', 'open X then click Y', 'open X to run Y')
+        - Interactive verbs (e.g. play, type, search, reply, send, run, click, tell, ask, poke)
+        """
         g = (goal_text or "").strip().lower()
         if not g:
             return False
+
+        # 1. Any interactive verbs or commands immediately disqualify simple open
         interactive_keywords = (
-            "play ", "reply", "say ", "send ", "search", "type ", "write ",
-            "find ", "click", "run ", "check ", "status", "scroll", "delete",
-            "download", "upload", "copy", "paste", "close", "ask ", "tell ",
-            "essay", "update", "make ", "save", "shuffle",
+            "play", "reply", "say", "send", "search", "type", "write",
+            "find", "click", "run", "check", "status", "scroll", "delete",
+            "download", "upload", "copy", "paste", "close", "ask", "tell",
+            "essay", "update", "make", "save", "shuffle", "do it", "talk",
+            "chat", "prompt", "poke", "navigate", "browse", "watch", "listen",
+            "login", "sign in", "inspect", "execute",
         )
-        if any(kw in g for kw in interactive_keywords):
-            return False
-        return any(kw in g for kw in ("open ", "focus ", "show ", "switch to ", "see ", "check messages", "view "))
+        for kw in interactive_keywords:
+            if re.search(rf"\b{re.escape(kw)}\b", g):
+                return False
+
+        # 2. Compound clauses (' and ', ' then ', ' to <verb>', ' so that ', ' in <container>') disqualify
+        compound_patterns = (
+            r"\b(?:and|then|so that|with|for)\b",
+            r"\bin\s+(?:chrome|browser|edge|firefox|vscode|terminal)\b",
+            r"\bto\s+(?:play|run|search|type|write|see|check|watch|listen|do|make)\b",
+        )
+        for pat in compound_patterns:
+            if re.search(pat, g):
+                return False
+
+        # 3. Known web apps, web services, or URLs inside browsers require vision navigation, not just window focus!
+        web_apps_and_domains = (
+            "claude", "chatgpt", "youtube", "yt", "github", "gmail", "reddit",
+            "twitter", "x.com", "notion", "figma", "gemini", "huggingface",
+            "stackoverflow", "google docs", "google drive", "sheets", "slides",
+            "localhost", "http:", "https:", ".com", ".org", ".ai", ".io",
+            ".net", ".app", "web.whatsapp", "music.youtube",
+        )
+        for web_kw in web_apps_and_domains:
+            if web_kw in g:
+                return False
+
+        # 4. Must strictly match an open/focus pattern targeting an OS app
+        simple_open_patterns = (
+            r"^(?:please\s+)?(?:open|launch|start|focus|switch\s+to|bring\s+up|show)\s+(?:the\s+)?([a-z0-9_\-\s]+)$",
+        )
+        for pattern in simple_open_patterns:
+            m = re.match(pattern, g)
+            if m:
+                target = m.group(1).strip()
+                if len(target.split()) <= 4:
+                    return True
+
+        return False
 
     @staticmethod
     def _requires_text_submission(goal_text: str, intent_text: str = "") -> bool:
@@ -894,7 +965,7 @@ class DesktopActionExecutor:
         clean_for_type = re.sub(r"\b(?:what\s+type|which\s+type|type\s+of|file\s+type|mime\s+type)\b", "", combined)
 
         # Match explicit action verbs for text entry using word boundaries
-        send_verbs = r"\b(?:reply|replies|saying|send|sends|type|types|typing|write|writes|dm|post|paste)\b"
+        send_verbs = r"\b(?:reply|replies|saying|send|sends|type|types|typing|write|writes|dm|post|paste|tell|ask|prompt)\b"
         if bool(re.search(send_verbs, clean_for_type)):
             return True
 
