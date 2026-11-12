@@ -641,6 +641,30 @@ CINEMA_OUTRO_LINES = [
     ("* Finally pausing? My paws were starting to fall asleep, mew!", "peace_sign"),
     ("* That's it? Hmph, back to patrolling my domain!", "idle"),
 ]
+CINEMA_COMMENT_INTERVAL_S = 60.0          # Commentary interval while watching maximized video (1 minute)
+CINEMA_COMMENT_HOLD_S = 5.0               # Duration in seconds speech bubble stays visible before auto-dismiss
+CINEMA_COMMENT_LINES = [
+    # Snack & popcorn banter
+    ("* Pass the popcorn, dummy! You're hoarding all the good snacks!", "angry"),
+    ("* Hey! Where's my share of the buttered popcorn?! Minions must share!", "shocked"),
+    ("* (Sniffs the air suspiciously...) Are you eating chips without offering me any?!", "behind"),
+    # Movie & director critiques
+    ("* Hmph! I could have directed this scene ten times better, mew!", "wistful"),
+    ("* That plot twist was so obvious even a ghost could see it coming miles away!", "laughing"),
+    ("* The pacing here is catastrophic! Cut to the action already!", "angry"),
+    ("* This background music... hmph, it's not terrible, but I could compose better!", "singing"),
+    ("* Look at that dialogue! Who wrote this script, an untrained minion?!", "tongue"),
+    ("* (Gasps dramatically with wide eyes...) Did they really just do that?!", "shocked"),
+    # Secretly hooked / plush doll vulnerability
+    ("* (Intently staring at the screen with her plush ears perked up...)", "kneeling"),
+    ("* Don't you dare talk over this scene! It's getting to the good part!", "angry"),
+    ("* If anything jumps out of the screen, I am using you as a plush shield, got it?!", "shocked"),
+    ("* (Tucks paws in tighter, completely absorbed in the video...)", "kneeling"),
+    ("* ...Are you actually crying, minion? N-Not that I care! Keep your eyes on the screen!", "embarrassed"),
+    ("* Don't look at me, dummy! Look at the movie! You're going to miss the foreshadowing!", "angry"),
+    ("* Hmph, fine! I suppose this isn't the WORST thing you've made me watch.", "peace_sign"),
+    ("* Mew... that special effect looked so fake! My cat bombs look way more realistic!", "laughing"),
+]
 
 KNOWN_GAME_PLATFORM_PATHS = (
     r"\steamapps\common",
@@ -4607,12 +4631,12 @@ def compute_fingerprint_diff(fp1: bytes, fp2: bytes) -> float:
     return total_diff / (len(fp1) * 255.0)
 
 
-def capture_screen_and_fingerprint() -> tuple[str, bytes]:
-    """Capture the primary screen and return (compressed JPEG as base64, 32x32 grayscale fingerprint)."""
-    screen = QApplication.primaryScreen()
-    if screen is None:
+def capture_screen_and_fingerprint(screen: QScreen | None = None) -> tuple[str, bytes]:
+    """Capture the specified screen (or primaryScreen) and return (compressed JPEG as base64, 32x32 grayscale fingerprint)."""
+    target = screen or QApplication.primaryScreen()
+    if target is None:
         return "", b""
-    pixmap = screen.grabWindow(0)
+    pixmap = target.grabWindow(0)
     if pixmap.isNull():
         return "", b""
     fp = compute_screen_fingerprint(pixmap)
@@ -11065,6 +11089,13 @@ class YellowsPixelBuddies(QWidget):
             self._cinema_timer = QTimer(self)
             self._cinema_timer.setInterval(CINEMA_CHECK_INTERVAL_MS)
             self._cinema_timer.timeout.connect(self._check_cinema_mode)
+            self._cinema_comment_timer = QTimer(self)
+            self._cinema_comment_timer.setInterval(int(CINEMA_COMMENT_INTERVAL_S * 1000))
+            self._cinema_comment_timer.timeout.connect(self._on_cinema_comment_tick)
+            self._last_cinema_comment_time: float = 0.0
+            self._last_cinema_canned_line: str = ""
+            self._last_cinema_fingerprint: bytes | None = None
+            self._cinema_mode_action: QAction | None = None
 
         # --- system tray icon (hidden icons menu on taskbar) ------------------
         self._tray_icon: QSystemTrayIcon | None = None
@@ -16310,6 +16341,8 @@ RULES:
             self._screen_comment_timer.stop()
         if hasattr(self, "_cinema_timer"):
             self._cinema_timer.stop()
+        if hasattr(self, "_cinema_comment_timer"):
+            self._cinema_comment_timer.stop()
         self._last_foreground_hwnd = None
 
         self._brain_timer.stop()
@@ -18267,6 +18300,11 @@ RULES:
         self._song_comment_action.setChecked(self._ai_song_comment_enabled)
         self._song_comment_action.toggled.connect(self._toggle_ai_song_comment)
 
+        self._cinema_mode_action = tray_menu.addAction("Cinema Mode (Movie Buddy)")
+        self._cinema_mode_action.setCheckable(True)
+        self._cinema_mode_action.setChecked(getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED))
+        self._cinema_mode_action.toggled.connect(self._toggle_cinema_mode)
+
         self._filter_shorts_action = tray_menu.addAction("Filter YouTube Shorts")
         self._filter_shorts_action.setCheckable(True)
         self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
@@ -18586,6 +18624,9 @@ RULES:
         self._brain_timer.stop()
         self._phase = Phase.WATCHING
         self._pause_elapsed = False
+        self._last_cinema_comment_time = time.perf_counter()
+        if hasattr(self, "_cinema_comment_timer"):
+            self._cinema_comment_timer.start(int(CINEMA_COMMENT_INTERVAL_S * 1000))
         self._record_action("cinema_watch_start", f"Headed to the corner to watch '{video_title}'", "behavior")
 
     def _tick_cinema_watch(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
@@ -18628,6 +18669,8 @@ RULES:
     def _exit_cinema_mode(self) -> None:
         """Exit cinema watching mode: stand up and resume normal taskbar patrol."""
         log.info("Exiting Cinema Mode: video ended or window un-maximized.")
+        if hasattr(self, "_cinema_comment_timer"):
+            self._cinema_comment_timer.stop()
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
         self._cinema_video_screen = None
@@ -18643,6 +18686,161 @@ RULES:
 
         self._record_action("cinema_watch_end", "Finished watching video and resumed taskbar pacing", "behavior")
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+
+    def _toggle_cinema_mode(self, enabled: bool) -> None:
+        """Toggle Cinema Mode (Movie Buddy) on or off from tray menu or settings."""
+        self._cinema_mode_enabled = enabled
+        if hasattr(self, "_cinema_mode_action") and self._cinema_mode_action is not None:
+            self._cinema_mode_action.blockSignals(True)
+            self._cinema_mode_action.setChecked(enabled)
+            self._cinema_mode_action.blockSignals(False)
+        self._save_live_settings()
+        if not enabled and self._phase is Phase.WATCHING:
+            self._exit_cinema_mode()
+        log.info("Cinema Mode (Movie Buddy) toggled: %s", "ENABLED" if enabled else "DISABLED")
+
+    def _on_cinema_comment_tick(self) -> None:
+        """Periodic 1-minute timer tick: deliver in-character commentary while watching maximized video."""
+        if self._phase is not Phase.WATCHING:
+            if hasattr(self, "_cinema_comment_timer"):
+                self._cinema_comment_timer.stop()
+            return
+
+        if not getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED):
+            return
+
+        if getattr(self, "_hidden_in_tray", False):
+            return
+
+        if self._is_dialogue_convo_active():
+            return
+
+        # Double-check that video is still actively playing and window is still maximized
+        is_active, video_title, video_hwnd, video_screen = self._detect_maximized_video()
+        if not is_active:
+            return
+
+        self._trigger_cinema_comment(video_title, video_screen)
+
+    def _trigger_cinema_comment(self, video_title: str, video_screen: QScreen | None) -> None:
+        """Generate in-character video commentary via Gemini Vision, falling back to curated retro lines."""
+        now = time.perf_counter()
+        self._last_cinema_comment_time = now
+
+        api_key = self._memory.get_api_key() if hasattr(self, "_memory") and self._memory else ""
+        if not api_key:
+            self._deliver_canned_cinema_comment()
+            return
+
+        if self._gemini_thread is not None and self._gemini_thread.isRunning():
+            log.info("Gemini thread already busy; falling back to canned cinema comment.")
+            self._deliver_canned_cinema_comment()
+            return
+
+        if is_workstation_locked():
+            return
+
+        # Capture video screen snapshot for vision context
+        target_screen = video_screen or self._current_screen() or QApplication.primaryScreen()
+        screenshot_b64 = None
+        current_fp = b""
+        try:
+            # Briefly hide speech overlay so Pink doesn't screenshot her own bubble
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                self._dialogue_overlay.hide()
+            self.hide()
+            QApplication.processEvents()
+
+            screenshot_b64, current_fp = capture_screen_and_fingerprint(target_screen)
+        except Exception as err:
+            log.warning("Cinema screenshot capture error: %s", err)
+        finally:
+            self.show()
+            ensure_window_topmost(self)
+
+        # Visual delta check: If screen hasn't changed at all (e.g. paused on freeze frame)
+        if self._last_cinema_fingerprint is not None and current_fp:
+            diff = compute_fingerprint_diff(self._last_cinema_fingerprint, current_fp)
+            if diff < 0.025:
+                log.info("Cinema comment skipped: visual delta too low (diff=%.3f); screen static/paused", diff)
+                return
+        if current_fp:
+            self._last_cinema_fingerprint = current_fp
+
+        # Build prompt
+        clean_title = video_title or getattr(self, "_cinema_video_title", "") or "Video"
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = (
+            f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}.\n\n"
+            "CURRENT PHYSICAL CONTEXT: You are Pink, sitting quietly in the bottom-right corner of the taskbar "
+            f"watching a maximized video titled '{clean_title}' together with your user (minion) like a movie buddy. "
+            "You are observing what is actively playing on screen."
+        )
+
+        cinema_prompt = (
+            f"[Pink is watching the maximized video '{clean_title}' with the user.]\n"
+            "In exactly 1 concise retro sentence starting with '* ' (under 25 words), give an in-character comment, "
+            "critique, witty observation, joke, or sassy reaction about what is currently visible on screen! "
+            "Act observant, opinionated, or secretly hooked on the show. "
+            "Append an emotion tag [anim: ...] using one of: kneeling, shocked, laughing, tongue, wistful, angry, embarrassed, peace_sign."
+        )
+
+        def _on_cinema_response(spoken_text: str, anim: str, is_ghost: bool, seen: str = "") -> None:
+            if self._phase is not Phase.WATCHING:
+                return
+            clean_anim = anim if anim in ALL_STATES else "kneeling"
+            self._say(
+                spoken_text,
+                force=True,
+                step_anim=clean_anim,
+                dialogue_category="cinema_comment",
+                auto_dismiss=True,
+                hold_duration_s=CINEMA_COMMENT_HOLD_S,
+            )
+
+        def _on_cinema_error(err_msg: str) -> None:
+            log.warning("Cinema AI comment failed (%s); falling back to canned line.", err_msg)
+            if self._phase is Phase.WATCHING:
+                self._deliver_canned_cinema_comment()
+
+        try:
+            self._gemini_thread = GeminiWorkerThread(
+                api_key=api_key,
+                user_prompt=cinema_prompt,
+                system_instruction=system_inst,
+                history=[],
+                screenshot_b64=screenshot_b64,
+                model_name=GEMINI_MODEL,
+                is_auto_peek=True,
+                parent=self,
+            )
+            self._gemini_thread.response_ready.connect(
+                lambda text, anim, ghost, seen="": _on_cinema_response(text, anim, ghost, seen)
+            )
+            self._gemini_thread.error_occurred.connect(
+                lambda err: _on_cinema_error(err)
+            )
+            self._gemini_thread.start()
+        except Exception as ex:
+            log.warning("Could not launch Gemini cinema worker: %s", ex)
+            self._deliver_canned_cinema_comment()
+
+    def _deliver_canned_cinema_comment(self) -> None:
+        """Deliver a random in-character movie watching comment from the curated pool."""
+        pool = [line for line in CINEMA_COMMENT_LINES if line[0] != getattr(self, "_last_cinema_canned_line", "")]
+        if not pool:
+            pool = CINEMA_COMMENT_LINES
+        line, anim = random.choice(pool)
+        self._last_cinema_canned_line = line
+        self._say(
+            line,
+            force=True,
+            step_anim=anim,
+            dialogue_category="cinema_comment",
+            auto_dismiss=True,
+            hold_duration_s=CINEMA_COMMENT_HOLD_S,
+        )
 
     def cycle_dialogue_scale(self, direction: int = 1) -> float:
         """Cycle through DIALOGUE_SCALE_PRESETS in forward (1) or backward (-1) direction."""
@@ -18743,6 +18941,7 @@ RULES:
                 "dialogue_scale": getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE),
                 "audio_muted": getattr(self, "_audio_muted", True),
                 "sfx_volume": getattr(self, "_sfx_volume", 0.7),
+                "cinema_mode_enabled": getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED),
             }
             self._memory.save_settings(settings)
 
@@ -18964,6 +19163,8 @@ RULES:
             timers.append(self._screen_comment_timer)
         if hasattr(self, "_cinema_timer"):
             timers.append(self._cinema_timer)
+        if hasattr(self, "_cinema_comment_timer"):
+            timers.append(self._cinema_comment_timer)
         if hasattr(self, "_tray_screen_timer"):
             timers.append(self._tray_screen_timer)
         if hasattr(self, "_alarm_ticker"):
