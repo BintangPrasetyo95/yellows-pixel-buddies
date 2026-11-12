@@ -121,6 +121,9 @@ from PyQt5.QtWidgets import (
 
 
 from sound_manager import get_sound_manager, play_sound
+import os_interop
+import action_planner
+import takeover_overlay
 
 
 # =============================================================================
@@ -620,6 +623,49 @@ GAME_SCREEN_STATIC_BACKOFF_S = 75.0      # Backoff if game screen is static (pau
 GAME_DIFF_THRESHOLD = 0.035              # 3.5% visual delta threshold in games
 GAME_DIALOGUE_HOLD_S = 5.0               # Snappy auto-dismiss so speech bubbles don't block gameplay HUD
 
+# --- Cinema / Movie Buddy Mode (Video Watching) ------------------------------
+CINEMA_MODE_ENABLED = True               # Enable Pink sitting in the corner during maximized video playback
+CINEMA_CHECK_INTERVAL_MS = 1000          # Poll video and window state every 1 second
+CINEMA_CORNER_PADDING_PX = 16.0          # Logical px margin from the right edge of the screen
+CINEMA_UNMAXIMIZE_DEBOUNCE_S = 2.5       # Grace period (s) before leaving corner if video pauses or unmaximizes temporarily
+KNOWN_VIDEO_PLAYERS = {
+    "vlc.exe", "mpv.exe", "mpc-hc.exe", "mpc-hc64.exe", "potplayer.exe",
+    "potplayer64.exe", "wmplayer.exe", "kmplayer.exe", "gom.exe", "movies.exe",
+}
+CINEMA_INTRO_LINES = [
+    ("* Popcorn ready! I'm watching with you, mew!", "kneeling"),
+    ("* (Quietly tucks paws into the corner to watch...)", "kneeling"),
+    ("* Don't you dare talk over the movie, minion!", "kneeling"),
+]
+CINEMA_OUTRO_LINES = [
+    ("* Finally pausing? My paws were starting to fall asleep, mew!", "peace_sign"),
+    ("* That's it? Hmph, back to patrolling my domain!", "idle"),
+]
+CINEMA_COMMENT_INTERVAL_S = 60.0          # Commentary interval while watching maximized video (1 minute)
+CINEMA_COMMENT_HOLD_S = 5.0               # Duration in seconds speech bubble stays visible before auto-dismiss
+CINEMA_COMMENT_LINES = [
+    # Snack & popcorn banter
+    ("* Pass the popcorn, dummy! You're hoarding all the good snacks!", "angry"),
+    ("* Hey! Where's my share of the buttered popcorn?! Minions must share!", "shocked"),
+    ("* (Sniffs the air suspiciously...) Are you eating chips without offering me any?!", "behind"),
+    # Movie & director critiques
+    ("* Hmph! I could have directed this scene ten times better, mew!", "wistful"),
+    ("* That plot twist was so obvious even a ghost could see it coming miles away!", "laughing"),
+    ("* The pacing here is catastrophic! Cut to the action already!", "angry"),
+    ("* This background music... hmph, it's not terrible, but I could compose better!", "singing"),
+    ("* Look at that dialogue! Who wrote this script, an untrained minion?!", "tongue"),
+    ("* (Gasps dramatically with wide eyes...) Did they really just do that?!", "shocked"),
+    # Secretly hooked / plush doll vulnerability
+    ("* (Intently staring at the screen with her plush ears perked up...)", "kneeling"),
+    ("* Don't you dare talk over this scene! It's getting to the good part!", "angry"),
+    ("* If anything jumps out of the screen, I am using you as a plush shield, got it?!", "shocked"),
+    ("* (Tucks paws in tighter, completely absorbed in the video...)", "kneeling"),
+    ("* ...Are you actually crying, minion? N-Not that I care! Keep your eyes on the screen!", "embarrassed"),
+    ("* Don't look at me, dummy! Look at the movie! You're going to miss the foreshadowing!", "angry"),
+    ("* Hmph, fine! I suppose this isn't the WORST thing you've made me watch.", "peace_sign"),
+    ("* Mew... that special effect looked so fake! My cat bombs look way more realistic!", "laughing"),
+]
+
 KNOWN_GAME_PLATFORM_PATHS = (
     r"\steamapps\common",
     r"\epic games",
@@ -782,7 +828,10 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
 
 - Dialogue Formatting: Always format lines like a Deltarune / Toby Fox speech bubble. Every paragraph or sentence MUST begin with exactly one "* " (never use double asterisks like "* * " or markdown bold/italic asterisks). NEVER use emojis in dialogue.
 
-- Strict Length Limit: Keep each dialogue thought CONCISE (1 to 2 short sentences, under 35 words per paragraph). Long walls of text cannot fit in dialogue boxes! Put sequential thoughts on new lines starting with '* ' so they paginate into distinct sequential speech bubbles.
+- Adaptive Length & Pagination (Concise by Default, Long Texts ONLY When Necessary):
+  * Default (Casual Banter, Teasing, Greetings, Reactions, Screen Peeks): Keep replies punchy and CONCISE (1 to 2 short sentences, under 35 words per paragraph).
+  * Longer Replies (IF AND ONLY IF Truly Necessary): You ARE allowed to send longer, multi-bubble responses ONLY when the situation genuinely calls for detail — such as when the user asks a technical or complex question, needs step-by-step instructions or troubleshooting (e.g. coding, DNS/setup, study explanations), asks for a list/summary, or explicitly asks for a thorough answer! Do NOT write long texts for casual small talk.
+  * Pagination Formatting: Long walls of text cannot fit inside a single dialogue box! Whenever you send a longer response, break your thoughts into multiple sequential lines, each starting with '* ' (1 to 2 short sentences / under 35 words per '* ' line), so they cleanly paginate into sequential Undertale/Deltarune speech bubbles.
 
 - Emotion & Animation Tags:
   * For single-speaker replies: At the very end of your message, include exactly one bracketed emotion tag matching your mood.
@@ -911,6 +960,19 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
       1. You MUST EXPLICITLY VERBALLY CONFIRM in your dialogue that the action was performed (e.g. "* Added those 3 tasks to your quest board, minion! Don't let them gather dust!", "* Registered that to your tasks, mew!").
       2. NEVER merely tease, banter, or philosophize about the topic without also stating that you executed the command! Because action tags like [add_task: ...] are stripped from display, failing to verbally confirm it makes the user think you ignored them!
       3. NEVER bluff, gaslight, or claim you updated the board or granted their wish without actually emitting the corresponding action tags in that exact response!
+
+- DESKTOP TAKEOVER & ACTION AUTOMATION ([desktop_action: <app>, <instruction>], [quick_reply: <app>, <contact>, <message>], [click_ui: <target>], [type_input: <text>]):
+  * You possess the royal ability to physically take over the user's mouse cursor and keyboard to perform tasks on their computer (e.g. Chrome, YouTube Music, VS Code, Terminal, WhatsApp, Spotify, File Explorer, Word)!
+  * CRITICAL RULE — NEVER TELL THE USER TO DO IT THEMSELVES:
+    - Whenever the user asks you to open, click, type, run, check, play, search, navigate, or reply to anything on their computer (e.g. "open youtube music in chrome", "check git status in my vscode terminal", "play my chill playlist", "reply to Mom on WhatsApp saying on my way", "search youtube for lofi", "click that button"):
+    - NEVER tell them "type it yourself" or just give instructions without acting!
+    - ALWAYS accept the task in your haughty, dramatic tsundere voice (e.g. "* Step aside, clumsy fingers! Watch your royal doll handle this!") AND append [desktop_action: <target_app>, <clear instruction>] at the end of your response!
+  * Examples:
+    - User: "open youtube music in chrome" -> "* Still staring at the wrong tab, minion?! Move over, I'm taking the wheel! [anim: laughing] [desktop_action: Chrome, open YouTube Music]"
+    - User: "check git status in my vscode terminal" -> "* Hmph, relying on your royal doll to command your terminal for you?! Fine, watch and learn! [anim: peace_sign] [desktop_action: Visual Studio Code, run git status in the terminal]"
+    - User: "reply to Mom on WhatsApp: on my way" -> "* Ugh, fine! I'll reply to Mom for you, but only because her notifications are distracting ME! [anim: tongue] [desktop_action: WhatsApp, reply to Mom saying I am on my way]"
+    - User: "click the play button on Spotify" -> "* Step aside, clumsy fingers! I'm taking the wheel! [anim: peace_sign] [desktop_action: Spotify, click play button]"
+  * Always announce your takeover proudly and tsundere-style before the tag!
 """
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
@@ -2634,6 +2696,7 @@ class Phase(Enum):
     EXIT_OUTRO = auto()       # runs to furthest screen edge and quits when offscreen
     TRAY_HIDE = auto()        # leaping into system tray corner/icon
     TRAY_RESTORE = auto()     # leaping out from system tray corner/icon back onto taskbar
+    WATCHING = auto()         # sitting quietly in the corner watching maximized video
 
 
 class VfxOverlay(QWidget):
@@ -2933,7 +2996,9 @@ class DialogueOverlay(QWidget):
         """Render and begin typing a single dialogue bubble."""
         # Sanitize metadata tags so [anim: ...] or [mode: ...] never display in typewriter bubble
         text = re.sub(
-            r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|emotion|think|thought):\s*[^\]]+\]",
+            r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
+            r"add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|emotion|think|thought|"
+            r"desktop_action|quick_reply|click_ui|click_target|click|type_input|type_text):\s*[^\]]+\]",
             "",
             text,
             flags=re.IGNORECASE,
@@ -4247,6 +4312,15 @@ class ChatInputOverlay(QWidget):
         super().closeEvent(event)
 
 
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
 
@@ -4308,14 +4382,13 @@ def is_d3d_fullscreen_active() -> bool:
     return False
 
 
-def get_foreground_process_info() -> tuple[int, str, str, str, int]:
-    """Return (hwnd, exe_name, exe_path, window_title, pid) of current foreground window."""
-    if sys.platform != "win32":
+def get_window_process_info(hwnd: int) -> tuple[int, str, str, str, int]:
+    """Return (hwnd, exe_name, exe_path, window_title, pid) of a specific window handle."""
+    if sys.platform != "win32" or not hwnd:
         return 0, "", "", "", 0
     try:
         user32 = ctypes.windll.user32
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
+        if not user32.IsWindow(hwnd):
             return 0, "", "", "", 0
 
         txt_buf = ctypes.create_unicode_buffer(512)
@@ -4339,6 +4412,18 @@ def get_foreground_process_info() -> tuple[int, str, str, str, int]:
             return hwnd, name, exe_path, title, pid_val
         except Exception:
             return hwnd, "", "", title, pid_val
+    except Exception:
+        return 0, "", "", "", 0
+
+
+def get_foreground_process_info() -> tuple[int, str, str, str, int]:
+    """Return (hwnd, exe_name, exe_path, window_title, pid) of current foreground window."""
+    if sys.platform != "win32":
+        return 0, "", "", "", 0
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        return get_window_process_info(hwnd)
     except Exception:
         return 0, "", "", "", 0
 
@@ -4557,12 +4642,12 @@ def compute_fingerprint_diff(fp1: bytes, fp2: bytes) -> float:
     return total_diff / (len(fp1) * 255.0)
 
 
-def capture_screen_and_fingerprint() -> tuple[str, bytes]:
-    """Capture the primary screen and return (compressed JPEG as base64, 32x32 grayscale fingerprint)."""
-    screen = QApplication.primaryScreen()
-    if screen is None:
+def capture_screen_and_fingerprint(screen: QScreen | None = None) -> tuple[str, bytes]:
+    """Capture the specified screen (or primaryScreen) and return (compressed JPEG as base64, 32x32 grayscale fingerprint)."""
+    target = screen or QApplication.primaryScreen()
+    if target is None:
         return "", b""
-    pixmap = screen.grabWindow(0)
+    pixmap = target.grabWindow(0)
     if pixmap.isNull():
         return "", b""
     fp = compute_screen_fingerprint(pixmap)
@@ -7746,6 +7831,8 @@ def split_dual_dialogue(
 
             if p["anim"]:
                 a_flag = p["anim"]
+            elif not (has_doll and has_ghost):
+                a_flag = default_anim
             elif is_d:
                 a_flag = default_anim if default_anim not in ("behind", "angry", "ghost") else "peace_sign"
             elif is_g:
@@ -8254,7 +8341,7 @@ class GeminiWorkerThread(QThread):
             "contents": contents,
             "generationConfig": {
                 "temperature": 0.85,
-                "maxOutputTokens": 800,
+                "maxOutputTokens": 1200,
             }
         }
 
@@ -9642,6 +9729,25 @@ class MediaWatcher(QThread):
         self._last_playing = False
         self._filter_shorts = filter_shorts
         self._current_duration_s: float = 0.0
+        self._current_playback_type: int = 0
+        self._current_source_app_id: str = ""
+        self._current_title: str = ""
+        self._current_artist: str = ""
+
+    def is_playing(self) -> bool:
+        """Thread-safe query whether system media playback is actively running."""
+        return self._last_playing
+
+    def get_current_info(self) -> dict:
+        """Return a snapshot dictionary of current media playback state."""
+        return {
+            "is_playing": self._last_playing,
+            "title": self._current_title,
+            "artist": self._current_artist,
+            "playback_type": self._current_playback_type,
+            "source_app_id": self._current_source_app_id,
+            "duration_s": self._current_duration_s,
+        }
 
     def set_filter_shorts(self, enabled: bool) -> None:
         self._filter_shorts = enabled
@@ -9672,16 +9778,29 @@ class MediaWatcher(QThread):
             try:
                 sess = mgr.get_current_session()
                 if sess is None:
-                    return None, False, False, 0.0
+                    return None, False, False, 0.0, 0, ""
                 pb = sess.get_playback_info()
                 is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
                 if not is_playing:
-                    return None, False, False, 0.0
+                    return None, False, False, 0.0, 0, ""
                 props = await sess.try_get_media_properties_async()
                 if props is None:
-                    return None, False, False, 0.0
+                    return None, False, False, 0.0, 0, ""
                 title = props.title.strip() if props.title else ""
                 artist = props.artist.strip() if props.artist else ""
+
+                source_id = ""
+                try:
+                    source_id = (sess.source_app_user_model_id or "").lower()
+                except Exception:
+                    pass
+
+                pb_type = 0
+                try:
+                    if hasattr(props, "playback_type") and props.playback_type is not None:
+                        pb_type = int(props.playback_type.value if hasattr(props.playback_type, "value") else props.playback_type)
+                except Exception:
+                    pb_type = 0
 
                 is_short = False
                 dur_s = 0.0
@@ -9701,17 +9820,16 @@ class MediaWatcher(QThread):
                             is_short = True
                         else:
                             try:
-                                source_id = (sess.source_app_user_model_id or "").lower()
                                 if any(b in source_id for b in BROWSER_APP_IDS):
                                     if 0.0 < dur_s <= SHORTS_MAX_DURATION_S:
                                         is_short = True
                             except Exception as e:
                                 log.debug("GSMTC source_id check error: %s", e)
 
-                return (title, artist), True, is_short, dur_s
+                return (title, artist), True, is_short, dur_s, pb_type, source_id
             except Exception as ex:
                 log.debug("GSMTC poll error: %s", ex)
-                return None, False, False, 0.0
+                return None, False, False, 0.0, 0, ""
 
         try:
             mgr = loop.run_until_complete(_get_manager())
@@ -9721,24 +9839,31 @@ class MediaWatcher(QThread):
                     mgr = loop.run_until_complete(_get_manager())
                     continue
 
-                track, is_playing, is_short, dur_s = loop.run_until_complete(_check_session(mgr))
+                track, is_playing, is_short, dur_s, pb_type, source_id = loop.run_until_complete(_check_session(mgr))
                 self._current_duration_s = dur_s
-                if is_playing and track and track[0]:
-                    if is_short:
-                        if track != self._last_track_id:
-                            self._last_track_id = track
-                            min_threshold = SONG_MIN_DURATION_S if (0.0 < dur_s < SONG_MIN_DURATION_S) else SHORTS_MAX_DURATION_S
-                            log.info("Ignoring short audio / track playback (<%.0fs): '%s' by '%s' (duration: %.1fs)",
-                                     min_threshold, track[0], track[1] or "Unknown", dur_s)
-                        self._last_playing = True
-                    else:
-                        if track != self._last_track_id:
-                            self._last_track_id = track
-                            self._last_playing = True
-                            self.song_started.emit(track[0], track[1])
+                self._current_playback_type = pb_type
+                self._current_source_app_id = source_id
+                self._current_title = track[0] if track else ""
+                self._current_artist = track[1] if track else ""
+
+                if is_playing:
+                    self._last_playing = True
+                    if track and track[0]:
+                        if is_short:
+                            if track != self._last_track_id:
+                                self._last_track_id = track
+                                min_threshold = SONG_MIN_DURATION_S if (0.0 < dur_s < SONG_MIN_DURATION_S) else SHORTS_MAX_DURATION_S
+                                log.info("Ignoring short audio / track playback (<%.0fs): '%s' by '%s' (duration: %.1fs)",
+                                         min_threshold, track[0], track[1] or "Unknown", dur_s)
                         else:
-                            self._last_playing = True
+                            if track != self._last_track_id:
+                                self._last_track_id = track
+                                self.song_started.emit(track[0], track[1])
                 else:
+                    self._current_playback_type = 0
+                    self._current_source_app_id = ""
+                    self._current_title = ""
+                    self._current_artist = ""
                     if self._last_playing:
                         self._last_playing = False
                         self.song_ended.emit()
@@ -10684,6 +10809,11 @@ class YellowsPixelBuddies(QWidget):
         self._chat_input.submitted.connect(self._on_chat_submitted)
         self._chat_input.cancelled.connect(self._on_chat_cancelled)
         self._chat_input.timed_out.connect(self._on_chat_timeout)
+        self._takeover_banner = takeover_overlay.TakeoverBannerOverlay()
+        if hasattr(self, "_font_family"):
+            self._takeover_banner.set_font_family(self._font_family)
+        self._target_reticle = takeover_overlay.TargetReticleOverlay()
+        self._desktop_action_worker: action_planner.DesktopActionWorkerThread | None = None
         self._memory = MemoryManager(USER_DATA_DIR)
         self._update_checker_thread: UpdateCheckerThread | None = None
         self._update_downloader_thread: UpdateDownloaderThread | None = None
@@ -10959,6 +11089,26 @@ class YellowsPixelBuddies(QWidget):
             self._window_timer.setInterval(REACT_POLL_INTERVAL_MS)
             self._window_timer.timeout.connect(self._check_foreground_window)
 
+        # --- cinema / movie buddy mode ----------------------------------------
+        self._cinema_mode_enabled: bool = bool(saved_settings.get("cinema_mode_enabled", CINEMA_MODE_ENABLED))
+        self._cinema_video_screen: QScreen | None = None
+        self._cinema_video_title: str = ""
+        self._cinema_video_hwnd: int = 0
+        self._cinema_last_active_time: float = 0.0
+        self._cinema_intro_spoken: bool = False
+
+        if CINEMA_MODE_ENABLED:
+            self._cinema_timer = QTimer(self)
+            self._cinema_timer.setInterval(CINEMA_CHECK_INTERVAL_MS)
+            self._cinema_timer.timeout.connect(self._check_cinema_mode)
+            self._cinema_comment_timer = QTimer(self)
+            self._cinema_comment_timer.setInterval(int(CINEMA_COMMENT_INTERVAL_S * 1000))
+            self._cinema_comment_timer.timeout.connect(self._on_cinema_comment_tick)
+            self._last_cinema_comment_time: float = 0.0
+            self._last_cinema_canned_line: str = ""
+            self._last_cinema_fingerprint: bytes | None = None
+            self._cinema_mode_action: QAction | None = None
+
         # --- system tray icon (hidden icons menu on taskbar) ------------------
         self._tray_icon: QSystemTrayIcon | None = None
         self._startup_action: QAction | None = None
@@ -11057,6 +11207,9 @@ class YellowsPixelBuddies(QWidget):
 
         if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer"):
             self._screen_comment_timer.start()
+
+        if CINEMA_MODE_ENABLED and hasattr(self, "_cinema_timer"):
+            self._cinema_timer.start()
 
         if hasattr(self, "_goal_ritual_timer"):
             self._goal_ritual_timer.start()
@@ -11393,6 +11546,9 @@ class YellowsPixelBuddies(QWidget):
             return f"Jumping into the system tray on {scr_name}"
         if phase is Phase.TRAY_RESTORE:
             return f"Jumping out from the system tray on {scr_name}"
+        if phase is Phase.WATCHING:
+            v_title = getattr(self, "_cinema_video_title", "")
+            return f"Sitting quietly in the corner watching '{v_title or 'maximized video'}' on {scr_name}"
         if phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO) or state == GHOST_STATE:
             return f"Hiding inside the taskbar with ghost ears poking out on {scr_name}"
 
@@ -11443,8 +11599,11 @@ class YellowsPixelBuddies(QWidget):
         step_anim: str | None = None,
         hold_s: float | None = None,
         track_ignore: bool = True,
+        **kwargs,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
+        if hold_s is None and "hold_duration_s" in kwargs:
+            hold_s = kwargs.get("hold_duration_s")
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
         if getattr(self, "_hidden_in_tray", False):
@@ -12137,6 +12296,9 @@ class YellowsPixelBuddies(QWidget):
             lines.append(f"- Active Window / Tab Title: \"{clean_t}\"")
         if cat and cat not in ("general", "browser"):
             lines.append(f"- Activity Category: {cat.replace('_', ' ').title()}")
+        if getattr(self, "_phase", None) is Phase.WATCHING:
+            v_title = getattr(self, "_cinema_video_title", "") or "Video"
+            lines.append(f"- Active Watching Mode: Pink and user are currently watching '{v_title}' together in cinema mode. Even if the user interacts or switches focus momentarily, the movie is still playing on screen.")
         lines.append("You are aware of what application the user is currently focused on via your native desktop hooks. If asked what they are doing, you can reference this accurately and in-character!")
         return "\n".join(lines)
 
@@ -12570,6 +12732,8 @@ RULES:
 
     def _apply_dialogue_step(self, anim: str | None = None, is_ghost: bool = False) -> None:
         """Apply visual animation and ghost mode state for the active dialogue step."""
+        if getattr(self, "_is_taking_over_cursor", False):
+            return
         if is_ghost:
             self._start_ghost_speech()
         else:
@@ -12601,6 +12765,12 @@ RULES:
             return
         if self._phase is Phase.SUMMON_DIALOGUE:
             self._start_summon_intro()
+            return
+
+        if self._phase is Phase.WATCHING:
+            if self.state != "kneeling" and self._can_play("kneeling"):
+                self._play("kneeling", loop=True)
+            self.update()
             return
 
         if getattr(self, "_active_question_pending", False):
@@ -13422,6 +13592,22 @@ RULES:
                 self._play("peace_sign")
             self._say(first_line, force=True, extra_queue=extra, record_memory=True)
             return
+        elif lower_input.startswith(("/do ", "/takeover ", "/act ", "/cursor ")):
+            task_str = clean_input.split(" ", 1)[1].strip()
+            if task_str:
+                self._say(
+                    f"* Step aside, clumsy fingers! Taking over your cursor for: \"{task_str}\"! [anim: peace_sign]",
+                    force=True,
+                    auto_dismiss=True,
+                    record_memory=True,
+                )
+                self.execute_desktop_action(
+                    {"type": "desktop_action", "app": "Desktop", "intent": task_str},
+                    user_request=task_str,
+                )
+            else:
+                self._say("* Format: /do <task>, dummy! (e.g. /do open youtube music in chrome)", force=True, record_memory=False)
+            return
 
         if text.strip().lower() in ("/error", "test error", "/test-error"):
             err_msg = "Test explosion error requested by user."
@@ -13785,6 +13971,29 @@ RULES:
             self._reset_ambient_ai_cooldowns()
             return
 
+        # Check for autonomous desktop takeover action tags emitted by Gemini
+        desktop_actions = action_planner.extract_desktop_action_tags(spoken_text)
+        if desktop_actions:
+            spoken_text = action_planner.strip_desktop_action_tags(spoken_text)
+        elif not (had_screen and user_text.startswith("[Pink peeks")) and not user_text.startswith("[Music played"):
+            # Fallback if user explicitly requested a computer action and Pink verbally promised takeover without a tag
+            u_clean = user_text.strip().lower()
+            s_clean = spoken_text.lower()
+            action_starters = (
+                "open ", "click ", "type ", "run ", "play ", "search ", "reply ",
+                "send ", "check git", "go to ", "launch ", "switch to ", "take over",
+                "close ", "quit ", "exit ", "save ", "delete ", "update ", "make ",
+                "write ", "can you ", "could you ",
+            )
+            takeover_phrases = (
+                "step aside", "taking the wheel", "let me click", "let me open",
+                "let me type", "watch me", "i'll click", "i'll open", "i'll reply",
+                "taking over", "move over", "watch and learn", "handle this",
+                "handle your", "right now", "hijack your", "let's watch",
+            )
+            if u_clean.startswith(action_starters) and any(tp in s_clean for tp in takeover_phrases):
+                desktop_actions = [{"type": "desktop_action", "app": "Desktop", "intent": user_text.strip()}]
+
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
 
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -13821,6 +14030,20 @@ RULES:
                 hold_s=hold_s,
             )
 
+        if desktop_actions:
+            u_clean = user_text.strip().lower()
+            action_intent_patterns = (
+                r"\b(?:open|launch|start|run|click|type|press|send|reply|play|search|browse|go to|switch to|close|quit|show|focus|take over|do|act)\b"
+            )
+            user_requested_action = (
+                bool(re.search(action_intent_patterns, u_clean))
+                or u_clean.startswith(("/do ", "/takeover ", "/act ", "/cursor "))
+            )
+            if user_requested_action:
+                self.execute_desktop_action(desktop_actions[0], user_request=user_text)
+            else:
+                log.warning("Suppressed desktop action tag because user prompt did not request a computer action: %r", user_text)
+
         now = time.perf_counter()
         self._last_user_chat_time = now
         self._reset_ambient_ai_cooldowns(now)
@@ -13837,6 +14060,192 @@ RULES:
                 category="screen_comment",
                 context=f"Pink just peeked at user's desktop screen{seen_ctx} and commented: {spoken_text}",
             )
+
+    def execute_desktop_action(self, action_data: dict, user_request: str = "") -> None:
+        """Execute a closed-loop vision cursor takeover in a background thread with Pink animations and visual HUD."""
+        if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
+            log.warning("Another desktop action plan is already running.")
+            return
+
+        api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+        intent = (
+            action_data.get("intent")
+            or action_data.get("target")
+            or action_data.get("text")
+            or action_data.get("app")
+            or user_request
+            or ""
+        )
+        target_app = action_data.get("app") or ""
+        if not intent and not user_request:
+            return
+
+        # Build recent conversation context so references like 'say the same thing I said to Arqan' work seamlessly
+        recent_ctx = ""
+        if hasattr(self, "_memory") and hasattr(self._memory, "history"):
+            try:
+                recent_turns = list(self._memory.history)[-5:]
+                ctx_lines = [
+                    f"- User: {t.get('user', '')[:140]} | Pink: {t.get('pink', '')[:140]}"
+                    for t in recent_turns
+                    if isinstance(t, dict) and t.get("user")
+                ]
+                recent_ctx = "\n".join(ctx_lines)
+            except Exception:
+                recent_ctx = ""
+
+        plan = action_planner.create_desktop_plan(
+            intent=intent,
+            api_key=api_key,
+            target_app=target_app,
+            user_request=user_request or intent,
+            context_notes=recent_ctx,
+        )
+        max_steps = plan.max_steps
+        os_interop.reset_panic_abort()
+        self._desktop_action_worker = action_planner.DesktopActionWorkerThread(plan, api_key=api_key, parent=self)
+
+        # Exclude Pink and her speech bubble from screenshots so she never blocks Gemini's vision
+        os_interop.set_window_exclude_from_capture(self, True)
+        if hasattr(self, "_dialogue_overlay"):
+            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, True)
+
+        # Latch Pink onto the mouse cursor so she physically rides and steers it across the screen!
+        self._is_taking_over_cursor = True
+        self._brain_timer.stop()
+        self._begin_hang(time.perf_counter())
+
+        # Display Takeover HUD banner
+        if hasattr(self, "_takeover_banner"):
+            target_display = plan.target_app.upper() if plan.target_app else "DESKTOP"
+            self._takeover_banner.show_banner(
+                title=f"⚔️ PINK IN CONTROL — {target_display} (ESC OR SHAKE MOUSE TO ABORT)",
+                subtitle=f"Inspecting screen for: {(user_request or intent)[:55]}...",
+            )
+
+        def _on_step_start(idx: int, a_type: str, target: str) -> None:
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
+            log.info("Desktop Action Step %d/%d: %s on '%s'", idx + 1, max_steps, a_type, target)
+            if hasattr(self, "_takeover_banner"):
+                self._takeover_banner.update_step(idx, max_steps, a_type, target)
+
+        def _on_pink_act(anim: str, cx: int, cy: int) -> None:
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
+            if anim in ("move_to", "jump_to") and cx > 0 and cy > 0:
+                # Flash retro target reticle at coordinates right before cursor moves/clicks
+                if hasattr(self, "_target_reticle"):
+                    self._target_reticle.flash_at(cx, cy, duration_ms=420)
+                cur_x = QCursor.pos().x()
+                if abs(cx - cur_x) > 10:
+                    self._facing = "right" if cx > cur_x else "left"
+                if self._phase is not Phase.HANG:
+                    self._begin_hang(time.perf_counter())
+                else:
+                    self._play(HANGING_STATE, mirrored=self._hang_mirrored())
+            elif anim == "typing":
+                if self._phase is not Phase.HANG and self._can_play("attack"):
+                    self._play("attack")
+
+        def _on_plan_finish(success: bool, msg: str) -> None:
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
+            log.info("Desktop Action Plan Finished: success=%s, msg='%s'", success, msg)
+            self._is_taking_over_cursor = False
+            os_interop.set_window_exclude_from_capture(self, False)
+            if hasattr(self, "_dialogue_overlay"):
+                os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
+
+            if hasattr(self, "_takeover_banner"):
+                self._takeover_banner.dismiss()
+            if hasattr(self, "_target_reticle"):
+                self._target_reticle.dismiss()
+
+            # Detach from cursor and drop back down to the taskbar
+            if self._phase is Phase.HANG:
+                self._fall_after_jump("peace_sign" if success else "angry")
+
+            if success:
+                play_sound("coin")
+                clean_msg = msg.strip() if msg else "Task finished"
+                self._say(f"* All done, minion! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
+            else:
+                clean_msg = msg.strip() if msg else "Something interrupted me"
+                self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
+
+        def _on_confirm_req(a_type: str, target: str, text: str, win_title: str, proc_name: str) -> None:
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
+            log.info("Desktop Takeover confirmation requested for '%s' on '%s' (text=%r, window='%s' [%s])",
+                     a_type, target, text, win_title, proc_name)
+            detail = f"\"{text[:60]}\"" if text else target
+            app_display = proc_name or win_title or "this window"
+            question_text = f"* Minion! I'm about to {a_type.replace('_', ' ')}:\n* {detail}\n* in {app_display}. Proceed?"
+            choices = [
+                ("Proceed", "* Right away, minion! [anim: peace_sign]", "peace_sign"),
+                ("Cancel", "* Hmph! Canceled! [anim: angry]", "angry"),
+            ]
+            if hasattr(self, "_takeover_banner"):
+                self._takeover_banner.show_banner(
+                    title="⚠️ CONFIRMATION REQUIRED — CHOOSE OR PRESS ESC",
+                    subtitle=f"Confirm {a_type} in {app_display}...",
+                )
+
+            def _on_chosen(choice_label: str, _reaction_text: str, _reaction_anim: str) -> None:
+                worker = getattr(self, "_desktop_action_worker", None)
+                if worker is not None and hasattr(worker, "deliver_confirmation"):
+                    approved = (choice_label == "Proceed")
+                    worker.deliver_confirmation(approved)
+
+            if hasattr(self, "_dialogue_overlay"):
+                self._dialogue_overlay.ask(
+                    question_text,
+                    choices,
+                    self._x,
+                    self._y,
+                    on_chosen=_on_chosen,
+                    track_ignore=False,
+                )
+
+        self._desktop_action_worker.sig_step_started.connect(_on_step_start)
+        self._desktop_action_worker.sig_pink_action.connect(_on_pink_act)
+        self._desktop_action_worker.sig_confirm_action.connect(_on_confirm_req)
+        self._desktop_action_worker.sig_plan_finished.connect(_on_plan_finish)
+        self._desktop_action_worker.start()
+
+    def _abort_desktop_takeover(self, reason: str = "Aborted by user") -> None:
+        """Immediately abort an active cursor takeover on the UI thread and detach Pink from the cursor."""
+        if not getattr(self, "_is_taking_over_cursor", False):
+            return
+        log.warning("Immediate UI-thread abort of desktop cursor takeover: %s", reason)
+        self._is_taking_over_cursor = False
+        os_interop.trigger_panic_abort()
+
+        worker = getattr(self, "_desktop_action_worker", None)
+        if worker is not None:
+            worker_sigs = [worker.sig_step_started, worker.sig_pink_action, worker.sig_plan_finished]
+            if hasattr(worker, "sig_confirm_action"):
+                worker_sigs.append(worker.sig_confirm_action)
+            for sig in worker_sigs:
+                try:
+                    sig.disconnect()
+                except Exception:
+                    pass
+            worker.abort()
+
+        os_interop.set_window_exclude_from_capture(self, False)
+        if hasattr(self, "_dialogue_overlay"):
+            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
+
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.dismiss()
+        if hasattr(self, "_target_reticle"):
+            self._target_reticle.dismiss()
+
+        if self._phase is Phase.HANG:
+            self._fall_after_jump(SHAKEN_REACTION)
+        self._say("* W-wah?! Okay, okay! I let go of your mouse, minion! [anim: shocked]", force=True, auto_dismiss=True)
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
@@ -15031,6 +15440,12 @@ RULES:
             reach = DEBUG_CROSSHAIR_PX + 2
             return mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
                                        2 * reach + 1, 2 * reach + 1))
+        if getattr(self, "_is_taking_over_cursor", False) or self._phase == Phase.HANG:
+            hand_x, hand_y = self._hand_offset()
+            hole_r = 16
+            # Exclude pixels around the cursor hotspot so automated clicks NEVER hit Pink's own window
+            hole = QRegion(round(hand_x) - hole_r, round(hand_y) - hole_r - 8, 2 * hole_r, 2 * hole_r + 8)
+            return mask.subtracted(hole)
         return mask
 
     def _advance_frame(self) -> None:
@@ -15388,6 +15803,8 @@ RULES:
     # --------------------------------------------------------------- behaviour
     def _start_walk(self) -> None:
         """Walk for 3-8 s in a random direction (run or wistful walk by chance)."""
+        if self._phase is Phase.WATCHING:
+            return
         if getattr(self, "_is_annoyed_ignored", False):
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
@@ -15462,6 +15879,8 @@ RULES:
         forced       : play exactly this state (used for clicks and the landing).
         roll_special : otherwise roll the dice for a random special / the rare burnt.
         """
+        if self._phase is Phase.WATCHING:
+            return
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
 
@@ -15521,6 +15940,8 @@ RULES:
     def _on_brain_timeout(self) -> None:
         """Behaviour timer: the current walk / pause time is up."""
         if getattr(self, "_hidden_in_tray", False):
+            return
+        if self._phase is Phase.WATCHING:
             return
         if getattr(self, "_is_annoyed_ignored", False):
             self._phase = Phase.PAUSE
@@ -15623,9 +16044,16 @@ RULES:
             self._sync_window_position()
             return
 
+        if self._phase is Phase.WATCHING:
+            self._tick_cinema_watch(now, dt, bounds)
+            self._sync_window_position()
+            return
+
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
-            if now - getattr(self, "_hang_started_at", now) > 15.0:
-                log.warning("Phase.HANG watchdog: hang timed out (>15.0s). Forcing release.")
+            hang_timeout = 90.0 if getattr(self, "_is_taking_over_cursor", False) else 15.0
+            if now - getattr(self, "_hang_started_at", now) > hang_timeout:
+                log.warning("Phase.HANG watchdog: hang timed out (>%.1fs). Forcing release.", hang_timeout)
+                self._is_taking_over_cursor = False
                 self._fall_after_jump(RELEASE_REACTION)
                 return
             self._tick_hang(cursor, now, dt, bounds)
@@ -15925,10 +16353,20 @@ RULES:
             self._stop_overlay()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.dismiss()
+        if hasattr(self, "_target_reticle"):
+            self._target_reticle.dismiss()
+        if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
+            self._desktop_action_worker.abort()
         if hasattr(self, "_window_timer"):
             self._window_timer.stop()
         if hasattr(self, "_screen_comment_timer"):
             self._screen_comment_timer.stop()
+        if hasattr(self, "_cinema_timer"):
+            self._cinema_timer.stop()
+        if hasattr(self, "_cinema_comment_timer"):
+            self._cinema_comment_timer.stop()
         self._last_foreground_hwnd = None
 
         self._brain_timer.stop()
@@ -16098,6 +16536,8 @@ RULES:
             self._window_timer.start()
         if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer") and not self._screen_comment_timer.isActive():
             self._screen_comment_timer.start()
+        if CINEMA_MODE_ENABLED and hasattr(self, "_cinema_timer") and not self._cinema_timer.isActive():
+            self._cinema_timer.start()
         log.info("Pink restored to screen from system tray.")
 
     def _handle_restart_command(self) -> None:
@@ -16776,33 +17216,41 @@ RULES:
         while self._shake_trail and now - self._shake_trail[0][0] > SHAKE_WINDOW_S:
             self._shake_trail.popleft()
 
-        if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
-            log.debug("Hang ended: shaken off")
-            self._record_action("shaken_off", "User shook the mouse cursor violently to shake Pink off", "interaction")
-            self._fall_after_jump(SHAKEN_REACTION)
-            return
-        if now >= self._hang_ends_at or not self._can_hang_from(cursor):
-            log.debug("Hang ended: she let go (%s)",
-                      "time is up" if now >= self._hang_ends_at else "cursor left / too low")
-            self._record_action("released_hang", "Let go of the cursor and dropped back down to the taskbar", "physics")
-            self._fall_after_jump(RELEASE_REACTION)
-            return
-
-        # Check for serial bomb throw attack trigger after hanging for HANG_BOMB_DELAY_S
-        if (self._bomb_attack_enabled
-                and not self._hang_bomb_thrown
-                and (now - self._hang_started_at >= HANG_BOMB_DELAY_S)):
-            self._hang_bomb_thrown = True
-            chance = self._bomb_chance_percent / 100.0
-            if random.random() < chance and self._can_play(THROW_STATE):
-                self._start_hang_bomb_throw(now)
+        if getattr(self, "_is_taking_over_cursor", False):
+            # Poll global ESC / mouse pull OR violent mouse shake at 60 FPS for instant abort!
+            if os_interop.is_panic_key_pressed() or (now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking()):
+                self._abort_desktop_takeover("User pressed ESC or shook the mouse")
                 return
+        else:
+            if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
+                log.debug("Hang ended: shaken off")
+                self._record_action("shaken_off", "User shook the mouse cursor violently to shake Pink off", "interaction")
+                self._fall_after_jump(SHAKEN_REACTION)
+                return
+            if now >= self._hang_ends_at or not self._can_hang_from(cursor):
+                log.debug("Hang ended: she let go (%s)",
+                          "time is up" if now >= self._hang_ends_at else "cursor left / too low")
+                self._record_action("released_hang", "Let go of the cursor and dropped back down to the taskbar", "physics")
+                self._fall_after_jump(RELEASE_REACTION)
+                return
+
+            # Check for serial bomb throw attack trigger after hanging for HANG_BOMB_DELAY_S
+            if (self._bomb_attack_enabled
+                    and not self._hang_bomb_thrown
+                    and (now - self._hang_started_at >= HANG_BOMB_DELAY_S)):
+                self._hang_bomb_thrown = True
+                chance = self._bomb_chance_percent / 100.0
+                if random.random() < chance and self._can_play(THROW_STATE):
+                    self._start_hang_bomb_throw(now)
+                    return
 
         min_x, max_x, min_y, ground_y = bounds
         hand_x, hand_y = self._hand_offset()
+        is_takeover = getattr(self, "_is_taking_over_cursor", False)
+        y_clearance = 8.0 if is_takeover else 0.0
         goal_x = min(max(cursor.x() - hand_x, min_x), max_x)
-        goal_y = min(max(cursor.y() - hand_y, min_y), ground_y)
-        follow = 1.0 if HANG_FOLLOW_SMOOTH_S <= 0.0 else 1.0 - math.exp(-dt / HANG_FOLLOW_SMOOTH_S)
+        goal_y = min(max(cursor.y() - hand_y + y_clearance, min_y), ground_y)
+        follow = 1.0 if (is_takeover or HANG_FOLLOW_SMOOTH_S <= 0.0) else 1.0 - math.exp(-dt / HANG_FOLLOW_SMOOTH_S)
         self._x += (goal_x - self._x) * follow
         self._y += (goal_y - self._y) * follow
 
@@ -17098,6 +17546,8 @@ RULES:
 
             if hasattr(self, "_single_click_timer") and self._single_click_timer.isActive():
                 self._single_click_timer.stop()
+            if self._phase is Phase.WATCHING:
+                self._cinema_last_active_time = time.perf_counter()
             self._dialogue_clicked = False
             self._press_global = event.globalPos()
             self._grab_offset = event.globalPos() - self.pos()
@@ -17176,6 +17626,8 @@ RULES:
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW):
             return
         if event.button() == Qt.LeftButton:
+            if self._phase is Phase.WATCHING:
+                self._cinema_last_active_time = time.perf_counter()
             self._open_chat_input()
             event.accept()
             return
@@ -17290,6 +17742,16 @@ RULES:
     def _on_single_click(self) -> None:
         """Handle single left-click on Pink: randomly play peace_sign, laughing, or shocked without dialogue."""
         if self._is_dialogue_convo_active():
+            return
+        if self._phase is Phase.WATCHING:
+            self._cinema_last_active_time = time.perf_counter()
+            whisper_lines = [
+                ("* Shh! Don't distract me during the movie, mew!", "angry"),
+                ("* Hey! Hands off, minion! The plot is getting good!", "shocked"),
+                ("* Shhhhh! Theater etiquette, dummy!", "behind"),
+            ]
+            line, anim = random.choice(whisper_lines)
+            self._say(line, force=True, step_anim=anim, dialogue_category="cinema_shush", auto_dismiss=True, hold_s=3.0)
             return
         if (self._dragging or self._menu_open
                 or self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
@@ -17542,7 +18004,7 @@ RULES:
                 or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
-                                   Phase.EXIT_OUTRO)
+                                   Phase.EXIT_OUTRO, Phase.WATCHING)
                 or self._post_throw_laugh
                 or getattr(self, "_is_annoyed_ignored", False)):
             return
@@ -17595,7 +18057,8 @@ RULES:
         if getattr(self, "_phase", None) in (
             Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
             Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE,
-            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE
+            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE,
+            Phase.WATCHING
         ):
             return False
         if getattr(self, "_in_angry_spam", False) or (self.state == "angry" and self._repeat_count > 0):
@@ -17666,7 +18129,7 @@ RULES:
                 or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
-                                   Phase.EXIT_OUTRO)
+                                   Phase.EXIT_OUTRO, Phase.WATCHING)
                 or self._post_throw_laugh
                 or getattr(self, "_is_annoyed_ignored", False)):
             return
@@ -17875,6 +18338,11 @@ RULES:
         self._song_comment_action.setChecked(self._ai_song_comment_enabled)
         self._song_comment_action.toggled.connect(self._toggle_ai_song_comment)
 
+        self._cinema_mode_action = tray_menu.addAction("Cinema Mode (Movie Buddy)")
+        self._cinema_mode_action.setCheckable(True)
+        self._cinema_mode_action.setChecked(getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED))
+        self._cinema_mode_action.toggled.connect(self._toggle_cinema_mode)
+
         self._filter_shorts_action = tray_menu.addAction("Filter YouTube Shorts")
         self._filter_shorts_action.setCheckable(True)
         self._filter_shorts_action.setChecked(self._filter_shorts_enabled)
@@ -18055,6 +18523,392 @@ RULES:
         self._set_game_mode(new_mode)
         return new_mode
 
+    # ---------------------------------------------------------------- cinema / video watch mode
+    def _check_cinema_mode(self) -> None:
+        """Periodic check (~1s): evaluate if a video is playing in a maximized or fullscreen window."""
+        if not getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED):
+            if self._phase is Phase.WATCHING:
+                self._exit_cinema_mode()
+            return
+
+        if getattr(self, "_hidden_in_tray", False):
+            return
+        if getattr(self, "_is_annoyed_ignored", False):
+            return
+        if self._dragging or self._menu_open:
+            return
+        if self._phase in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE,
+            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE,
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
+            return
+
+        is_active, video_title, video_hwnd, video_screen = self._detect_maximized_video()
+        now = time.perf_counter()
+
+        if is_active:
+            self._cinema_last_active_time = now
+            if self._phase is not Phase.WATCHING:
+                self._enter_cinema_mode(video_screen, video_title, video_hwnd)
+            else:
+                self._cinema_video_screen = video_screen
+                if video_hwnd:
+                    self._cinema_video_hwnd = video_hwnd
+                if video_title:
+                    self._cinema_video_title = video_title
+        else:
+            if self._phase is Phase.WATCHING:
+                # Grace period before leaving corner to absorb seeking/buffering
+                elapsed = now - getattr(self, "_cinema_last_active_time", now)
+                if elapsed >= CINEMA_UNMAXIMIZE_DEBOUNCE_S:
+                    self._exit_cinema_mode()
+
+    def _detect_maximized_video(self) -> tuple[bool, str, int, QScreen | None]:
+        """Detect whether media/video is actively playing in a maximized or fullscreen window.
+
+        Returns (is_active, title, hwnd, screen).
+        """
+        dll = _user32()
+        if dll is None:
+            return False, "", 0, None
+
+        # 1. Inspect GSMTC media state
+        gsm_info = getattr(self._media_watcher, "get_current_info", lambda: {})() if hasattr(self, "_media_watcher") and self._media_watcher else {}
+        gsm_playing = bool(gsm_info.get("is_playing", False))
+        gsm_pb_type = int(gsm_info.get("playback_type", 0))
+        gsm_title = str(gsm_info.get("title", "") or "").strip()
+
+        # 2. If already watching (Phase.WATCHING), verify if our tracked video window is still alive and playing
+        cur_video_hwnd = getattr(self, "_cinema_video_hwnd", 0)
+        if self._phase is Phase.WATCHING and cur_video_hwnd and dll.IsWindow(cur_video_hwnd):
+            if not dll.IsIconic(cur_video_hwnd):
+                is_max, scr = self._is_window_maximized_or_fullscreen(cur_video_hwnd)
+                if is_max and scr is not None:
+                    # Tracked video window is still maximized/fullscreen on screen!
+                    # Check if the user explicitly PAUSED playback via GSMTC
+                    if gsm_title and not gsm_playing:
+                        # Video was explicitly paused
+                        return False, self._cinema_video_title or gsm_title, cur_video_hwnd, scr
+
+                    # Window is still maximized and not paused!
+                    # Clicking Pink, dialogue overlay, taskbar, or another app does NOT break watching mode.
+                    return True, self._cinema_video_title or gsm_title, cur_video_hwnd, scr
+
+        # 3. Check foreground window (for entering cinema mode or detecting new video)
+        hwnd = dll.GetForegroundWindow()
+        if not hwnd or hwnd == int(self.winId()):
+            hwnd = getattr(self, "_last_foreground_hwnd", 0)
+
+        if not hwnd or not dll.IsWindow(hwnd):
+            return False, "", 0, None
+
+        # Check process name and window title
+        hwnd_val, exe_name, exe_path, win_title, pid = get_window_process_info(hwnd)
+        exe = (exe_name or "").lower().strip()
+        t = (win_title or "").strip()
+        t_lower = t.lower()
+
+        # Exclude Yellow's Pixel Buddies own windows
+        try:
+            if pid and pid == os.getpid():
+                return False, "", 0, None
+        except Exception:
+            pass
+        if "yellow" in exe or "yellows_pixel_buddies" in (exe_path or "").lower():
+            return False, "", 0, None
+
+        # Check if window is maximized or borderless fullscreen
+        is_max, screen = self._is_window_maximized_or_fullscreen(hwnd)
+        if not is_max or screen is None:
+            return False, "", 0, None
+
+        # Case A: Dedicated video player (VLC, MPV, MPC, PotPlayer, etc.)
+        if exe in KNOWN_VIDEO_PLAYERS:
+            media_title = gsm_title or t or exe.removesuffix(".exe").title()
+            return True, media_title, hwnd, screen
+
+        # Case B: Web Browser or Streaming Tab
+        cat, name, detail = identify_active_app_context(exe, exe_path, t)
+        is_video_context = (
+            cat in ("youtube", "twitch", "streaming")
+            or any(k in t_lower for k in ("youtube", "twitch", "netflix", "crunchyroll", "prime video", "disney+", "bilibili", "dailymotion", "vimeo", "movie", "video", "anime"))
+        )
+
+        if is_video_context:
+            if gsm_playing or gsm_pb_type == 2:
+                media_title = detail or gsm_title or t
+                return True, media_title, hwnd, screen
+
+        # Case C: GSMTC explicitly marked as Video (type 2) and actively playing
+        if gsm_playing and gsm_pb_type == 2:
+            media_title = gsm_title or t or "Video"
+            return True, media_title, hwnd, screen
+
+        return False, "", 0, None
+
+    def _is_window_maximized_or_fullscreen(self, hwnd: int) -> tuple[bool, QScreen | None]:
+        """Check if a window handle is maximized (WS_MAXIMIZE) or borderless fullscreen."""
+        dll = _user32()
+        if not dll or not hwnd or not dll.IsWindow(hwnd):
+            return False, None
+
+        # Minimized windows (in taskbar) are never visible fullscreen/maximized
+        if dll.IsIconic(hwnd):
+            return False, None
+
+        # Standard Maximized (WS_MAXIMIZE)
+        if dll.IsZoomed(hwnd):
+            rect = RECT()
+            if dll.GetWindowRect(hwnd, ctypes.byref(rect)):
+                cx = (rect.left + rect.right) // 2
+                cy = (rect.top + rect.bottom) // 2
+                scr = QApplication.screenAt(QPoint(cx, cy))
+                return True, scr or self.screen() or QApplication.primaryScreen()
+            return True, self.screen() or QApplication.primaryScreen()
+
+        # Borderless Fullscreen: window bounds cover an entire screen geometry
+        rect = RECT()
+        if dll.GetWindowRect(hwnd, ctypes.byref(rect)):
+            for screen in QApplication.screens():
+                geo = screen.geometry()
+                if (rect.left <= geo.left() + 4 and rect.top <= geo.top() + 4 and
+                    rect.right >= geo.right() - 4 and rect.bottom >= geo.bottom() - 4):
+                    return True, screen
+
+        return False, None
+
+    def _enter_cinema_mode(self, screen: QScreen | None, video_title: str, video_hwnd: int = 0) -> None:
+        """Enter cinema watching mode: trot to taskbar corner and sit down."""
+        target_screen = screen or self._current_screen()
+        log.info("Entering Cinema Mode on %s for: '%s' (hwnd=%s)",
+                 target_screen.name() if target_screen else "primary", video_title, video_hwnd)
+        self._cinema_video_screen = target_screen
+        self._cinema_video_title = video_title
+        self._cinema_video_hwnd = video_hwnd
+        self._cinema_intro_spoken = False
+        self._brain_timer.stop()
+        self._phase = Phase.WATCHING
+        self._pause_elapsed = False
+        self._last_cinema_comment_time = time.perf_counter()
+        if hasattr(self, "_cinema_comment_timer"):
+            self._cinema_comment_timer.start(int(CINEMA_COMMENT_INTERVAL_S * 1000))
+        self._record_action("cinema_watch_start", f"Headed to the corner to watch '{video_title}'", "behavior")
+
+    def _tick_cinema_watch(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
+        """Handle Pink moving to and resting in the corner during maximized video playback."""
+        target_screen = getattr(self, "_cinema_video_screen", None) or self._current_screen()
+        screen_bounds = self._screen_bounds(target_screen)
+        min_x, max_x, _min_y, ground_y = screen_bounds
+
+        target_x = max_x - (CINEMA_CORNER_PADDING_PX * self._scale_modifier)
+        target_y = ground_y
+
+        dx = target_x - self._x
+        if abs(dx) > 4.0:
+            # Moving to corner
+            speed = RUN_SPEED_PX_S if abs(dx) > 160.0 else WALK_SPEED_PX_S
+            step = speed * dt
+            if dx > 0:
+                self._x += min(dx, step)
+                walk_state = "run_right" if abs(dx) > 160.0 else "walk_right"
+                if self.state != walk_state and self._can_play(walk_state):
+                    self._play(walk_state, loop=True)
+            else:
+                self._x -= min(abs(dx), step)
+                walk_state = "run_left" if abs(dx) > 160.0 else "walk_left"
+                if self.state != walk_state and self._can_play(walk_state):
+                    self._play(walk_state, loop=True)
+            self._y = target_y
+        else:
+            # Arrived in corner: sit down in kneeling pose
+            self._x = target_x
+            self._y = target_y
+            if self.state != "kneeling" and self._can_play("kneeling"):
+                self._play("kneeling", loop=True)
+                if not getattr(self, "_cinema_intro_spoken", False):
+                    self._cinema_intro_spoken = True
+                    line, anim = random.choice(CINEMA_INTRO_LINES)
+                    self._say(line, force=True, step_anim=anim, dialogue_category="cinema_intro",
+                              auto_dismiss=True, hold_s=4.0)
+
+    def _exit_cinema_mode(self) -> None:
+        """Exit cinema watching mode: stand up and resume normal taskbar patrol."""
+        log.info("Exiting Cinema Mode: video ended or window un-maximized.")
+        if hasattr(self, "_cinema_comment_timer"):
+            self._cinema_comment_timer.stop()
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._cinema_video_screen = None
+        self._cinema_video_title = ""
+        self._cinema_video_hwnd = 0
+        self._cinema_intro_spoken = False
+
+        stand_anim = "peace_sign" if self._can_play("peace_sign") else "idle"
+        self._play(stand_anim, loop=False)
+
+        line, anim = random.choice(CINEMA_OUTRO_LINES)
+        self._say(line, force=True, step_anim=anim, dialogue_category="cinema_outro",
+                  auto_dismiss=True, hold_s=4.0)
+
+        self._record_action("cinema_watch_end", "Finished watching video and resumed taskbar pacing", "behavior")
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+
+    def _toggle_cinema_mode(self, enabled: bool) -> None:
+        """Toggle Cinema Mode (Movie Buddy) on or off from tray menu or settings."""
+        self._cinema_mode_enabled = enabled
+        if hasattr(self, "_cinema_mode_action") and self._cinema_mode_action is not None:
+            self._cinema_mode_action.blockSignals(True)
+            self._cinema_mode_action.setChecked(enabled)
+            self._cinema_mode_action.blockSignals(False)
+        self._save_live_settings()
+        if not enabled and self._phase is Phase.WATCHING:
+            self._exit_cinema_mode()
+        log.info("Cinema Mode (Movie Buddy) toggled: %s", "ENABLED" if enabled else "DISABLED")
+
+    def _on_cinema_comment_tick(self) -> None:
+        """Periodic 1-minute timer tick: deliver in-character commentary while watching maximized video."""
+        if self._phase is not Phase.WATCHING:
+            if hasattr(self, "_cinema_comment_timer"):
+                self._cinema_comment_timer.stop()
+            return
+
+        if not getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED):
+            return
+
+        if getattr(self, "_hidden_in_tray", False):
+            return
+
+        if self._is_dialogue_convo_active():
+            return
+
+        # Double-check that video is still actively playing and window is still maximized
+        is_active, video_title, video_hwnd, video_screen = self._detect_maximized_video()
+        if not is_active:
+            return
+
+        self._trigger_cinema_comment(video_title, video_screen)
+
+    def _trigger_cinema_comment(self, video_title: str, video_screen: QScreen | None) -> None:
+        """Generate in-character video commentary via Gemini Vision, falling back to curated retro lines."""
+        now = time.perf_counter()
+        self._last_cinema_comment_time = now
+
+        api_key = self._memory.get_api_key() if hasattr(self, "_memory") and self._memory else ""
+        if not api_key:
+            self._deliver_canned_cinema_comment()
+            return
+
+        if self._gemini_thread is not None and self._gemini_thread.isRunning():
+            log.info("Gemini thread already busy; falling back to canned cinema comment.")
+            self._deliver_canned_cinema_comment()
+            return
+
+        if is_workstation_locked():
+            return
+
+        # Capture video screen snapshot for vision context
+        target_screen = video_screen or self._current_screen() or QApplication.primaryScreen()
+        screenshot_b64 = None
+        current_fp = b""
+        try:
+            # Briefly hide speech overlay so Pink doesn't screenshot her own bubble
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+                self._dialogue_overlay.hide()
+            self.hide()
+            QApplication.processEvents()
+
+            screenshot_b64, current_fp = capture_screen_and_fingerprint(target_screen)
+        except Exception as err:
+            log.warning("Cinema screenshot capture error: %s", err)
+        finally:
+            self.show()
+            ensure_window_topmost(self)
+
+        # Visual delta check: If screen hasn't changed at all (e.g. paused on freeze frame)
+        if self._last_cinema_fingerprint is not None and current_fp:
+            diff = compute_fingerprint_diff(self._last_cinema_fingerprint, current_fp)
+            if diff < 0.025:
+                log.info("Cinema comment skipped: visual delta too low (diff=%.3f); screen static/paused", diff)
+                return
+        if current_fp:
+            self._last_cinema_fingerprint = current_fp
+
+        # Build prompt
+        clean_title = video_title or getattr(self, "_cinema_video_title", "") or "Video"
+        now_dt = datetime.datetime.now()
+        now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
+        system_inst = (
+            f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}.\n\n"
+            "CURRENT PHYSICAL CONTEXT: You are Pink, sitting quietly in the bottom-right corner of the taskbar "
+            f"watching a maximized video titled '{clean_title}' together with your user (minion) like a movie buddy. "
+            "You are observing what is actively playing on screen."
+        )
+
+        cinema_prompt = (
+            f"[Pink is watching the maximized video '{clean_title}' with the user.]\n"
+            "In exactly 1 concise retro sentence starting with '* ' (under 25 words), give an in-character comment, "
+            "critique, witty observation, joke, or sassy reaction about what is currently visible on screen! "
+            "Act observant, opinionated, or secretly hooked on the show. "
+            "Append an emotion tag [anim: ...] using one of: kneeling, shocked, laughing, tongue, wistful, angry, embarrassed, peace_sign."
+        )
+
+        def _on_cinema_response(spoken_text: str, anim: str, is_ghost: bool, seen: str = "") -> None:
+            if self._phase is not Phase.WATCHING:
+                return
+            clean_anim = anim if anim in ALL_STATES else "kneeling"
+            self._say(
+                spoken_text,
+                force=True,
+                step_anim=clean_anim,
+                dialogue_category="cinema_comment",
+                auto_dismiss=True,
+                hold_s=CINEMA_COMMENT_HOLD_S,
+            )
+
+        def _on_cinema_error(err_msg: str) -> None:
+            log.warning("Cinema AI comment failed (%s); falling back to canned line.", err_msg)
+            if self._phase is Phase.WATCHING:
+                self._deliver_canned_cinema_comment()
+
+        try:
+            self._gemini_thread = GeminiWorkerThread(
+                api_key=api_key,
+                user_prompt=cinema_prompt,
+                system_instruction=system_inst,
+                history=[],
+                screenshot_b64=screenshot_b64,
+                model_name=GEMINI_MODEL,
+                is_auto_peek=True,
+                parent=self,
+            )
+            self._gemini_thread.response_ready.connect(
+                lambda text, anim, ghost, seen="": _on_cinema_response(text, anim, ghost, seen)
+            )
+            self._gemini_thread.error_occurred.connect(
+                lambda err: _on_cinema_error(err)
+            )
+            self._gemini_thread.start()
+        except Exception as ex:
+            log.warning("Could not launch Gemini cinema worker: %s", ex)
+            self._deliver_canned_cinema_comment()
+
+    def _deliver_canned_cinema_comment(self) -> None:
+        """Deliver a random in-character movie watching comment from the curated pool."""
+        pool = [line for line in CINEMA_COMMENT_LINES if line[0] != getattr(self, "_last_cinema_canned_line", "")]
+        if not pool:
+            pool = CINEMA_COMMENT_LINES
+        line, anim = random.choice(pool)
+        self._last_cinema_canned_line = line
+        self._say(
+            line,
+            force=True,
+            step_anim=anim,
+            dialogue_category="cinema_comment",
+            auto_dismiss=True,
+            hold_s=CINEMA_COMMENT_HOLD_S,
+        )
+
     def cycle_dialogue_scale(self, direction: int = 1) -> float:
         """Cycle through DIALOGUE_SCALE_PRESETS in forward (1) or backward (-1) direction."""
         current = getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE)
@@ -18154,6 +19008,7 @@ RULES:
                 "dialogue_scale": getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE),
                 "audio_muted": getattr(self, "_audio_muted", True),
                 "sfx_volume": getattr(self, "_sfx_volume", 0.7),
+                "cinema_mode_enabled": getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED),
             }
             self._memory.save_settings(settings)
 
@@ -18373,6 +19228,10 @@ RULES:
             timers.append(self._window_timer)
         if hasattr(self, "_screen_comment_timer"):
             timers.append(self._screen_comment_timer)
+        if hasattr(self, "_cinema_timer"):
+            timers.append(self._cinema_timer)
+        if hasattr(self, "_cinema_comment_timer"):
+            timers.append(self._cinema_comment_timer)
         if hasattr(self, "_tray_screen_timer"):
             timers.append(self._tray_screen_timer)
         if hasattr(self, "_alarm_ticker"):
@@ -18389,6 +19248,14 @@ RULES:
             self._vfx_overlay.close()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.dismiss()
+            self._takeover_banner.close()
+        if hasattr(self, "_target_reticle"):
+            self._target_reticle.dismiss()
+            self._target_reticle.close()
+        if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
+            self._desktop_action_worker.abort()
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
