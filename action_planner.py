@@ -320,6 +320,39 @@ def compute_visual_diff(
         return 100.0, 100.0
 
 
+def _grab_screen_qt(bbox: Optional[Tuple[int, int, int, int]] = None) -> Optional[Image.Image]:
+    """Fallback screen capture using PyQt5 QScreen.grabWindow when PIL ImageGrab fails."""
+    if not HAS_PYQT:
+        return None
+    try:
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import QBuffer, QIODevice
+        app = QApplication.instance() or QApplication([])
+        target_screen = None
+        if bbox:
+            for scr in app.screens():
+                geom = scr.geometry()
+                cx = (bbox[0] + bbox[2]) // 2
+                cy = (bbox[1] + bbox[3]) // 2
+                if geom.contains(cx, cy):
+                    target_screen = scr
+                    break
+        if target_screen is None:
+            target_screen = app.primaryScreen()
+        if target_screen is None:
+            return None
+        pix = target_screen.grabWindow(0)
+        if pix.isNull():
+            return None
+        buf = QBuffer()
+        buf.open(QIODevice.WriteOnly)
+        pix.save(buf, "PNG")
+        return Image.open(io.BytesIO(buf.data()))
+    except Exception as e:
+        log.debug("Qt screen grab fallback failed: %s", e)
+        return None
+
+
 def capture_screen_region(
     bounds: Optional[Tuple[int, int, int, int]] = None,
     max_dimension: int = 1920,
@@ -354,8 +387,13 @@ def capture_screen_region(
             try:
                 img = ImageGrab.grab(bbox=capture_bbox)
             except Exception:
-                img = ImageGrab.grab()
-                offset = (0, 0)
+                try:
+                    img = ImageGrab.grab()
+                    offset = (0, 0)
+                except Exception:
+                    img = _grab_screen_qt(capture_bbox)
+                    if img is None:
+                        raise RuntimeError("Screen grab failed via both PIL and Qt display subsystems.")
 
     orig_w, orig_h = img.size
     _LAST_RAW_SCREENSHOT = img.copy()
