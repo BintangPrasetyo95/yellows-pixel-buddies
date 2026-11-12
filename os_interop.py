@@ -15,7 +15,9 @@ import ctypes
 import logging
 import math
 import os
+import re
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from ctypes import wintypes
@@ -194,9 +196,19 @@ if IS_WINDOWS:
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     try:
+        advapi32 = ctypes.windll.advapi32
+    except Exception:
+        advapi32 = None
+    try:
         dwmapi = ctypes.windll.dwmapi
     except Exception:
         dwmapi = None
+
+    TOKEN_QUERY = 0x0008
+    TokenElevation = 20
+
+    class TOKEN_ELEVATION(ctypes.Structure):
+        _fields_ = [("TokenIsElevated", wintypes.DWORD)]
 
     class MOUSEINPUT(ctypes.Structure):
         _fields_ = [
@@ -324,32 +336,125 @@ class ScreenMetrics:
 
 
 # ---------------------------------------------------------------------------
-# Thread Desktop Context Manager
+# Thread Desktop Management & Elevation Checks
 # ---------------------------------------------------------------------------
 
-@contextmanager
-def ensure_input_desktop() -> Generator[None, None, None]:
-    """Ensure the calling thread is attached to the active user input desktop.
+_THREAD_LOCAL = threading.local()
 
-    On Windows, worker threads or background processes can be assigned to secondary
-    desktops or sandboxes where SendInput and window introspection are denied.
-    Attaching to OpenInputDesktop guarantees full input dispatch authorization.
+
+def attach_worker_desktop() -> bool:
+    """Attach the calling background worker thread to the active user input desktop.
+
+    Should be called once per background worker thread.
+    Returns True if successfully attached or not on Windows/GUI thread,
+    or False if desktop cannot be accessed (e.g. UAC secure desktop or workstation locked).
     """
     if not IS_WINDOWS or not user32:
-        yield
-        return
+        return True
+
+    # Do not call SetThreadDesktop on the Qt main GUI thread
+    if threading.current_thread() is threading.main_thread():
+        return True
+
+    if getattr(_THREAD_LOCAL, "desktop_attached", False):
+        return True
 
     # DESKTOP_ALL = 0x01FF
     desk = user32.OpenInputDesktop(0, False, 0x01FF)
     if not desk:
+        log.warning("Could not open input desktop (UAC secure desktop or workstation locked).")
+        return False
+
+    if user32.SetThreadDesktop(desk):
+        _THREAD_LOCAL.desktop_attached = True
+        _THREAD_LOCAL.desktop_handle = desk
+        return True
+    else:
+        user32.CloseDesktop(desk)
+        return False
+
+
+def detach_worker_desktop() -> None:
+    """Detach thread from input desktop and close desktop handle."""
+    desk = getattr(_THREAD_LOCAL, "desktop_handle", None)
+    if desk and IS_WINDOWS and user32:
+        try:
+            user32.CloseDesktop(desk)
+        except Exception:
+            pass
+    _THREAD_LOCAL.desktop_attached = False
+    _THREAD_LOCAL.desktop_handle = None
+
+
+@contextmanager
+def ensure_input_desktop() -> Generator[None, None, None]:
+    """Context manager ensuring calling thread is attached to input desktop without per-call churn."""
+    if not IS_WINDOWS or not user32:
         yield
         return
 
-    try:
-        user32.SetThreadDesktop(desk)
+    # If on main thread or already attached, yield directly without churn
+    if threading.current_thread() is threading.main_thread() or getattr(_THREAD_LOCAL, "desktop_attached", False):
         yield
+        return
+
+    # Background thread not yet attached: attach once and cache
+    attach_worker_desktop()
+    yield
+
+
+def is_window_elevated(hwnd: int) -> Tuple[bool, str]:
+    """Check if the process owning the window is running with elevated (Administrator) privileges.
+
+    Returns:
+        (is_elevated, reason_or_token_description)
+    """
+    if not IS_WINDOWS or not user32 or not kernel32 or not advapi32:
+        return False, "Non-Windows or missing Win32 APIs"
+
+    if not user32.IsWindow(hwnd):
+        return False, "Invalid window handle"
+
+    pid = wintypes.DWORD(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if pid.value <= 0:
+        return False, "No valid PID associated with window"
+
+    # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not h_proc:
+        err = ctypes.GetLastError()
+        # 5 = ERROR_ACCESS_DENIED: Standard-integrity processes cannot open elevated/protected processes
+        if err == 5:
+            return True, "Access denied opening process (likely elevated/protected Administrator window)"
+        return False, f"Failed to open process (error {err})"
+
+    h_token = wintypes.HANDLE()
+    try:
+        if not advapi32.OpenProcessToken(h_proc, TOKEN_QUERY, ctypes.byref(h_token)):
+            err = ctypes.GetLastError()
+            if err == 5:
+                return True, "Access denied opening process token (likely elevated/protected Administrator window)"
+            return False, f"Failed to open process token (error {err})"
+
+        elevation = TOKEN_ELEVATION()
+        ret_len = wintypes.DWORD(0)
+        if advapi32.GetTokenInformation(
+            h_token,
+            TokenElevation,
+            ctypes.byref(elevation),
+            ctypes.sizeof(elevation),
+            ctypes.byref(ret_len),
+        ):
+            is_elevated = bool(elevation.TokenIsElevated != 0)
+            reason = "Process has elevated Administrator token" if is_elevated else "Standard non-elevated user token"
+            return is_elevated, reason
+
+        return False, "Failed to query TokenElevation"
     finally:
-        user32.CloseDesktop(desk)
+        if h_token:
+            kernel32.CloseHandle(h_token)
+        kernel32.CloseHandle(h_proc)
 
 
 # ---------------------------------------------------------------------------
@@ -550,11 +655,9 @@ APP_SEARCH_ALIASES = {
 
 
 def find_window(query: str, app_name: Optional[str] = None, exact: bool = False) -> Optional[WindowInfo]:
-    """Find the best matching window by title substring, alias, or process executable name.
+    """Find the best matching window using exact matching, process names, aliases, or word-boundary title search.
 
-    Example:
-        find_window("WhatsApp")
-        find_window("", app_name="chrome.exe")
+    Avoids false positives (e.g. 'word' matching 'Password Manager' or 'edge' matching 'Knowledge Base').
     """
     q_lower = query.strip().lower()
     app_lower = app_name.strip().lower() if app_name else None
@@ -565,30 +668,50 @@ def find_window(query: str, app_name: Optional[str] = None, exact: bool = False)
     for w in candidates:
         if exact and w.title == query:
             return w
+        if not exact and w.title.strip().lower() == q_lower:
+            return w
 
-    # 2. Case-insensitive substring in title
-    if q_lower:
-        for w in candidates:
-            if q_lower in w.title.lower():
-                return w
-
-    # 3. Process name match
+    # 2. Exact process name match (e.g. 'chrome.exe' or 'notepad')
     if app_lower:
         for w in candidates:
-            if app_lower in w.process_name.lower():
+            if w.process_name.lower() == app_lower or w.process_name.lower() == f"{app_lower}.exe":
                 return w
-
-    # 4. Partial substring in process name using query
     if q_lower:
         for w in candidates:
-            if q_lower in w.process_name.lower():
+            if w.process_name.lower() == q_lower or w.process_name.lower() == f"{q_lower}.exe":
                 return w
 
-    # 5. Alias lookup (e.g. "vscode" -> "Visual Studio Code" / "code.exe")
+    # 3. Known application search aliases (prioritizing process name, then word-boundary title)
     alias_terms = APP_SEARCH_ALIASES.get(q_lower, ())
     for term in alias_terms:
+        # Check process name first
         for w in candidates:
-            if term in w.title.lower() or term in w.process_name.lower():
+            if term.endswith(".exe") and w.process_name.lower() == term:
+                return w
+        # Check title using word boundaries
+        term_clean = re.sub(r"\.exe$", "", term)
+        for w in candidates:
+            if re.search(r"\b" + re.escape(term_clean) + r"\b", w.title, re.IGNORECASE):
+                return w
+
+    # 4. Word-boundary search in title (e.g. 'word' matches 'Document - Word' but NOT 'Password Manager')
+    if q_lower:
+        word_pattern = r"\b" + re.escape(q_lower) + r"\b"
+        for w in candidates:
+            if re.search(word_pattern, w.title, re.IGNORECASE):
+                return w
+
+    # 5. Process name prefix or word-boundary match (e.g. 'code' matches 'code.exe' or 'code-oss.exe', but 'word' never matches 'password.exe')
+    if q_lower:
+        for w in candidates:
+            proc_base = re.sub(r"\.exe$", "", w.process_name.lower())
+            if proc_base.startswith(q_lower) or re.search(r"(?:^|[_\-\.])" + re.escape(q_lower) + r"(?:$|[_\-\.])", proc_base):
+                return w
+
+    # 6. Fallback: loose substring in title ONLY if query is at least 5 characters long
+    if q_lower and len(q_lower) >= 5:
+        for w in candidates:
+            if q_lower in w.title.lower():
                 return w
 
     return None
@@ -1050,8 +1173,20 @@ def press_key(key: str, duration_s: float = 0.04) -> bool:
 
 
 def hotkey(*keys: str, interval_s: float = 0.04) -> bool:
-    """Press a key combination in order, then release in reverse order (e.g. 'ctrl', 'c')."""
+    """Press a key combination in order, then release in reverse order (e.g. 'ctrl', 'c').
+
+    Validates all keys before pressing any to prevent stuck modifiers on invalid key names.
+    """
     check_emergency_abort()
+    if not keys:
+        return False
+
+    # Validate all keys before pressing any modifiers
+    for k in keys:
+        if _resolve_vk(k) is None:
+            log.warning("Unknown key '%s' in hotkey combo %s; skipping execution to avoid stuck modifier keys.", k, keys)
+            return False
+
     pressed: List[str] = []
     has_esc = False
     try:
@@ -1070,6 +1205,16 @@ def hotkey(*keys: str, interval_s: float = 0.04) -> bool:
             # Swallow/clear transition state resulting from our own injected Escape key
             user32.GetAsyncKeyState(VK_ESCAPE)
     return True
+
+
+def _send_input_batch(inputs_list: List[INPUT]) -> bool:
+    """Dispatch a batch of INPUT structs atomically via a single Win32 SendInput call."""
+    if not IS_WINDOWS or not user32 or not inputs_list:
+        return False
+    count = len(inputs_list)
+    input_array = (INPUT * count)(*inputs_list)
+    sent = user32.SendInput(count, input_array, ctypes.sizeof(INPUT))
+    return sent == count
 
 
 def send_unicode_char(char: str) -> bool:
@@ -1098,25 +1243,113 @@ def type_text(
     text: str,
     delay_between_chars_s: float = 0.015,
     abort_check: Optional[Callable[[], bool]] = None,
+    chunk_size: int = 25,
+    use_shift_enter: bool = False,
+    expected_hwnd: Optional[int] = None,
 ) -> bool:
-    """Type out a string naturally using hardware-level Unicode injection.
+    """Type out a string using chunked atomic SendInput Unicode injection.
 
-    Respects panic aborts and handles newlines, emojis, and symbols.
+    Batches characters into atomic chunks (default 25 chars) to prevent physical
+    user keystrokes from interleaving, while checking for panic aborts and window focus
+    changes between chunks. Supports Shift+Enter for multiline text in chat apps.
     """
-    for ch in text:
+    if not text:
+        return True
+
+    # Break text into chunks of chunk_size characters
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+    for chunk in chunks:
         check_emergency_abort()
         if abort_check and abort_check():
             raise EmergencyAbortError("Typing canceled by custom abort check.")
 
-        if ch == "\n":
-            press_key("enter")
-        elif ch == "\t":
-            press_key("tab")
-        else:
-            send_unicode_char(ch)
+        # Guard: verify target window has not lost foreground focus
+        if expected_hwnd is not None and IS_WINDOWS and user32:
+            fg = user32.GetForegroundWindow()
+            if fg != expected_hwnd:
+                log.warning("Foreground window changed from %s to %s during typing; canceling.", expected_hwnd, fg)
+                raise EmergencyAbortError("Typing canceled: target window lost foreground focus.")
 
-        if delay_between_chars_s > 0:
-            time.sleep(delay_between_chars_s)
+        # Build atomic INPUT list for this chunk
+        inputs_list: List[INPUT] = []
+        for ch in chunk:
+            if ch == "\n":
+                if use_shift_enter:
+                    # Shift down
+                    inp_s_dn = INPUT()
+                    inp_s_dn.type = INPUT_KEYBOARD
+                    inp_s_dn.u.ki.wVk = VK_SHIFT
+                    inputs_list.append(inp_s_dn)
+
+                    # Enter down
+                    inp_e_dn = INPUT()
+                    inp_e_dn.type = INPUT_KEYBOARD
+                    inp_e_dn.u.ki.wVk = VK_RETURN
+                    inputs_list.append(inp_e_dn)
+
+                    # Enter up
+                    inp_e_up = INPUT()
+                    inp_e_up.type = INPUT_KEYBOARD
+                    inp_e_up.u.ki.wVk = VK_RETURN
+                    inp_e_up.u.ki.dwFlags = KEYEVENTF_KEYUP
+                    inputs_list.append(inp_e_up)
+
+                    # Shift up
+                    inp_s_up = INPUT()
+                    inp_s_up.type = INPUT_KEYBOARD
+                    inp_s_up.u.ki.wVk = VK_SHIFT
+                    inp_s_up.u.ki.dwFlags = KEYEVENTF_KEYUP
+                    inputs_list.append(inp_s_up)
+                else:
+                    inp_e_dn = INPUT()
+                    inp_e_dn.type = INPUT_KEYBOARD
+                    inp_e_dn.u.ki.wVk = VK_RETURN
+                    inputs_list.append(inp_e_dn)
+
+                    inp_e_up = INPUT()
+                    inp_e_up.type = INPUT_KEYBOARD
+                    inp_e_up.u.ki.wVk = VK_RETURN
+                    inp_e_up.u.ki.dwFlags = KEYEVENTF_KEYUP
+                    inputs_list.append(inp_e_up)
+            elif ch == "\t":
+                inp_t_dn = INPUT()
+                inp_t_dn.type = INPUT_KEYBOARD
+                inp_t_dn.u.ki.wVk = VK_TAB
+                inputs_list.append(inp_t_dn)
+
+                inp_t_up = INPUT()
+                inp_t_up.type = INPUT_KEYBOARD
+                inp_t_up.u.ki.wVk = VK_TAB
+                inp_t_up.u.ki.dwFlags = KEYEVENTF_KEYUP
+                inputs_list.append(inp_t_up)
+            else:
+                utf16_bytes = ch.encode("utf-16-le")
+                words = [
+                    int.from_bytes(utf16_bytes[i:i + 2], byteorder="little")
+                    for i in range(0, len(utf16_bytes), 2)
+                ]
+                for w in words:
+                    inp_dn = INPUT()
+                    inp_dn.type = INPUT_KEYBOARD
+                    inp_dn.u.ki.wVk = 0
+                    inp_dn.u.ki.wScan = w
+                    inp_dn.u.ki.dwFlags = KEYEVENTF_UNICODE
+                    inputs_list.append(inp_dn)
+
+                    inp_up = INPUT()
+                    inp_up.type = INPUT_KEYBOARD
+                    inp_up.u.ki.wVk = 0
+                    inp_up.u.ki.wScan = w
+                    inp_up.u.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+                    inputs_list.append(inp_up)
+
+        if inputs_list:
+            _send_input_batch(inputs_list)
+
+        # Brief delay between chunks to let target app message queue process input
+        if len(chunks) > 1:
+            time.sleep(max(0.02, delay_between_chars_s * min(len(chunk), 5)))
 
     return True
 

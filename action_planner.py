@@ -874,6 +874,14 @@ class DesktopActionExecutor:
                 else:
                     win = os_interop.find_window(plan.target_app)
                     if win:
+                        is_elev, reason = os_interop.is_window_elevated(win.hwnd)
+                        if is_elev:
+                            log.warning("Target window '%s' [%s] is elevated: %s", win.title, win.process_name, reason)
+                            plan.is_finished = True
+                            plan.success = False
+                            plan.outcome_state = "failed"
+                            plan.summary_message = f"Cannot control '{win.title}' (Administrator / elevated window)."
+                            return False
                         log.info("Pre-focusing existing window for '%s': '%s' [%s]", plan.target_app, win.title, win.process_name)
                         os_interop.focus_window(win.hwnd)
                         focused_existing_app = True
@@ -1332,6 +1340,10 @@ class DesktopActionExecutor:
         if a_type == "focus_window":
             win = os_interop.find_window(step.target)
             if win:
+                is_elev, reason = os_interop.is_window_elevated(win.hwnd)
+                if is_elev:
+                    log.warning("Window '%s' [%s] is elevated: %s", win.title, win.process_name, reason)
+                    return f"FAILED: Window '{win.title}' is running as Administrator (UIPI restricted)"
                 os_interop.focus_window(win.hwnd)
                 return f"Focused window '{win.title}' [{win.process_name}]"
             win = os_interop.launch_or_focus(step.target, use_start_menu=True)
@@ -1340,6 +1352,14 @@ class DesktopActionExecutor:
             return f"Attempted to launch '{step.target}' via Start Menu"
 
         if a_type in ("click", "double_click", "right_click", "click_and_type"):
+            # Check for elevated foreground window to prevent UIPI silent drop
+            curr_fg = os_interop.get_foreground_window()
+            if curr_fg:
+                is_elev, reason = os_interop.is_window_elevated(curr_fg.hwnd)
+                if is_elev:
+                    log.warning("Foreground window '%s' [%s] is elevated: %s", curr_fg.title, curr_fg.process_name, reason)
+                    return f"FAILED: Target window '{curr_fg.title}' is running as Administrator (UIPI restricted)"
+
             target_coords = step.coordinates
             if target_coords is None and step.target:
                 # Try one explicit grounding call for the target element
@@ -1385,7 +1405,17 @@ class DesktopActionExecutor:
                 if step.text:
                     if on_pink_action:
                         on_pink_action("typing", (cx, cy))
-                    os_interop.type_text(step.text, delay_between_chars_s=0.016)
+                    proc_l = curr_fg.process_name.lower() if curr_fg else ""
+                    tgt_l = (step.target or "").lower()
+                    is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
+                    is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
+                    expected_hwnd = curr_fg.hwnd if curr_fg else None
+                    os_interop.type_text(
+                        step.text,
+                        delay_between_chars_s=0.016,
+                        use_shift_enter=is_chat,
+                        expected_hwnd=expected_hwnd,
+                    )
                 if step.press_enter:
                     time.sleep(0.08)
                     os_interop.press_key("enter")
@@ -1397,6 +1427,13 @@ class DesktopActionExecutor:
             return f"Clicked '{step.target}' at ({cx}, {cy})"
 
         if a_type == "type_text":
+            curr_fg = os_interop.get_foreground_window()
+            if curr_fg:
+                is_elev, reason = os_interop.is_window_elevated(curr_fg.hwnd)
+                if is_elev:
+                    log.warning("Foreground window '%s' [%s] is elevated: %s", curr_fg.title, curr_fg.process_name, reason)
+                    return f"FAILED: Target window '{curr_fg.title}' is running as Administrator (UIPI restricted)"
+
             # If the model also provided box_2d on type_text, click it first to be safe!
             if step.coordinates:
                 cx, cy = step.coordinates
@@ -1415,7 +1452,17 @@ class DesktopActionExecutor:
             if step.text:
                 if on_pink_action:
                     on_pink_action("typing", step.coordinates)
-                os_interop.type_text(step.text, delay_between_chars_s=0.016)
+                proc_l = curr_fg.process_name.lower() if curr_fg else ""
+                tgt_l = (step.target or "").lower()
+                is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
+                is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
+                expected_hwnd = curr_fg.hwnd if curr_fg else None
+                os_interop.type_text(
+                    step.text,
+                    delay_between_chars_s=0.016,
+                    use_shift_enter=is_chat,
+                    expected_hwnd=expected_hwnd,
+                )
 
             if step.press_enter:
                 time.sleep(0.08)
@@ -1564,44 +1611,55 @@ if HAS_PYQT:
             self.deliver_confirmation(False)
 
         def run(self) -> None:
-            def on_start(idx: int, step: ActionStep) -> None:
-                self.sig_step_started.emit(idx, step.action_type, step.target)
+            if not os_interop.attach_worker_desktop():
+                self.plan.is_finished = True
+                self.plan.success = False
+                self.plan.outcome_state = "failed"
+                self.plan.summary_message = "Windows input desktop unavailable (UAC or lock screen active)."
+                self.sig_plan_finished.emit(False, self.plan.summary_message)
+                return
 
-            def on_pink(anim: str, coords: Optional[Tuple[int, int]]) -> None:
-                cx = coords[0] if coords else 0
-                cy = coords[1] if coords else 0
-                self.sig_pink_action.emit(anim, cx, cy)
+            try:
+                def on_start(idx: int, step: ActionStep) -> None:
+                    self.sig_step_started.emit(idx, step.action_type, step.target)
 
-            def on_complete(idx: int, step: ActionStep) -> None:
-                self.sig_step_completed.emit(idx, step.action_type)
+                def on_pink(anim: str, coords: Optional[Tuple[int, int]]) -> None:
+                    cx = coords[0] if coords else 0
+                    cy = coords[1] if coords else 0
+                    self.sig_pink_action.emit(anim, cx, cy)
 
-            def on_confirm(step: ActionStep, win_title: str, proc_name: str) -> bool:
-                self._confirm_result = False
-                self._confirm_event = threading.Event()
-                self.sig_confirm_action.emit(
-                    step.action_type,
-                    step.target or "",
-                    step.text or "",
-                    win_title,
-                    proc_name,
+                def on_complete(idx: int, step: ActionStep) -> None:
+                    self.sig_step_completed.emit(idx, step.action_type)
+
+                def on_confirm(step: ActionStep, win_title: str, proc_name: str) -> bool:
+                    self._confirm_result = False
+                    self._confirm_event = threading.Event()
+                    self.sig_confirm_action.emit(
+                        step.action_type,
+                        step.target or "",
+                        step.text or "",
+                        win_title,
+                        proc_name,
+                    )
+                    waited = 0.0
+                    while waited < 25.0:
+                        if self.executor._is_aborted or os_interop.is_panic_key_pressed():
+                            return False
+                        if self._confirm_event.wait(timeout=0.2):
+                            break
+                        waited += 0.2
+                    return self._confirm_result
+
+                success = self.executor.execute_plan(
+                    self.plan,
+                    on_step_start=on_start,
+                    on_pink_action=on_pink,
+                    on_step_complete=on_complete,
+                    on_confirm_action=on_confirm,
                 )
-                waited = 0.0
-                while waited < 25.0:
-                    if self.executor._is_aborted or os_interop.is_panic_key_pressed():
-                        return False
-                    if self._confirm_event.wait(timeout=0.2):
-                        break
-                    waited += 0.2
-                return self._confirm_result
-
-            success = self.executor.execute_plan(
-                self.plan,
-                on_step_start=on_start,
-                on_pink_action=on_pink,
-                on_step_complete=on_complete,
-                on_confirm_action=on_confirm,
-            )
-            msg = self.plan.summary_message if self.plan.summary_message else (
-                "Task completed." if success else "Action aborted or failed."
-            )
-            self.sig_plan_finished.emit(success, msg)
+                msg = self.plan.summary_message if self.plan.summary_message else (
+                    "Task completed." if success else "Action aborted or failed."
+                )
+                self.sig_plan_finished.emit(success, msg)
+            finally:
+                os_interop.detach_worker_desktop()
