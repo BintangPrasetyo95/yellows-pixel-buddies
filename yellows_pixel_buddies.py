@@ -623,6 +623,25 @@ GAME_SCREEN_STATIC_BACKOFF_S = 75.0      # Backoff if game screen is static (pau
 GAME_DIFF_THRESHOLD = 0.035              # 3.5% visual delta threshold in games
 GAME_DIALOGUE_HOLD_S = 5.0               # Snappy auto-dismiss so speech bubbles don't block gameplay HUD
 
+# --- Cinema / Movie Buddy Mode (Video Watching) ------------------------------
+CINEMA_MODE_ENABLED = True               # Enable Pink sitting in the corner during maximized video playback
+CINEMA_CHECK_INTERVAL_MS = 1000          # Poll video and window state every 1 second
+CINEMA_CORNER_PADDING_PX = 16.0          # Logical px margin from the right edge of the screen
+CINEMA_UNMAXIMIZE_DEBOUNCE_S = 2.5       # Grace period (s) before leaving corner if video pauses or unmaximizes temporarily
+KNOWN_VIDEO_PLAYERS = {
+    "vlc.exe", "mpv.exe", "mpc-hc.exe", "mpc-hc64.exe", "potplayer.exe",
+    "potplayer64.exe", "wmplayer.exe", "kmplayer.exe", "gom.exe", "movies.exe",
+}
+CINEMA_INTRO_LINES = [
+    ("* Popcorn ready! I'm watching with you, mew!", "kneeling"),
+    ("* (Quietly tucks paws into the corner to watch...)", "kneeling"),
+    ("* Don't you dare talk over the movie, minion!", "kneeling"),
+]
+CINEMA_OUTRO_LINES = [
+    ("* Finally pausing? My paws were starting to fall asleep, mew!", "peace_sign"),
+    ("* That's it? Hmph, back to patrolling my domain!", "idle"),
+]
+
 KNOWN_GAME_PLATFORM_PATHS = (
     r"\steamapps\common",
     r"\epic games",
@@ -2653,6 +2672,7 @@ class Phase(Enum):
     EXIT_OUTRO = auto()       # runs to furthest screen edge and quits when offscreen
     TRAY_HIDE = auto()        # leaping into system tray corner/icon
     TRAY_RESTORE = auto()     # leaping out from system tray corner/icon back onto taskbar
+    WATCHING = auto()         # sitting quietly in the corner watching maximized video
 
 
 class VfxOverlay(QWidget):
@@ -4266,6 +4286,15 @@ class ChatInputOverlay(QWidget):
         self._timeout_timer.stop()
         self.clear_attachment()
         super().closeEvent(event)
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
 
 
 class LASTINPUTINFO(ctypes.Structure):
@@ -9665,6 +9694,25 @@ class MediaWatcher(QThread):
         self._last_playing = False
         self._filter_shorts = filter_shorts
         self._current_duration_s: float = 0.0
+        self._current_playback_type: int = 0
+        self._current_source_app_id: str = ""
+        self._current_title: str = ""
+        self._current_artist: str = ""
+
+    def is_playing(self) -> bool:
+        """Thread-safe query whether system media playback is actively running."""
+        return self._last_playing
+
+    def get_current_info(self) -> dict:
+        """Return a snapshot dictionary of current media playback state."""
+        return {
+            "is_playing": self._last_playing,
+            "title": self._current_title,
+            "artist": self._current_artist,
+            "playback_type": self._current_playback_type,
+            "source_app_id": self._current_source_app_id,
+            "duration_s": self._current_duration_s,
+        }
 
     def set_filter_shorts(self, enabled: bool) -> None:
         self._filter_shorts = enabled
@@ -9695,16 +9743,29 @@ class MediaWatcher(QThread):
             try:
                 sess = mgr.get_current_session()
                 if sess is None:
-                    return None, False, False, 0.0
+                    return None, False, False, 0.0, 0, ""
                 pb = sess.get_playback_info()
                 is_playing = (pb is not None and pb.playback_status == PlaybackStatus.PLAYING)
                 if not is_playing:
-                    return None, False, False, 0.0
+                    return None, False, False, 0.0, 0, ""
                 props = await sess.try_get_media_properties_async()
                 if props is None:
-                    return None, False, False, 0.0
+                    return None, False, False, 0.0, 0, ""
                 title = props.title.strip() if props.title else ""
                 artist = props.artist.strip() if props.artist else ""
+
+                source_id = ""
+                try:
+                    source_id = (sess.source_app_user_model_id or "").lower()
+                except Exception:
+                    pass
+
+                pb_type = 0
+                try:
+                    if hasattr(props, "playback_type") and props.playback_type is not None:
+                        pb_type = int(props.playback_type.value if hasattr(props.playback_type, "value") else props.playback_type)
+                except Exception:
+                    pb_type = 0
 
                 is_short = False
                 dur_s = 0.0
@@ -9724,17 +9785,16 @@ class MediaWatcher(QThread):
                             is_short = True
                         else:
                             try:
-                                source_id = (sess.source_app_user_model_id or "").lower()
                                 if any(b in source_id for b in BROWSER_APP_IDS):
                                     if 0.0 < dur_s <= SHORTS_MAX_DURATION_S:
                                         is_short = True
                             except Exception as e:
                                 log.debug("GSMTC source_id check error: %s", e)
 
-                return (title, artist), True, is_short, dur_s
+                return (title, artist), True, is_short, dur_s, pb_type, source_id
             except Exception as ex:
                 log.debug("GSMTC poll error: %s", ex)
-                return None, False, False, 0.0
+                return None, False, False, 0.0, 0, ""
 
         try:
             mgr = loop.run_until_complete(_get_manager())
@@ -9744,24 +9804,31 @@ class MediaWatcher(QThread):
                     mgr = loop.run_until_complete(_get_manager())
                     continue
 
-                track, is_playing, is_short, dur_s = loop.run_until_complete(_check_session(mgr))
+                track, is_playing, is_short, dur_s, pb_type, source_id = loop.run_until_complete(_check_session(mgr))
                 self._current_duration_s = dur_s
-                if is_playing and track and track[0]:
-                    if is_short:
-                        if track != self._last_track_id:
-                            self._last_track_id = track
-                            min_threshold = SONG_MIN_DURATION_S if (0.0 < dur_s < SONG_MIN_DURATION_S) else SHORTS_MAX_DURATION_S
-                            log.info("Ignoring short audio / track playback (<%.0fs): '%s' by '%s' (duration: %.1fs)",
-                                     min_threshold, track[0], track[1] or "Unknown", dur_s)
-                        self._last_playing = True
-                    else:
-                        if track != self._last_track_id:
-                            self._last_track_id = track
-                            self._last_playing = True
-                            self.song_started.emit(track[0], track[1])
+                self._current_playback_type = pb_type
+                self._current_source_app_id = source_id
+                self._current_title = track[0] if track else ""
+                self._current_artist = track[1] if track else ""
+
+                if is_playing:
+                    self._last_playing = True
+                    if track and track[0]:
+                        if is_short:
+                            if track != self._last_track_id:
+                                self._last_track_id = track
+                                min_threshold = SONG_MIN_DURATION_S if (0.0 < dur_s < SONG_MIN_DURATION_S) else SHORTS_MAX_DURATION_S
+                                log.info("Ignoring short audio / track playback (<%.0fs): '%s' by '%s' (duration: %.1fs)",
+                                         min_threshold, track[0], track[1] or "Unknown", dur_s)
                         else:
-                            self._last_playing = True
+                            if track != self._last_track_id:
+                                self._last_track_id = track
+                                self.song_started.emit(track[0], track[1])
                 else:
+                    self._current_playback_type = 0
+                    self._current_source_app_id = ""
+                    self._current_title = ""
+                    self._current_artist = ""
                     if self._last_playing:
                         self._last_playing = False
                         self.song_ended.emit()
@@ -10987,6 +11054,18 @@ class YellowsPixelBuddies(QWidget):
             self._window_timer.setInterval(REACT_POLL_INTERVAL_MS)
             self._window_timer.timeout.connect(self._check_foreground_window)
 
+        # --- cinema / movie buddy mode ----------------------------------------
+        self._cinema_mode_enabled: bool = bool(saved_settings.get("cinema_mode_enabled", CINEMA_MODE_ENABLED))
+        self._cinema_video_screen: QScreen | None = None
+        self._cinema_video_title: str = ""
+        self._cinema_last_active_time: float = 0.0
+        self._cinema_intro_spoken: bool = False
+
+        if CINEMA_MODE_ENABLED:
+            self._cinema_timer = QTimer(self)
+            self._cinema_timer.setInterval(CINEMA_CHECK_INTERVAL_MS)
+            self._cinema_timer.timeout.connect(self._check_cinema_mode)
+
         # --- system tray icon (hidden icons menu on taskbar) ------------------
         self._tray_icon: QSystemTrayIcon | None = None
         self._startup_action: QAction | None = None
@@ -11085,6 +11164,9 @@ class YellowsPixelBuddies(QWidget):
 
         if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer"):
             self._screen_comment_timer.start()
+
+        if CINEMA_MODE_ENABLED and hasattr(self, "_cinema_timer"):
+            self._cinema_timer.start()
 
         if hasattr(self, "_goal_ritual_timer"):
             self._goal_ritual_timer.start()
@@ -11421,6 +11503,9 @@ class YellowsPixelBuddies(QWidget):
             return f"Jumping into the system tray on {scr_name}"
         if phase is Phase.TRAY_RESTORE:
             return f"Jumping out from the system tray on {scr_name}"
+        if phase is Phase.WATCHING:
+            v_title = getattr(self, "_cinema_video_title", "")
+            return f"Sitting quietly in the corner watching '{v_title or 'maximized video'}' on {scr_name}"
         if phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO) or state == GHOST_STATE:
             return f"Hiding inside the taskbar with ghost ears poking out on {scr_name}"
 
@@ -15663,6 +15748,8 @@ RULES:
     # --------------------------------------------------------------- behaviour
     def _start_walk(self) -> None:
         """Walk for 3-8 s in a random direction (run or wistful walk by chance)."""
+        if self._phase is Phase.WATCHING:
+            return
         if getattr(self, "_is_annoyed_ignored", False):
             self._phase = Phase.PAUSE
             self._pause_elapsed = False
@@ -15737,6 +15824,8 @@ RULES:
         forced       : play exactly this state (used for clicks and the landing).
         roll_special : otherwise roll the dice for a random special / the rare burnt.
         """
+        if self._phase is Phase.WATCHING:
+            return
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
 
@@ -15796,6 +15885,8 @@ RULES:
     def _on_brain_timeout(self) -> None:
         """Behaviour timer: the current walk / pause time is up."""
         if getattr(self, "_hidden_in_tray", False):
+            return
+        if self._phase is Phase.WATCHING:
             return
         if getattr(self, "_is_annoyed_ignored", False):
             self._phase = Phase.PAUSE
@@ -15895,6 +15986,11 @@ RULES:
 
         if self._phase is Phase.TRAY_RESTORE:
             self._tick_tray_restore(now, dt, bounds)
+            self._sync_window_position()
+            return
+
+        if self._phase is Phase.WATCHING:
+            self._tick_cinema_watch(now, dt, bounds)
             self._sync_window_position()
             return
 
@@ -16212,6 +16308,8 @@ RULES:
             self._window_timer.stop()
         if hasattr(self, "_screen_comment_timer"):
             self._screen_comment_timer.stop()
+        if hasattr(self, "_cinema_timer"):
+            self._cinema_timer.stop()
         self._last_foreground_hwnd = None
 
         self._brain_timer.stop()
@@ -16381,6 +16479,8 @@ RULES:
             self._window_timer.start()
         if AUTO_SCREEN_COMMENT_ENABLED and hasattr(self, "_screen_comment_timer") and not self._screen_comment_timer.isActive():
             self._screen_comment_timer.start()
+        if CINEMA_MODE_ENABLED and hasattr(self, "_cinema_timer") and not self._cinema_timer.isActive():
+            self._cinema_timer.start()
         log.info("Pink restored to screen from system tray.")
 
     def _handle_restart_command(self) -> None:
@@ -17886,7 +17986,8 @@ RULES:
         if getattr(self, "_phase", None) in (
             Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
             Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE,
-            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE
+            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE,
+            Phase.WATCHING
         ):
             return False
         if getattr(self, "_in_angry_spam", False) or (self.state == "angry" and self._repeat_count > 0):
@@ -18346,6 +18447,203 @@ RULES:
         self._set_game_mode(new_mode)
         return new_mode
 
+    # ---------------------------------------------------------------- cinema / video watch mode
+    def _check_cinema_mode(self) -> None:
+        """Periodic check (~1s): evaluate if a video is playing in a maximized or fullscreen window."""
+        if not getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED):
+            if self._phase is Phase.WATCHING:
+                self._exit_cinema_mode()
+            return
+
+        if getattr(self, "_hidden_in_tray", False):
+            return
+        if getattr(self, "_is_annoyed_ignored", False):
+            return
+        if self._dragging or self._menu_open:
+            return
+        if self._phase in (
+            Phase.HIDE_PEEK, Phase.HIDE_OUTRO, Phase.SUMMON_DIALOGUE,
+            Phase.SUMMON_INTRO, Phase.EXIT_OUTRO, Phase.TRAY_HIDE, Phase.TRAY_RESTORE,
+            Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
+        ):
+            return
+
+        is_active, video_title, video_hwnd, video_screen = self._detect_maximized_video()
+        now = time.perf_counter()
+
+        if is_active:
+            self._cinema_last_active_time = now
+            if self._phase is not Phase.WATCHING:
+                self._enter_cinema_mode(video_screen, video_title)
+            else:
+                self._cinema_video_screen = video_screen
+                if video_title:
+                    self._cinema_video_title = video_title
+        else:
+            if self._phase is Phase.WATCHING:
+                # Grace period before leaving corner to absorb seeking/buffering
+                elapsed = now - getattr(self, "_cinema_last_active_time", now)
+                if elapsed >= CINEMA_UNMAXIMIZE_DEBOUNCE_S:
+                    self._exit_cinema_mode()
+
+    def _detect_maximized_video(self) -> tuple[bool, str, int, QScreen | None]:
+        """Detect whether media/video is actively playing in a maximized or fullscreen window.
+
+        Returns (is_active, title, hwnd, screen).
+        """
+        dll = _user32()
+        if dll is None:
+            return False, "", 0, None
+
+        # 1. Inspect GSMTC media state
+        gsm_info = getattr(self._media_watcher, "get_current_info", lambda: {})() if hasattr(self, "_media_watcher") and self._media_watcher else {}
+        gsm_playing = bool(gsm_info.get("is_playing", False))
+        gsm_pb_type = int(gsm_info.get("playback_type", 0))
+        gsm_title = str(gsm_info.get("title", "") or "").strip()
+
+        # 2. Inspect foreground window
+        hwnd = dll.GetForegroundWindow()
+        if not hwnd or hwnd == int(self.winId()):
+            hwnd = getattr(self, "_last_foreground_hwnd", 0)
+
+        if not hwnd or not dll.IsWindow(hwnd):
+            return False, "", 0, None
+
+        # 3. Check if foreground window is maximized or borderless fullscreen
+        is_max, screen = self._is_window_maximized_or_fullscreen(hwnd)
+        if not is_max or screen is None:
+            return False, "", 0, None
+
+        # 4. Check process name and window title
+        hwnd_val, exe_name, exe_path, win_title, pid = get_foreground_process_info()
+        exe = (exe_name or "").lower().strip()
+        t = (win_title or "").strip()
+        t_lower = t.lower()
+
+        # Exclude Yellow's Pixel Buddies own windows
+        if "yellow" in exe or "yellows_pixel_buddies" in (exe_path or "").lower():
+            return False, "", 0, None
+
+        # Case A: Dedicated video player (VLC, MPV, MPC, PotPlayer, etc.)
+        if exe in KNOWN_VIDEO_PLAYERS:
+            media_title = gsm_title or t or exe.removesuffix(".exe").title()
+            return True, media_title, hwnd, screen
+
+        # Case B: Web Browser or Streaming Tab
+        cat, name, detail = identify_active_app_context(exe, exe_path, t)
+        is_video_context = (
+            cat in ("youtube", "twitch", "streaming")
+            or any(k in t_lower for k in ("youtube", "twitch", "netflix", "crunchyroll", "prime video", "disney+", "bilibili", "dailymotion", "vimeo", "movie", "video", "anime"))
+        )
+
+        if is_video_context:
+            if gsm_playing or gsm_pb_type == 2:
+                media_title = detail or gsm_title or t
+                return True, media_title, hwnd, screen
+
+        # Case C: GSMTC explicitly marked as Video (type 2) and actively playing
+        if gsm_playing and gsm_pb_type == 2:
+            media_title = gsm_title or t or "Video"
+            return True, media_title, hwnd, screen
+
+        return False, "", 0, None
+
+    def _is_window_maximized_or_fullscreen(self, hwnd: int) -> tuple[bool, QScreen | None]:
+        """Check if a window handle is maximized (WS_MAXIMIZE) or borderless fullscreen."""
+        dll = _user32()
+        if not dll or not hwnd or not dll.IsWindow(hwnd):
+            return False, None
+
+        # Standard Maximized (WS_MAXIMIZE)
+        if dll.IsZoomed(hwnd):
+            rect = RECT()
+            if dll.GetWindowRect(hwnd, ctypes.byref(rect)):
+                cx = (rect.left + rect.right) // 2
+                cy = (rect.top + rect.bottom) // 2
+                scr = QApplication.screenAt(QPoint(cx, cy))
+                return True, scr or self.screen() or QApplication.primaryScreen()
+            return True, self.screen() or QApplication.primaryScreen()
+
+        # Borderless Fullscreen: window bounds cover an entire screen geometry
+        rect = RECT()
+        if dll.GetWindowRect(hwnd, ctypes.byref(rect)):
+            for screen in QApplication.screens():
+                geo = screen.geometry()
+                if (rect.left <= geo.left() + 4 and rect.top <= geo.top() + 4 and
+                    rect.right >= geo.right() - 4 and rect.bottom >= geo.bottom() - 4):
+                    return True, screen
+
+        return False, None
+
+    def _enter_cinema_mode(self, screen: QScreen | None, video_title: str) -> None:
+        """Enter cinema watching mode: trot to taskbar corner and sit down."""
+        target_screen = screen or self._current_screen()
+        log.info("Entering Cinema Mode on %s for: '%s'",
+                 target_screen.name() if target_screen else "primary", video_title)
+        self._cinema_video_screen = target_screen
+        self._cinema_video_title = video_title
+        self._cinema_intro_spoken = False
+        self._brain_timer.stop()
+        self._phase = Phase.WATCHING
+        self._pause_elapsed = False
+        self._record_action("cinema_watch_start", f"Headed to the corner to watch '{video_title}'", "behavior")
+
+    def _tick_cinema_watch(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
+        """Handle Pink moving to and resting in the corner during maximized video playback."""
+        target_screen = getattr(self, "_cinema_video_screen", None) or self._current_screen()
+        screen_bounds = self._screen_bounds(target_screen)
+        min_x, max_x, _min_y, ground_y = screen_bounds
+
+        target_x = max_x - (CINEMA_CORNER_PADDING_PX * self._scale_modifier)
+        target_y = ground_y
+
+        dx = target_x - self._x
+        if abs(dx) > 4.0:
+            # Moving to corner
+            speed = RUN_SPEED_PX_S if abs(dx) > 160.0 else WALK_SPEED_PX_S
+            step = speed * dt
+            if dx > 0:
+                self._x += min(dx, step)
+                walk_state = "run_right" if abs(dx) > 160.0 else "walk_right"
+                if self.state != walk_state and self._can_play(walk_state):
+                    self._play(walk_state, loop=True)
+            else:
+                self._x -= min(abs(dx), step)
+                walk_state = "run_left" if abs(dx) > 160.0 else "walk_left"
+                if self.state != walk_state and self._can_play(walk_state):
+                    self._play(walk_state, loop=True)
+            self._y = target_y
+        else:
+            # Arrived in corner: sit down in kneeling pose
+            self._x = target_x
+            self._y = target_y
+            if self.state != "kneeling" and self._can_play("kneeling"):
+                self._play("kneeling", loop=True)
+                if not getattr(self, "_cinema_intro_spoken", False):
+                    self._cinema_intro_spoken = True
+                    line, anim = random.choice(CINEMA_INTRO_LINES)
+                    self._say(line, force=True, step_anim=anim, dialogue_category="cinema_intro",
+                              auto_dismiss=True, hold_duration_s=4.0)
+
+    def _exit_cinema_mode(self) -> None:
+        """Exit cinema watching mode: stand up and resume normal taskbar patrol."""
+        log.info("Exiting Cinema Mode: video ended or window un-maximized.")
+        self._phase = Phase.PAUSE
+        self._pause_elapsed = False
+        self._cinema_video_screen = None
+        self._cinema_video_title = ""
+        self._cinema_intro_spoken = False
+
+        stand_anim = "peace_sign" if self._can_play("peace_sign") else "idle"
+        self._play(stand_anim, loop=False)
+
+        line, anim = random.choice(CINEMA_OUTRO_LINES)
+        self._say(line, force=True, step_anim=anim, dialogue_category="cinema_outro",
+                  auto_dismiss=True, hold_duration_s=4.0)
+
+        self._record_action("cinema_watch_end", "Finished watching video and resumed taskbar pacing", "behavior")
+        self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+
     def cycle_dialogue_scale(self, direction: int = 1) -> float:
         """Cycle through DIALOGUE_SCALE_PRESETS in forward (1) or backward (-1) direction."""
         current = getattr(self, "_dialogue_scale", DEFAULT_DIALOGUE_SCALE)
@@ -18664,6 +18962,8 @@ RULES:
             timers.append(self._window_timer)
         if hasattr(self, "_screen_comment_timer"):
             timers.append(self._screen_comment_timer)
+        if hasattr(self, "_cinema_timer"):
+            timers.append(self._cinema_timer)
         if hasattr(self, "_tray_screen_timer"):
             timers.append(self._tray_screen_timer)
         if hasattr(self, "_alarm_ticker"):
