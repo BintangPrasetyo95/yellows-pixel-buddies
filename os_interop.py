@@ -915,6 +915,21 @@ def set_window_exclude_from_capture(target: Any, enabled: bool = True) -> bool:
         return False
 
 
+ALLOWED_START_MENU_APPS = {
+    # Web Browsers
+    "chrome", "google chrome", "msedge", "edge", "microsoft edge", "firefox", "brave",
+    # Development / Editors
+    "code", "visual studio code", "vscode", "notepad", "notepad++", "sublime text",
+    # Communication / Social
+    "whatsapp", "discord", "slack", "telegram", "teams", "microsoft teams", "zoom",
+    # Media & Audio
+    "spotify", "vlc", "youtube music",
+    # Utilities & Office
+    "calc", "calculator", "explorer", "file explorer", "paint", "mspaint", "snipping tool",
+    "word", "excel", "powerpoint", "onenote",
+}
+
+
 def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_menu: bool = True) -> Optional[WindowInfo]:
     """Find an open window or launch it via URI / Start menu search, then focus it.
 
@@ -939,10 +954,26 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_me
             log.debug("URI fallback '%s' did not launch directly: %s", uri_fallback, e)
 
     if use_start_menu and query.strip():
+        q_raw = query.strip()
+        # Security Guard: Block metacharacters and arbitrary command injection
+        if any(c in q_raw for c in (";", "&", "|", ">", "<", "`", "$", "%", "\\", "/", '"', "'")):
+            log.warning("Start menu launch rejected due to suspicious characters in query: %r", q_raw)
+            return None
+
+        # Security Guard: Whitelist check
+        q_clean = q_raw.lower()
+        is_allowed = any(
+            q_clean == app or q_clean.startswith(f"{app} ") or app in q_clean
+            for app in ALLOWED_START_MENU_APPS
+        )
+        if not is_allowed:
+            log.warning("Start menu launch blocked for unvetted application '%s'.", query)
+            return None
+
         try:
             press_key("win")
             time.sleep(0.45)
-            type_text(query.strip(), delay_between_chars_s=0.02)
+            type_text(q_raw, delay_between_chars_s=0.02)
             time.sleep(0.45)
             press_key("enter")
             time.sleep(1.2)

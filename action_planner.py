@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 from PIL import Image, ImageChops, ImageDraw, ImageGrab
@@ -153,6 +153,69 @@ class DesktopPlan:
             "outcome_state": self.outcome_state,
             "summary_message": self.summary_message,
         }
+
+
+# ---------------------------------------------------------------------------
+# Modular Application Automation Profiles
+# ---------------------------------------------------------------------------
+
+APP_PROFILES: Dict[str, Dict[str, Any]] = {
+    "whatsapp": {
+        "prevent_search_enter": True,
+        "multiline_shift_enter": True,
+        "is_chat": True,
+        "chat_box_hint": "Type a message",
+    },
+    "discord": {
+        "prevent_search_enter": True,
+        "multiline_shift_enter": True,
+        "is_chat": True,
+    },
+    "slack": {
+        "prevent_search_enter": True,
+        "multiline_shift_enter": True,
+        "is_chat": True,
+    },
+    "telegram": {
+        "prevent_search_enter": True,
+        "multiline_shift_enter": True,
+        "is_chat": True,
+    },
+    "teams": {
+        "prevent_search_enter": True,
+        "multiline_shift_enter": True,
+        "is_chat": True,
+    },
+    "chrome": {
+        "prevent_search_enter": False,
+        "multiline_shift_enter": False,
+        "is_chat": False,
+        "new_tab_hotkey": ["ctrl", "t"],
+        "address_bar_hotkey": ["ctrl", "l"],
+    },
+    "msedge": {
+        "prevent_search_enter": False,
+        "multiline_shift_enter": False,
+        "is_chat": False,
+        "new_tab_hotkey": ["ctrl", "t"],
+        "address_bar_hotkey": ["ctrl", "l"],
+    },
+    "code": {
+        "prevent_search_enter": False,
+        "multiline_shift_enter": False,
+        "is_chat": False,
+        "terminal_toggle_hotkey": ["ctrl", "backtick"],
+    },
+}
+
+
+def get_app_profile(app_or_proc_name: str) -> Dict[str, Any]:
+    """Retrieve application profile configuration by process name or query alias."""
+    name_l = (app_or_proc_name or "").lower()
+    for key, prof in APP_PROFILES.items():
+        if key in name_l:
+            return prof
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -670,6 +733,8 @@ CRITICAL RULES FOR RELIABLE CURSOR CONTROL & VISUAL SELF-CONFIRMATION:
   * Ensure VS Code is focused ("focus_window": "Visual Studio Code").
   * If the terminal panel is visible at the bottom, use "click_and_type" on the terminal area with the command and "press_enter": true.
   * If the terminal panel is not visible, use "hotkey": ["ctrl", "backtick"] to open it.
+- SEARCH & FILTER INPUTS: When typing into any search bar, contact search, or filter box, NEVER set "press_enter": true unless the user explicitly requested pressing Enter or submitting a search query. Most live search fields filter dynamically.
+- TERMINOLOGY DIRECTIVE: You are controlling the physical desktop mouse and keyboard ("Desktop Cursor Control"). This is distinct from spectral doll possession ("Ghost Mode"). Always maintain focus on manipulating visible UI elements.
 - NEVER CLICK THE SAME SPOT TWICE IF IT ALREADY WORKED: Check "STEPS TAKEN SO FAR" and the Visual Self-Check Report. If your click already changed the screen, move to the next step or return `"action": "done"`. If the Visual Self-Check Report says `~0% pixel change` (misclick), adjust your `[ymin, xmin, ymax, xmax]` coordinates using the grid lines!
 - NEVER guess coordinates when the target app isn't even visible on screen yet—use "focus_window" first!
 
@@ -678,19 +743,19 @@ Respond ONLY with a single valid JSON object:
 ```json
 {
   "self_check": "step_succeeded",
-  "self_check_reason": "I confirmed on the screenshot that Wulandari's chat is now open in the right pane after clicking her contact row.",
-  "thought": "Now I see the message input box at the bottom of Wulandari's chat (y=920..965, x=420..880). I will click it, type the reply, and press Enter.",
+  "self_check_reason": "I confirmed on the screenshot that target chat is now open in the right pane after clicking contact row.",
+  "thought": "Now I see the message input box at the bottom of the chat (y=920..965, x=420..880). I will click it, type the reply, and press Enter.",
   "action": "click_and_type",
   "target": "Message input box",
   "box_2d": [920, 420, 965, 880],
-  "text": "<message_to_send>",
+  "text": "<message_or_command_to_type>",
   "press_enter": true,
   "select_all_first": false,
   "key": null,
   "keys": null,
   "scroll_clicks": 0,
   "done_after_this": true,
-  "summary": "Replied 'yes' to Wulandari on WhatsApp"
+  "summary": "Replied to contact on WhatsApp"
 }
 ```"""
 
@@ -1033,16 +1098,23 @@ class DesktopActionExecutor:
                     log.warning("Vision Agent reported failure at step %d: %s", step_idx + 1, plan.summary_message)
                     return False
 
-                # Guard against WhatsApp search box accidentally pressing Enter and messaging the currently open chat!
+                # Generic Search & Filter Input Guard:
+                # Never press Enter into live search, filter, or lookup fields unless the user explicitly requested submitting.
                 target_lower = (step.target or "").lower()
-                is_search_box_target = any(k in target_lower for k in ("search", "find", "filter"))
-                if (
-                    step.action_type in ("click_and_type", "type_text")
-                    and is_search_box_target
-                    and ("whatsapp" in goal_lower or "whatsapp" in (plan.target_app or "").lower())
-                ):
-                    if step.press_enter:
-                        log.info("Forcing press_enter=False on WhatsApp search box so contact search never sends a chat message.")
+                is_search_box_target = any(k in target_lower for k in ("search", "find", "filter", "lookup"))
+                user_explicitly_submits = any(k in goal_lower for k in ("submit", "press enter", "hit enter"))
+
+                prof = get_app_profile(plan.target_app or "")
+                if not prof:
+                    fg_check = os_interop.get_foreground_window()
+                    if fg_check:
+                        prof = get_app_profile(fg_check.process_name)
+
+                prevent_enter = prof.get("prevent_search_enter", True) if prof else True
+
+                if step.action_type in ("click_and_type", "type_text") and is_search_box_target:
+                    if prevent_enter and not user_explicitly_submits and step.press_enter:
+                        log.info("Generic search guard: forcing press_enter=False on search/filter field '%s'.", step.target)
                         step.press_enter = False
                     step.select_all_first = True
                     step.done_after_this = False
@@ -1437,15 +1509,21 @@ class DesktopActionExecutor:
                 if step.text:
                     if on_pink_action:
                         on_pink_action("typing", (cx, cy))
-                    proc_l = curr_fg.process_name.lower() if curr_fg else ""
-                    tgt_l = (step.target or "").lower()
-                    is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
-                    is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
+                    prof = get_app_profile(curr_fg.process_name if curr_fg else "")
+                    if not prof and step.target:
+                        prof = get_app_profile(step.target)
+                    is_chat = prof.get("is_chat", False)
+                    if not is_chat:
+                        proc_l = curr_fg.process_name.lower() if curr_fg else ""
+                        tgt_l = (step.target or "").lower()
+                        is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
+                        is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
+                    use_shift_enter = prof.get("multiline_shift_enter", is_chat)
                     expected_hwnd = curr_fg.hwnd if curr_fg else None
                     os_interop.type_text(
                         step.text,
                         delay_between_chars_s=0.016,
-                        use_shift_enter=is_chat,
+                        use_shift_enter=use_shift_enter,
                         expected_hwnd=expected_hwnd,
                     )
                 if step.press_enter:
@@ -1484,15 +1562,21 @@ class DesktopActionExecutor:
             if step.text:
                 if on_pink_action:
                     on_pink_action("typing", step.coordinates)
-                proc_l = curr_fg.process_name.lower() if curr_fg else ""
-                tgt_l = (step.target or "").lower()
-                is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
-                is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
+                prof = get_app_profile(curr_fg.process_name if curr_fg else "")
+                if not prof and step.target:
+                    prof = get_app_profile(step.target)
+                is_chat = prof.get("is_chat", False)
+                if not is_chat:
+                    proc_l = curr_fg.process_name.lower() if curr_fg else ""
+                    tgt_l = (step.target or "").lower()
+                    is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
+                    is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
+                use_shift_enter = prof.get("multiline_shift_enter", is_chat)
                 expected_hwnd = curr_fg.hwnd if curr_fg else None
                 os_interop.type_text(
                     step.text,
                     delay_between_chars_s=0.016,
-                    use_shift_enter=is_chat,
+                    use_shift_enter=use_shift_enter,
                     expected_hwnd=expected_hwnd,
                 )
 
