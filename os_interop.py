@@ -249,6 +249,18 @@ if IS_WINDOWS:
             ("u", _INPUT_UNION),
         ]
 
+    MONITOR_DEFAULTTONULL = 0
+    MONITOR_DEFAULTTOPRIMARY = 1
+    MONITOR_DEFAULTTONEAREST = 2
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
     user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
     user32.SendInput.restype = wintypes.UINT
 else:
@@ -494,6 +506,87 @@ def coords_to_normalized_virtual(x: int, y: int) -> Tuple[int, int]:
     return norm_x, norm_y
 
 
+def ensure_process_dpi_aware() -> bool:
+    """Ensure the process is configured for Per-Monitor DPI Awareness v2.
+
+    Guarantees coordinates in SendInput, GetCursorPos, and GetWindowRect
+    match physical device screen pixels across mixed-DPI monitors.
+    """
+    if not IS_WINDOWS or not user32:
+        return True
+    try:
+        if hasattr(user32, "SetProcessDpiAwarenessContext"):
+            # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+            res = user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+            if res:
+                return True
+        try:
+            shcore = ctypes.windll.shcore
+            # PROCESS_PER_MONITOR_DPI_AWARE = 2
+            if shcore.SetProcessDpiAwareness(2) == 0:
+                return True
+        except Exception:
+            pass
+        if hasattr(user32, "SetProcessDPIAware"):
+            return bool(user32.SetProcessDPIAware())
+    except Exception as e:
+        log.debug("ensure_process_dpi_aware error: %s", e)
+    return False
+
+
+def get_monitor_rect_for_window(hwnd: int) -> Tuple[int, int, int, int]:
+    """Return the physical pixel bounds (left, top, right, bottom) of the monitor displaying the window."""
+    if not IS_WINDOWS or not user32 or not hwnd or not user32.IsWindow(hwnd):
+        metrics = get_screen_metrics()
+        return (0, 0, metrics.primary_width, metrics.primary_height)
+
+    try:
+        h_mon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        if h_mon:
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if user32.GetMonitorInfoW(h_mon, ctypes.byref(mi)):
+                r = mi.rcMonitor
+                return (r.left, r.top, r.right, r.bottom)
+    except Exception as e:
+        log.debug("get_monitor_rect_for_window error: %s", e)
+
+    metrics = get_screen_metrics()
+    return (0, 0, metrics.primary_width, metrics.primary_height)
+
+
+def get_monitor_rect_for_point(x: int, y: int) -> Tuple[int, int, int, int]:
+    """Return the physical pixel bounds (left, top, right, bottom) of the monitor containing (x, y)."""
+    if not IS_WINDOWS or not user32:
+        metrics = get_screen_metrics()
+        return (0, 0, metrics.primary_width, metrics.primary_height)
+
+    try:
+        pt = wintypes.POINT(int(x), int(y))
+        h_mon = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+        if h_mon:
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if user32.GetMonitorInfoW(h_mon, ctypes.byref(mi)):
+                r = mi.rcMonitor
+                return (r.left, r.top, r.right, r.bottom)
+    except Exception as e:
+        log.debug("get_monitor_rect_for_point error: %s", e)
+
+    metrics = get_screen_metrics()
+    return (0, 0, metrics.primary_width, metrics.primary_height)
+
+
+def get_monitor_rect_for_cursor() -> Tuple[int, int, int, int]:
+    """Return the physical pixel bounds (left, top, right, bottom) of the monitor containing the cursor."""
+    cx, cy = get_cursor_pos()
+    return get_monitor_rect_for_point(cx, cy)
+
+
+if IS_WINDOWS:
+    ensure_process_dpi_aware()
+
+
 # ---------------------------------------------------------------------------
 # Window Management & Introspection
 # ---------------------------------------------------------------------------
@@ -637,6 +730,8 @@ APP_SEARCH_ALIASES = {
     "vs code": ("visual studio code", "code.exe", "antigravity"),
     "code": ("visual studio code", "code.exe", "antigravity"),
     "chrome": ("google chrome", "chrome.exe"),
+    "claude": ("claude", "chrome.exe", "msedge.exe"),
+    "chatgpt": ("chatgpt", "chrome.exe", "msedge.exe"),
     "browser": ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"),
     "edge": ("microsoft edge", "msedge.exe"),
     "firefox": ("mozilla firefox", "firefox.exe"),
@@ -822,6 +917,21 @@ def set_window_exclude_from_capture(target: Any, enabled: bool = True) -> bool:
         return False
 
 
+ALLOWED_START_MENU_APPS = {
+    # Web Browsers
+    "chrome", "google chrome", "msedge", "edge", "microsoft edge", "firefox", "brave",
+    # Development / Editors
+    "code", "visual studio code", "vscode", "notepad", "notepad++", "sublime text",
+    # Communication / Social
+    "whatsapp", "discord", "slack", "telegram", "teams", "microsoft teams", "zoom",
+    # Media & Audio
+    "spotify", "vlc", "youtube music",
+    # Utilities & Office
+    "calc", "calculator", "explorer", "file explorer", "paint", "mspaint", "snipping tool",
+    "word", "excel", "powerpoint", "onenote",
+}
+
+
 def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_menu: bool = True) -> Optional[WindowInfo]:
     """Find an open window or launch it via URI / Start menu search, then focus it.
 
@@ -846,10 +956,26 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_me
             log.debug("URI fallback '%s' did not launch directly: %s", uri_fallback, e)
 
     if use_start_menu and query.strip():
+        q_raw = query.strip()
+        # Security Guard: Block metacharacters and arbitrary command injection
+        if any(c in q_raw for c in (";", "&", "|", ">", "<", "`", "$", "%", "\\", "/", '"', "'")):
+            log.warning("Start menu launch rejected due to suspicious characters in query: %r", q_raw)
+            return None
+
+        # Security Guard: Whitelist check
+        q_clean = q_raw.lower()
+        is_allowed = any(
+            q_clean == app or q_clean.startswith(f"{app} ") or app in q_clean
+            for app in ALLOWED_START_MENU_APPS
+        )
+        if not is_allowed:
+            log.warning("Start menu launch blocked for unvetted application '%s'.", query)
+            return None
+
         try:
             press_key("win")
             time.sleep(0.45)
-            type_text(query.strip(), delay_between_chars_s=0.02)
+            type_text(q_raw, delay_between_chars_s=0.02)
             time.sleep(0.45)
             press_key("enter")
             time.sleep(1.2)
