@@ -11587,8 +11587,11 @@ class YellowsPixelBuddies(QWidget):
         step_anim: str | None = None,
         hold_s: float | None = None,
         track_ignore: bool = True,
+        **kwargs,
     ) -> None:
         """Trigger a speech bubble dialogue from DIALOGUE_LINES or direct text."""
+        if hold_s is None and "hold_duration_s" in kwargs:
+            hold_s = kwargs.get("hold_duration_s")
         if not self._dialogue_enabled or not hasattr(self, "_dialogue_overlay"):
             return
         if getattr(self, "_hidden_in_tray", False):
@@ -17728,7 +17731,7 @@ RULES:
                 ("* Shhhhh! Theater etiquette, dummy!", "behind"),
             ]
             line, anim = random.choice(whisper_lines)
-            self._say(line, force=True, step_anim=anim, dialogue_category="cinema_shush", auto_dismiss=True, hold_duration_s=3.0)
+            self._say(line, force=True, step_anim=anim, dialogue_category="cinema_shush", auto_dismiss=True, hold_s=3.0)
             return
         if (self._dragging or self._menu_open
                 or self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
@@ -18679,7 +18682,7 @@ RULES:
                     self._cinema_intro_spoken = True
                     line, anim = random.choice(CINEMA_INTRO_LINES)
                     self._say(line, force=True, step_anim=anim, dialogue_category="cinema_intro",
-                              auto_dismiss=True, hold_duration_s=4.0)
+                              auto_dismiss=True, hold_s=4.0)
 
     def _exit_cinema_mode(self) -> None:
         """Exit cinema watching mode: stand up and resume normal taskbar patrol."""
@@ -18697,7 +18700,7 @@ RULES:
 
         line, anim = random.choice(CINEMA_OUTRO_LINES)
         self._say(line, force=True, step_anim=anim, dialogue_category="cinema_outro",
-                  auto_dismiss=True, hold_duration_s=4.0)
+                  auto_dismiss=True, hold_s=4.0)
 
         self._record_action("cinema_watch_end", "Finished watching video and resumed taskbar pacing", "behavior")
         self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
@@ -18811,7 +18814,7 @@ RULES:
                 step_anim=clean_anim,
                 dialogue_category="cinema_comment",
                 auto_dismiss=True,
-                hold_duration_s=CINEMA_COMMENT_HOLD_S,
+                hold_s=CINEMA_COMMENT_HOLD_S,
             )
 
         def _on_cinema_error(err_msg: str) -> None:
@@ -18854,7 +18857,7 @@ RULES:
             step_anim=anim,
             dialogue_category="cinema_comment",
             auto_dismiss=True,
-            hold_duration_s=CINEMA_COMMENT_HOLD_S,
+            hold_s=CINEMA_COMMENT_HOLD_S,
         )
 
     def cycle_dialogue_scale(self, direction: int = 1) -> float:
