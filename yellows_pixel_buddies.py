@@ -12749,6 +12749,12 @@ RULES:
             self._start_summon_intro()
             return
 
+        if self._phase is Phase.WATCHING:
+            if self.state != "kneeling" and self._can_play("kneeling"):
+                self._play("kneeling", loop=True)
+            self.update()
+            return
+
         if getattr(self, "_active_question_pending", False):
             self._active_question_pending = False
             self._consecutive_unanswered_questions = getattr(self, "_consecutive_unanswered_questions", 0) + 1
@@ -17714,6 +17720,15 @@ RULES:
     def _on_single_click(self) -> None:
         """Handle single left-click on Pink: randomly play peace_sign, laughing, or shocked without dialogue."""
         if self._is_dialogue_convo_active():
+            return
+        if self._phase is Phase.WATCHING:
+            whisper_lines = [
+                ("* Shh! Don't distract me during the movie, mew!", "angry"),
+                ("* Hey! Hands off, minion! The plot is getting good!", "shocked"),
+                ("* Shhhhh! Theater etiquette, dummy!", "behind"),
+            ]
+            line, anim = random.choice(whisper_lines)
+            self._say(line, force=True, step_anim=anim, dialogue_category="cinema_shush", auto_dismiss=True, hold_duration_s=3.0)
             return
         if (self._dragging or self._menu_open
                 or self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
