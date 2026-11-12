@@ -13891,7 +13891,18 @@ RULES:
             )
 
         if desktop_actions:
-            self.execute_desktop_action(desktop_actions[0], user_request=user_text)
+            u_clean = user_text.strip().lower()
+            action_intent_patterns = (
+                r"\b(?:open|launch|start|run|click|type|press|send|reply|play|search|browse|go to|switch to|close|quit|show|focus|take over|do|act)\b"
+            )
+            user_requested_action = (
+                bool(re.search(action_intent_patterns, u_clean))
+                or u_clean.startswith(("/do ", "/takeover ", "/act ", "/cursor "))
+            )
+            if user_requested_action:
+                self.execute_desktop_action(desktop_actions[0], user_request=user_text)
+            else:
+                log.warning("Suppressed desktop action tag because user prompt did not request a computer action: %r", user_text)
 
         now = time.perf_counter()
         self._last_user_chat_time = now
@@ -14023,8 +14034,43 @@ RULES:
                 clean_msg = msg.strip() if msg else "Something interrupted me"
                 self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
 
+        def _on_confirm_req(a_type: str, target: str, text: str, win_title: str, proc_name: str) -> None:
+            if not getattr(self, "_is_taking_over_cursor", False):
+                return
+            log.info("Desktop Takeover confirmation requested for '%s' on '%s' (text=%r, window='%s' [%s])",
+                     a_type, target, text, win_title, proc_name)
+            detail = f"\"{text[:60]}\"" if text else target
+            app_display = proc_name or win_title or "this window"
+            question_text = f"* Minion! I'm about to {a_type.replace('_', ' ')}:\n* {detail}\n* in {app_display}. Proceed?"
+            choices = [
+                ("Proceed", "* Right away, minion! [anim: peace_sign]", "peace_sign"),
+                ("Cancel", "* Hmph! Canceled! [anim: angry]", "angry"),
+            ]
+            if hasattr(self, "_takeover_banner"):
+                self._takeover_banner.show_banner(
+                    title="⚠️ CONFIRMATION REQUIRED — CHOOSE OR PRESS ESC",
+                    subtitle=f"Confirm {a_type} in {app_display}...",
+                )
+
+            def _on_chosen(choice_label: str, _reaction_text: str, _reaction_anim: str) -> None:
+                worker = getattr(self, "_desktop_action_worker", None)
+                if worker is not None and hasattr(worker, "deliver_confirmation"):
+                    approved = (choice_label == "Proceed")
+                    worker.deliver_confirmation(approved)
+
+            if hasattr(self, "_dialogue_overlay"):
+                self._dialogue_overlay.ask(
+                    question_text,
+                    choices,
+                    self._x,
+                    self._y,
+                    on_chosen=_on_chosen,
+                    track_ignore=False,
+                )
+
         self._desktop_action_worker.sig_step_started.connect(_on_step_start)
         self._desktop_action_worker.sig_pink_action.connect(_on_pink_act)
+        self._desktop_action_worker.sig_confirm_action.connect(_on_confirm_req)
         self._desktop_action_worker.sig_plan_finished.connect(_on_plan_finish)
         self._desktop_action_worker.start()
 
@@ -14038,7 +14084,10 @@ RULES:
 
         worker = getattr(self, "_desktop_action_worker", None)
         if worker is not None:
-            for sig in (worker.sig_step_started, worker.sig_pink_action, worker.sig_plan_finished):
+            worker_sigs = [worker.sig_step_started, worker.sig_pink_action, worker.sig_plan_finished]
+            if hasattr(worker, "sig_confirm_action"):
+                worker_sigs.append(worker.sig_confirm_action)
+            for sig in worker_sigs:
                 try:
                     sig.disconnect()
                 except Exception:

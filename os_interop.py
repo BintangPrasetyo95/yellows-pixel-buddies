@@ -1038,9 +1038,14 @@ def key_up(key: str) -> bool:
 def press_key(key: str, duration_s: float = 0.04) -> bool:
     """Press and release a virtual key."""
     check_emergency_abort()
+    vk = _resolve_vk(key)
+    is_esc = (vk == VK_ESCAPE)
     success = key_down(key)
     time.sleep(duration_s)
     key_up(key)
+    if is_esc and IS_WINDOWS and user32:
+        # Swallow/clear transition state resulting from our own injected Escape key
+        user32.GetAsyncKeyState(VK_ESCAPE)
     return success
 
 
@@ -1048,8 +1053,11 @@ def hotkey(*keys: str, interval_s: float = 0.04) -> bool:
     """Press a key combination in order, then release in reverse order (e.g. 'ctrl', 'c')."""
     check_emergency_abort()
     pressed: List[str] = []
+    has_esc = False
     try:
         for k in keys:
+            if _resolve_vk(k) == VK_ESCAPE:
+                has_esc = True
             key_down(k)
             pressed.append(k)
             time.sleep(0.02)
@@ -1058,6 +1066,9 @@ def hotkey(*keys: str, interval_s: float = 0.04) -> bool:
         for k in reversed(pressed):
             key_up(k)
             time.sleep(0.01)
+        if has_esc and IS_WINDOWS and user32:
+            # Swallow/clear transition state resulting from our own injected Escape key
+            user32.GetAsyncKeyState(VK_ESCAPE)
     return True
 
 
