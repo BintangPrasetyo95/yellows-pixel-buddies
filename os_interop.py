@@ -249,6 +249,18 @@ if IS_WINDOWS:
             ("u", _INPUT_UNION),
         ]
 
+    MONITOR_DEFAULTTONULL = 0
+    MONITOR_DEFAULTTOPRIMARY = 1
+    MONITOR_DEFAULTTONEAREST = 2
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
     user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
     user32.SendInput.restype = wintypes.UINT
 else:
@@ -492,6 +504,87 @@ def coords_to_normalized_virtual(x: int, y: int) -> Tuple[int, int]:
     norm_x = max(0, min(65535, norm_x))
     norm_y = max(0, min(65535, norm_y))
     return norm_x, norm_y
+
+
+def ensure_process_dpi_aware() -> bool:
+    """Ensure the process is configured for Per-Monitor DPI Awareness v2.
+
+    Guarantees coordinates in SendInput, GetCursorPos, and GetWindowRect
+    match physical device screen pixels across mixed-DPI monitors.
+    """
+    if not IS_WINDOWS or not user32:
+        return True
+    try:
+        if hasattr(user32, "SetProcessDpiAwarenessContext"):
+            # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+            res = user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+            if res:
+                return True
+        try:
+            shcore = ctypes.windll.shcore
+            # PROCESS_PER_MONITOR_DPI_AWARE = 2
+            if shcore.SetProcessDpiAwareness(2) == 0:
+                return True
+        except Exception:
+            pass
+        if hasattr(user32, "SetProcessDPIAware"):
+            return bool(user32.SetProcessDPIAware())
+    except Exception as e:
+        log.debug("ensure_process_dpi_aware error: %s", e)
+    return False
+
+
+def get_monitor_rect_for_window(hwnd: int) -> Tuple[int, int, int, int]:
+    """Return the physical pixel bounds (left, top, right, bottom) of the monitor displaying the window."""
+    if not IS_WINDOWS or not user32 or not hwnd or not user32.IsWindow(hwnd):
+        metrics = get_screen_metrics()
+        return (0, 0, metrics.primary_width, metrics.primary_height)
+
+    try:
+        h_mon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+        if h_mon:
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if user32.GetMonitorInfoW(h_mon, ctypes.byref(mi)):
+                r = mi.rcMonitor
+                return (r.left, r.top, r.right, r.bottom)
+    except Exception as e:
+        log.debug("get_monitor_rect_for_window error: %s", e)
+
+    metrics = get_screen_metrics()
+    return (0, 0, metrics.primary_width, metrics.primary_height)
+
+
+def get_monitor_rect_for_point(x: int, y: int) -> Tuple[int, int, int, int]:
+    """Return the physical pixel bounds (left, top, right, bottom) of the monitor containing (x, y)."""
+    if not IS_WINDOWS or not user32:
+        metrics = get_screen_metrics()
+        return (0, 0, metrics.primary_width, metrics.primary_height)
+
+    try:
+        pt = wintypes.POINT(int(x), int(y))
+        h_mon = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+        if h_mon:
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if user32.GetMonitorInfoW(h_mon, ctypes.byref(mi)):
+                r = mi.rcMonitor
+                return (r.left, r.top, r.right, r.bottom)
+    except Exception as e:
+        log.debug("get_monitor_rect_for_point error: %s", e)
+
+    metrics = get_screen_metrics()
+    return (0, 0, metrics.primary_width, metrics.primary_height)
+
+
+def get_monitor_rect_for_cursor() -> Tuple[int, int, int, int]:
+    """Return the physical pixel bounds (left, top, right, bottom) of the monitor containing the cursor."""
+    cx, cy = get_cursor_pos()
+    return get_monitor_rect_for_point(cx, cy)
+
+
+if IS_WINDOWS:
+    ensure_process_dpi_aware()
 
 
 # ---------------------------------------------------------------------------

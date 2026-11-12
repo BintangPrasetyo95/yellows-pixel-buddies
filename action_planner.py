@@ -264,7 +264,10 @@ def capture_screen_region(
     draw_cursor: bool = True,
     draw_grid: bool = True,
 ) -> Tuple[str, int, int, Tuple[int, int]]:
-    """Capture primary screen or specific window bounds, marking current cursor position and coordinate grid.
+    """Capture target monitor screen region, marking current cursor position and coordinate grid.
+
+    Supports multi-monitor setups (including negative virtual coordinates) and downscales
+    before rendering the 0..1000 coordinate grid for crisp 4K/2K legibility.
 
     Returns:
         (base64_jpeg_str, captured_width, captured_height, (offset_x, offset_y))
@@ -276,49 +279,59 @@ def capture_screen_region(
             capture_bbox = bounds
             offset = (bounds[0], bounds[1])
         else:
-            # Capture primary screen so taskbar, active windows, and start menu are all visible
+            # Capture primary screen by default
             capture_bbox = (0, 0, metrics.primary_width, metrics.primary_height)
             offset = (0, 0)
 
+        img = None
         try:
-            img = ImageGrab.grab(bbox=capture_bbox)
+            # Multi-monitor capture requires all_screens=True on Windows for non-primary/negative bounds
+            img = ImageGrab.grab(bbox=capture_bbox, all_screens=True)
         except Exception:
-            img = ImageGrab.grab()
-            offset = (metrics.virtual_left, metrics.virtual_top)
+            try:
+                img = ImageGrab.grab(bbox=capture_bbox)
+            except Exception:
+                img = ImageGrab.grab()
+                offset = (0, 0)
 
     orig_w, orig_h = img.size
     _LAST_RAW_SCREENSHOT = img.copy()
 
-    if draw_grid and orig_w > 0 and orig_h > 0:
+    # Downscale first if exceeding max_dimension so grid lines & labels render crisp at 1:1 scale
+    scale_ratio = 1.0
+    resized_img = img
+    if max(orig_w, orig_h) > max_dimension:
+        scale_ratio = max_dimension / max(orig_w, orig_h)
+        new_w = max(1, int(orig_w * scale_ratio))
+        new_h = max(1, int(orig_h * scale_ratio))
+        resized_img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    # Render coordinate grid at 1:1 scale on resized image so labels are never blurred
+    if draw_grid and resized_img.width > 0 and resized_img.height > 0:
         try:
-            img = _draw_normalized_coordinate_grid(img)
+            resized_img = _draw_normalized_coordinate_grid(resized_img)
         except Exception as e:
             log.debug("Could not draw coordinate grid on screenshot: %s", e)
 
-    # Draw a subtle red/white crosshair at the current cursor position so Gemini sees where the mouse is
-    if draw_cursor and orig_w > 0 and orig_h > 0:
+    # Draw crosshair at cursor position at 1:1 scale on resized image
+    if draw_cursor and resized_img.width > 0 and resized_img.height > 0:
         try:
             cur_x, cur_y = os_interop.get_cursor_pos()
             rel_x = cur_x - offset[0]
             rel_y = cur_y - offset[1]
             if 0 <= rel_x < orig_w and 0 <= rel_y < orig_h:
-                draw = ImageDraw.Draw(img)
+                disp_x = int(round(rel_x * scale_ratio))
+                disp_y = int(round(rel_y * scale_ratio))
+                draw = ImageDraw.Draw(resized_img)
                 r = 10
-                draw.ellipse((rel_x - r, rel_y - r, rel_x + r, rel_y + r), outline=(255, 40, 120), width=2)
-                draw.line((rel_x - r - 5, rel_y, rel_x + r + 5, rel_y), fill=(255, 40, 120), width=2)
-                draw.line((rel_x, rel_y - r - 5, rel_x, rel_y + r + 5), fill=(255, 40, 120), width=2)
+                draw.ellipse((disp_x - r, disp_y - r, disp_x + r, disp_y + r), outline=(255, 40, 120), width=2)
+                draw.line((disp_x - r - 5, disp_y, disp_x + r + 5, disp_y), fill=(255, 40, 120), width=2)
+                draw.line((disp_x, disp_y - r - 5, disp_x, disp_y + r + 5), fill=(255, 40, 120), width=2)
         except Exception as e:
             log.debug("Could not draw cursor marker on screenshot: %s", e)
 
-    # Downscale only if exceeding max_dimension (1920 keeps 1080p/1200p at 1:1 native sharpness)
-    if max(orig_w, orig_h) > max_dimension:
-        ratio = max_dimension / max(orig_w, orig_h)
-        new_w = max(1, int(orig_w * ratio))
-        new_h = max(1, int(orig_h * ratio))
-        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=jpeg_quality)
+    resized_img.save(buf, format="JPEG", quality=jpeg_quality)
     b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
 
     return b64_str, orig_w, orig_h, offset
@@ -913,8 +926,27 @@ class DesktopActionExecutor:
 
                 plan.current_step_index = step_idx
 
-                # 1. OBSERVE: Capture full primary desktop with coordinate ruler grid + open window list
-                b64_img, orig_w, orig_h, offset = capture_screen_region(bounds=None, draw_cursor=True, draw_grid=True)
+                # 1. OBSERVE: Capture full monitor holding target window (or cursor monitor)
+                target_hwnd = None
+                if focused_existing_app:
+                    fg = os_interop.get_foreground_window()
+                    if fg:
+                        target_hwnd = fg.hwnd
+                if not target_hwnd and plan.target_app:
+                    win = os_interop.find_window(plan.target_app)
+                    if win:
+                        target_hwnd = win.hwnd
+
+                if target_hwnd:
+                    monitor_bbox = os_interop.get_monitor_rect_for_window(target_hwnd)
+                else:
+                    monitor_bbox = os_interop.get_monitor_rect_for_cursor()
+
+                b64_img, orig_w, orig_h, offset = capture_screen_region(
+                    bounds=monitor_bbox,
+                    draw_cursor=True,
+                    draw_grid=True,
+                )
                 curr_raw_img = _LAST_RAW_SCREENSHOT
                 if not b64_img:
                     raise RuntimeError("Failed to capture desktop screenshot for vision agent.")

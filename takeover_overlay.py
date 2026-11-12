@@ -19,7 +19,7 @@ from typing import Optional, Tuple
 
 try:
     from PyQt5.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer
-    from PyQt5.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QRegion
+    from PyQt5.QtGui import QBrush, QColor, QCursor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QRegion
     from PyQt5.QtWidgets import QApplication, QWidget
     HAS_PYQT = True
 except Exception:
@@ -60,15 +60,15 @@ if HAS_PYQT:
             self.update()
 
         def show_banner(self, title: Optional[str] = None, subtitle: str = "") -> None:
-            """Display the takeover HUD centered near the top of the primary screen."""
+            """Display the takeover HUD centered near the top of the active screen."""
             if title:
                 self._title = title
             self._subtitle = subtitle
             self._pulse_tick = 0.0
             self._pulse_timer.start()
 
-            # Center at top of active screen with 24px margin
-            screen = QApplication.primaryScreen()
+            # Center at top of active screen containing cursor, with primaryScreen fallback
+            screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
             if screen:
                 geom = screen.geometry()
                 x = geom.x() + (geom.width() - self.width()) // 2
@@ -135,12 +135,14 @@ if HAS_PYQT:
             title_rect = QRectF(12, 10, w - 24, 24)
             painter.drawText(title_rect, Qt.AlignCenter, self._title)
 
-            # Subtitle Text (Step status)
+            # Subtitle Text (Step status with font elision to prevent frame overflow)
             font_sub = QFont(self._font_family, 10, QFont.Normal)
             painter.setFont(font_sub)
             painter.setPen(QColor(255, 180, 215, 225))
             sub_rect = QRectF(12, 34, w - 24, 22)
-            painter.drawText(sub_rect, Qt.AlignCenter, self._subtitle)
+            fm = painter.fontMetrics()
+            elided_sub = fm.elidedText(self._subtitle, Qt.ElideRight, int(sub_rect.width()))
+            painter.drawText(sub_rect, Qt.AlignCenter, elided_sub)
 
             painter.end()
 
@@ -173,10 +175,31 @@ if HAS_PYQT:
             self._anim_timer.timeout.connect(self._on_tick)
 
         def flash_at(self, center_x: int, center_y: int, duration_ms: int = 260) -> None:
-            """Center and animate reticle over (center_x, center_y)."""
+            """Center and animate reticle over physical (center_x, center_y) coordinates."""
             self._progress = 0.0
             half = self._size // 2
-            self.move(center_x - half, center_y - half)
+
+            # Map physical desktop coordinates to Qt logical widget coordinates across monitors
+            target_screen = None
+            for scr in QApplication.screens():
+                dpr = scr.devicePixelRatio() if hasattr(scr, "devicePixelRatio") else 1.0
+                geom = scr.geometry()
+                phys_x = geom.x() * dpr
+                phys_y = geom.y() * dpr
+                phys_w = geom.width() * dpr
+                phys_h = geom.height() * dpr
+                if phys_x <= center_x <= phys_x + phys_w and phys_y <= center_y <= phys_y + phys_h:
+                    target_screen = scr
+                    break
+
+            if target_screen:
+                dpr = target_screen.devicePixelRatio() if hasattr(target_screen, "devicePixelRatio") else 1.0
+                geom = target_screen.geometry()
+                log_x = geom.x() + (center_x - geom.x() * dpr) / dpr
+                log_y = geom.y() + (center_y - geom.y() * dpr) / dpr
+                self.move(int(round(log_x - half)), int(round(log_y - half)))
+            else:
+                self.move(center_x - half, center_y - half)
 
             total_ticks = max(4, duration_ms // 20)
             self._tick_step = 1.0 / total_ticks
