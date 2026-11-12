@@ -207,6 +207,7 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
         model: Optional[object] = None,
         model_name: str = "base",
         api_key: str = "",
+        language: str = "en",
         parent: Optional[QObject] = None,
     ) -> None:
         if HAS_PYQT:
@@ -215,6 +216,7 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
         self._model = model
         self._model_name = model_name
         self._api_key = api_key
+        self._language = language
 
     def run(self) -> None:
         # Check minimum duration (~0.25 seconds)
@@ -245,15 +247,16 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
                     model = whisper.load_model(self._model_name)
 
                 t0 = time.perf_counter()
+                whisper_lang = "id" if self._language == "id" else ("en" if self._language == "en" else None)
                 result = model.transcribe(
                     audio_1d,
                     fp16=False,
-                    language=None,
+                    language=whisper_lang,
                     temperature=0.0,
                 )
                 text = (result.get("text") or "").strip()
                 dt = time.perf_counter() - t0
-                log.info("Local Whisper transcribed in %.2fs: %r", dt, text)
+                log.info("Local Whisper transcribed (%s) in %.2fs: %r", whisper_lang, dt, text)
                 if HAS_PYQT:
                     self.sig_transcribed.emit(text)
                 return
@@ -265,13 +268,17 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
             fallback_models = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-flash-lite-latest"]
             wav_bytes = audio_to_wav_bytes(audio_1d)
             b64_audio = base64.b64encode(wav_bytes).decode("utf-8")
+            if self._language == "id":
+                prompt_text = "Transcribe the speech in this audio exactly into Bahasa Indonesia (or English if spoken). Return ONLY the transcribed text without quotes or explanations, or nothing if silent."
+            else:
+                prompt_text = "Transcribe the speech in this audio exactly. Return ONLY the transcribed text, or nothing if silent."
             for model_id in fallback_models:
                 try:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={self._api_key}"
                     payload = {
                         "contents": [{
                             "parts": [
-                                {"text": "Transcribe the speech in this audio exactly. Return ONLY the transcribed text, or nothing if silent."},
+                                {"text": prompt_text},
                                 {
                                     "inline_data": {
                                         "mime_type": "audio/wav",
@@ -314,11 +321,12 @@ class VoiceManager(QObject if HAS_PYQT else object):
         sig_transcription_error = pyqtSignal(str)
         sig_model_ready = pyqtSignal()
 
-    def __init__(self, model_name: str = "base", api_key: str = "", parent: Optional[QObject] = None) -> None:
+    def __init__(self, model_name: str = "base", api_key: str = "", language: str = "en", parent: Optional[QObject] = None) -> None:
         if HAS_PYQT:
             super().__init__(parent)
         self._model_name = model_name
         self._api_key = api_key
+        self._language = language if language in ("en", "id") else "en"
         self._whisper_model: Optional[object] = None
         self._is_recording = False
         self._stream: Optional[sd.InputStream] = None
@@ -332,6 +340,10 @@ class VoiceManager(QObject if HAS_PYQT else object):
 
     def set_api_key(self, api_key: str) -> None:
         self._api_key = api_key
+
+    def set_language(self, language: str) -> None:
+        """Set active speech transcription language ('en' or 'id')."""
+        self._language = language if language in ("en", "id") else "en"
 
     def preload(self) -> None:
         """Asynchronously load the Whisper model into RAM."""
@@ -458,6 +470,7 @@ class VoiceManager(QObject if HAS_PYQT else object):
             model=self._whisper_model,
             model_name=self._model_name,
             api_key=self._api_key,
+            language=self._language,
             parent=self,
         )
         self._transcribe_worker.sig_transcribed.connect(self._on_transcribed)

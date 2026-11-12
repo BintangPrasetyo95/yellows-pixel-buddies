@@ -275,6 +275,7 @@ if HAS_PYQT:
 
             self._font_family = "Determination Sans"
             self._voice_manager = voice_manager
+            self._language = "en"
             self._state = "idle"  # "idle", "listening", "transcribing", "dispatched", "error"
             self._title = "🎙️ VOICE MODE [SPACE]"
             self._subtitle = "[ HOLD SPACE TO SPEAK ]  •  [ESC to exit]"
@@ -298,6 +299,34 @@ if HAS_PYQT:
             self._font_family = family
             self.update()
 
+        def set_language(self, lang: str) -> None:
+            """Update language for Voice Mode HUD titles and status messages ('en' or 'id')."""
+            self._language = lang if lang in ("en", "id") else "en"
+            if self._state == "idle":
+                self._reset_to_idle()
+
+        def _get_localized_text(self, key: str) -> Tuple[str, str]:
+            is_id = getattr(self, "_language", "en") == "id"
+            if is_id:
+                texts = {
+                    "idle": ("🎙️ MODE SUARA [SPASI]", "[ TAHAN SPASI UNTUK BICARA ]  •  [ESC untuk keluar]"),
+                    "listening": ("💓 MENDENGARKAN... (DOKI-METER AKTIF)", "[ Lepas SPASI untuk kirim perintah ]"),
+                    "transcribing": ("⚡ MENERJEMAHKAN SUARA...", "[ Menerjemahkan suara untuk Pink... ]"),
+                    "dispatched": ("⚔️ PERINTAH DIKIRIM KE PINK!", ""),
+                    "no_speech": ("🎙️ TIDAK ADA SUARA TERDETEKSI", "[ Tahan SPASI dan bicara dengan jelas ]"),
+                    "error": ("⚠️ SUARA ERROR", ""),
+                }
+            else:
+                texts = {
+                    "idle": ("🎙️ VOICE MODE [SPACE]", "[ HOLD SPACE TO SPEAK ]  •  [ESC to exit]"),
+                    "listening": ("💓 LISTENING... (DOKI-METER ACTIVE)", "[ Release SPACE to send command ]"),
+                    "transcribing": ("⚡ TRANSCRIBING AUDIO...", "[ Translating voice command for Pink... ]"),
+                    "dispatched": ("⚔️ COMMAND DISPATCHED TO PINK!", ""),
+                    "no_speech": ("🎙️ NO SPEECH DETECTED", "[ Hold SPACE firmly and speak clearly ]"),
+                    "error": ("⚠️ VOICE ERROR", ""),
+                }
+            return texts.get(key, ("", ""))
+
         def set_dialogue_ref(self, dlg: object) -> None:
             """Link reference to dialogue overlay to forward decision keystrokes."""
             self._dialogue_ref = dlg
@@ -320,8 +349,7 @@ if HAS_PYQT:
         def show_overlay(self) -> None:
             """Display the Voice Mode HUD centered near the top of the active screen."""
             self._state = "idle"
-            self._title = "🎙️ VOICE MODE [SPACE]"
-            self._subtitle = "[ HOLD SPACE TO SPEAK ]  •  [ESC to exit]"
+            self._title, self._subtitle = self._get_localized_text("idle")
             self._pulse_tick = 0.0
             self._pulse_timer.start()
 
@@ -361,22 +389,21 @@ if HAS_PYQT:
 
         def _on_transcription_started(self) -> None:
             self._state = "transcribing"
-            self._title = "⚡ TRANSCRIBING AUDIO..."
-            self._subtitle = "[ Translating voice command for Pink... ]"
+            self._title, self._subtitle = self._get_localized_text("transcribing")
             self.update()
 
         def _on_transcription_finished(self, text: str) -> None:
             clean_text = text.strip()
             if not clean_text:
                 self._state = "idle"
-                self._title = "🎙️ NO SPEECH DETECTED"
-                self._subtitle = "[ Hold SPACE firmly and speak clearly ]"
+                self._title, self._subtitle = self._get_localized_text("no_speech")
                 self.update()
                 self._reset_timer.start(2500)
                 return
 
             self._state = "dispatched"
-            self._title = "⚔️ COMMAND DISPATCHED TO PINK!"
+            t, _ = self._get_localized_text("dispatched")
+            self._title = t
             disp_text = clean_text[:50] + "..." if len(clean_text) > 50 else clean_text
             self._subtitle = f"\"{disp_text}\""
             self.update()
@@ -385,7 +412,8 @@ if HAS_PYQT:
 
         def _on_transcription_error(self, err_msg: str) -> None:
             self._state = "error"
-            self._title = "⚠️ VOICE ERROR"
+            t, _ = self._get_localized_text("error")
+            self._title = t
             self._subtitle = f"[{err_msg[:45]}]"
             self.update()
             self._reset_timer.start(3000)
@@ -394,8 +422,7 @@ if HAS_PYQT:
             if not self.isVisible():
                 return
             self._state = "idle"
-            self._title = "🎙️ VOICE MODE [SPACE]"
-            self._subtitle = "[ HOLD SPACE TO SPEAK ]  •  [ESC to exit]"
+            self._title, self._subtitle = self._get_localized_text("idle")
             self._audio_level = 0.0
             self.update()
 
@@ -426,8 +453,7 @@ if HAS_PYQT:
                     return
                 if self._state in ("idle", "error"):
                     self._state = "listening"
-                    self._title = "💓 LISTENING... (DOKI-METER ACTIVE)"
-                    self._subtitle = "[ Release SPACE to send command ]"
+                    self._title, self._subtitle = self._get_localized_text("listening")
                     self.update()
                     if self._voice_manager:
                         self._voice_manager.start_recording()
@@ -443,8 +469,7 @@ if HAS_PYQT:
                     return
                 if self._state == "listening":
                     self._state = "transcribing"
-                    self._title = "⚡ TRANSCRIBING AUDIO..."
-                    self._subtitle = "[ Translating voice command for Pink... ]"
+                    self._title, self._subtitle = self._get_localized_text("transcribing")
                     self.update()
                     if self._voice_manager:
                         self._voice_manager.stop_recording()
