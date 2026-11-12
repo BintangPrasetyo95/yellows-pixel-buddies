@@ -4382,14 +4382,13 @@ def is_d3d_fullscreen_active() -> bool:
     return False
 
 
-def get_foreground_process_info() -> tuple[int, str, str, str, int]:
-    """Return (hwnd, exe_name, exe_path, window_title, pid) of current foreground window."""
-    if sys.platform != "win32":
+def get_window_process_info(hwnd: int) -> tuple[int, str, str, str, int]:
+    """Return (hwnd, exe_name, exe_path, window_title, pid) of a specific window handle."""
+    if sys.platform != "win32" or not hwnd:
         return 0, "", "", "", 0
     try:
         user32 = ctypes.windll.user32
-        hwnd = user32.GetForegroundWindow()
-        if not hwnd:
+        if not user32.IsWindow(hwnd):
             return 0, "", "", "", 0
 
         txt_buf = ctypes.create_unicode_buffer(512)
@@ -4413,6 +4412,18 @@ def get_foreground_process_info() -> tuple[int, str, str, str, int]:
             return hwnd, name, exe_path, title, pid_val
         except Exception:
             return hwnd, "", "", title, pid_val
+    except Exception:
+        return 0, "", "", "", 0
+
+
+def get_foreground_process_info() -> tuple[int, str, str, str, int]:
+    """Return (hwnd, exe_name, exe_path, window_title, pid) of current foreground window."""
+    if sys.platform != "win32":
+        return 0, "", "", "", 0
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        return get_window_process_info(hwnd)
     except Exception:
         return 0, "", "", "", 0
 
@@ -11082,6 +11093,7 @@ class YellowsPixelBuddies(QWidget):
         self._cinema_mode_enabled: bool = bool(saved_settings.get("cinema_mode_enabled", CINEMA_MODE_ENABLED))
         self._cinema_video_screen: QScreen | None = None
         self._cinema_video_title: str = ""
+        self._cinema_video_hwnd: int = 0
         self._cinema_last_active_time: float = 0.0
         self._cinema_intro_spoken: bool = False
 
@@ -12284,6 +12296,9 @@ class YellowsPixelBuddies(QWidget):
             lines.append(f"- Active Window / Tab Title: \"{clean_t}\"")
         if cat and cat not in ("general", "browser"):
             lines.append(f"- Activity Category: {cat.replace('_', ' ').title()}")
+        if getattr(self, "_phase", None) is Phase.WATCHING:
+            v_title = getattr(self, "_cinema_video_title", "") or "Video"
+            lines.append(f"- Active Watching Mode: Pink and user are currently watching '{v_title}' together in cinema mode. Even if the user interacts or switches focus momentarily, the movie is still playing on screen.")
         lines.append("You are aware of what application the user is currently focused on via your native desktop hooks. If asked what they are doing, you can reference this accurately and in-character!")
         return "\n".join(lines)
 
@@ -17531,6 +17546,8 @@ RULES:
 
             if hasattr(self, "_single_click_timer") and self._single_click_timer.isActive():
                 self._single_click_timer.stop()
+            if self._phase is Phase.WATCHING:
+                self._cinema_last_active_time = time.perf_counter()
             self._dialogue_clicked = False
             self._press_global = event.globalPos()
             self._grab_offset = event.globalPos() - self.pos()
@@ -17609,6 +17626,8 @@ RULES:
         if self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW):
             return
         if event.button() == Qt.LeftButton:
+            if self._phase is Phase.WATCHING:
+                self._cinema_last_active_time = time.perf_counter()
             self._open_chat_input()
             event.accept()
             return
@@ -17725,6 +17744,7 @@ RULES:
         if self._is_dialogue_convo_active():
             return
         if self._phase is Phase.WATCHING:
+            self._cinema_last_active_time = time.perf_counter()
             whisper_lines = [
                 ("* Shh! Don't distract me during the movie, mew!", "angry"),
                 ("* Hey! Hands off, minion! The plot is getting good!", "shocked"),
@@ -17984,7 +18004,7 @@ RULES:
                 or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
-                                   Phase.EXIT_OUTRO)
+                                   Phase.EXIT_OUTRO, Phase.WATCHING)
                 or self._post_throw_laugh
                 or getattr(self, "_is_annoyed_ignored", False)):
             return
@@ -18109,7 +18129,7 @@ RULES:
                 or self._phase in (Phase.JUMP, Phase.HANG, Phase.FALL, Phase.THROW,
                                    Phase.HIDE_PEEK, Phase.HIDE_OUTRO,
                                    Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO,
-                                   Phase.EXIT_OUTRO)
+                                   Phase.EXIT_OUTRO, Phase.WATCHING)
                 or self._post_throw_laugh
                 or getattr(self, "_is_annoyed_ignored", False)):
             return
@@ -18530,9 +18550,11 @@ RULES:
         if is_active:
             self._cinema_last_active_time = now
             if self._phase is not Phase.WATCHING:
-                self._enter_cinema_mode(video_screen, video_title)
+                self._enter_cinema_mode(video_screen, video_title, video_hwnd)
             else:
                 self._cinema_video_screen = video_screen
+                if video_hwnd:
+                    self._cinema_video_hwnd = video_hwnd
                 if video_title:
                     self._cinema_video_title = video_title
         else:
@@ -18557,7 +18579,23 @@ RULES:
         gsm_pb_type = int(gsm_info.get("playback_type", 0))
         gsm_title = str(gsm_info.get("title", "") or "").strip()
 
-        # 2. Inspect foreground window
+        # 2. If already watching (Phase.WATCHING), verify if our tracked video window is still alive and playing
+        cur_video_hwnd = getattr(self, "_cinema_video_hwnd", 0)
+        if self._phase is Phase.WATCHING and cur_video_hwnd and dll.IsWindow(cur_video_hwnd):
+            if not dll.IsIconic(cur_video_hwnd):
+                is_max, scr = self._is_window_maximized_or_fullscreen(cur_video_hwnd)
+                if is_max and scr is not None:
+                    # Tracked video window is still maximized/fullscreen on screen!
+                    # Check if the user explicitly PAUSED playback via GSMTC
+                    if gsm_title and not gsm_playing:
+                        # Video was explicitly paused
+                        return False, self._cinema_video_title or gsm_title, cur_video_hwnd, scr
+
+                    # Window is still maximized and not paused!
+                    # Clicking Pink, dialogue overlay, taskbar, or another app does NOT break watching mode.
+                    return True, self._cinema_video_title or gsm_title, cur_video_hwnd, scr
+
+        # 3. Check foreground window (for entering cinema mode or detecting new video)
         hwnd = dll.GetForegroundWindow()
         if not hwnd or hwnd == int(self.winId()):
             hwnd = getattr(self, "_last_foreground_hwnd", 0)
@@ -18565,19 +18603,24 @@ RULES:
         if not hwnd or not dll.IsWindow(hwnd):
             return False, "", 0, None
 
-        # 3. Check if foreground window is maximized or borderless fullscreen
-        is_max, screen = self._is_window_maximized_or_fullscreen(hwnd)
-        if not is_max or screen is None:
-            return False, "", 0, None
-
-        # 4. Check process name and window title
-        hwnd_val, exe_name, exe_path, win_title, pid = get_foreground_process_info()
+        # Check process name and window title
+        hwnd_val, exe_name, exe_path, win_title, pid = get_window_process_info(hwnd)
         exe = (exe_name or "").lower().strip()
         t = (win_title or "").strip()
         t_lower = t.lower()
 
         # Exclude Yellow's Pixel Buddies own windows
+        try:
+            if pid and pid == os.getpid():
+                return False, "", 0, None
+        except Exception:
+            pass
         if "yellow" in exe or "yellows_pixel_buddies" in (exe_path or "").lower():
+            return False, "", 0, None
+
+        # Check if window is maximized or borderless fullscreen
+        is_max, screen = self._is_window_maximized_or_fullscreen(hwnd)
+        if not is_max or screen is None:
             return False, "", 0, None
 
         # Case A: Dedicated video player (VLC, MPV, MPC, PotPlayer, etc.)
@@ -18610,6 +18653,10 @@ RULES:
         if not dll or not hwnd or not dll.IsWindow(hwnd):
             return False, None
 
+        # Minimized windows (in taskbar) are never visible fullscreen/maximized
+        if dll.IsIconic(hwnd):
+            return False, None
+
         # Standard Maximized (WS_MAXIMIZE)
         if dll.IsZoomed(hwnd):
             rect = RECT()
@@ -18631,13 +18678,14 @@ RULES:
 
         return False, None
 
-    def _enter_cinema_mode(self, screen: QScreen | None, video_title: str) -> None:
+    def _enter_cinema_mode(self, screen: QScreen | None, video_title: str, video_hwnd: int = 0) -> None:
         """Enter cinema watching mode: trot to taskbar corner and sit down."""
         target_screen = screen or self._current_screen()
-        log.info("Entering Cinema Mode on %s for: '%s'",
-                 target_screen.name() if target_screen else "primary", video_title)
+        log.info("Entering Cinema Mode on %s for: '%s' (hwnd=%s)",
+                 target_screen.name() if target_screen else "primary", video_title, video_hwnd)
         self._cinema_video_screen = target_screen
         self._cinema_video_title = video_title
+        self._cinema_video_hwnd = video_hwnd
         self._cinema_intro_spoken = False
         self._brain_timer.stop()
         self._phase = Phase.WATCHING
@@ -18693,6 +18741,7 @@ RULES:
         self._pause_elapsed = False
         self._cinema_video_screen = None
         self._cinema_video_title = ""
+        self._cinema_video_hwnd = 0
         self._cinema_intro_spoken = False
 
         stand_anim = "peace_sign" if self._can_play("peace_sign") else "idle"
