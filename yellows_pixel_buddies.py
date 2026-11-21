@@ -15766,10 +15766,10 @@ RULES:
             reach = DEBUG_CROSSHAIR_PX + 2
             return mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
                                        2 * reach + 1, 2 * reach + 1))
-        if getattr(self, "_is_taking_over_cursor", False) or self._phase == Phase.HANG:
+        if getattr(self, "_is_taking_over_cursor", False):
             hand_x, hand_y = self._hand_offset()
             hole_r = 16
-            # Exclude pixels around the cursor hotspot so automated clicks NEVER hit Pink's own window
+            # Exclude pixels around the cursor hotspot during desktop takeover so automated clicks NEVER hit Pink's own window
             hole = QRegion(round(hand_x) - hole_r, round(hand_y) - hole_r - 8, 2 * hole_r, 2 * hole_r + 8)
             return mask.subtracted(hole)
         return mask
