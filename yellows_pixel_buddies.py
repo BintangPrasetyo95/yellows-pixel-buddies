@@ -104,6 +104,36 @@ import uuid
 from typing import Any
 
 import requests
+
+# Resolve PyTorch DLL directory and preload torch BEFORE PyQt5 to prevent Windows C-runtime DLL collision (WinError 1114)
+_PYTORCH_DLL_HANDLES = []
+if sys.platform == "win32":
+    try:
+        import site
+        _sp_candidates = []
+        try:
+            _sp_candidates.extend(site.getsitepackages())
+        except Exception:
+            pass
+        try:
+            _us = site.getusersitepackages()
+            if _us:
+                _sp_candidates.append(_us)
+        except Exception:
+            pass
+        for _p in _sp_candidates:
+            _t_lib = Path(_p) / "torch" / "lib"
+            if _t_lib.exists():
+                os.environ["PATH"] = str(_t_lib) + os.pathsep + os.environ.get("PATH", "")
+                if hasattr(os, "add_dll_directory"):
+                    _PYTORCH_DLL_HANDLES.append(os.add_dll_directory(str(_t_lib)))
+    except Exception:
+        pass
+try:
+    import torch
+except Exception:
+    pass
+
 from PyQt5.QtCore import (
     QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QSize, QThread, Qt, QTimer, pyqtSignal
 )
@@ -124,6 +154,7 @@ from sound_manager import get_sound_manager, play_sound
 import os_interop
 import action_planner
 import takeover_overlay
+import voice_service
 
 
 # =============================================================================
@@ -728,6 +759,7 @@ KNOWN_GAME_EXE_NAMES = {
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash"]
 GEMINI_TIMEOUT_S = 35
+DEFAULT_LANGUAGE = "en"  # "en" (English) or "id" (Bahasa Indonesia)
 PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion living on the Windows taskbar.
 You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vessel (designed by Claire Belton, from Toby Fox's Deltarune universe).
 
@@ -2788,11 +2820,14 @@ class DialogueOverlay(QWidget):
     step_started = pyqtSignal(str, object, bool)  # (text, anim, is_ghost)
 
     def __init__(self, font_family: str, box_png_path: Path) -> None:
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
-                         | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
+        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.NoFocus)
+
+        self._is_fixed_decision: bool = False
+        self._fixed_pos: tuple[int, int] | None = None
 
         self._font_family = font_family
         self._box_src: QImage | None = None
@@ -2923,12 +2958,22 @@ class DialogueOverlay(QWidget):
         """True if the dialogue bubble can be fast-forwarded or dismissed by clicks."""
         return self._skippable
 
+    def has_active_choices(self) -> bool:
+        """True if the dialogue bubble is actively waiting for a player decision."""
+        return bool(self._active and self._choices)
+
+    def choose_option(self, idx: int) -> None:
+        """Programmatically select a choice option by index."""
+        self._choose_option(idx)
+
     def ask(self, text: str, choices: list[tuple[str, str, str | None]], pet_x: float, pet_y: float,
-            on_chosen, track_ignore: bool = True) -> None:
+            on_chosen, track_ignore: bool = True, fixed: bool = False, fixed_pos: tuple[int, int] | None = None) -> None:
         """Start a new question dialogue bubble with interactive choices."""
+        self._is_fixed_decision = fixed
+        self._fixed_pos = fixed_pos
         self._skippable = True
-        self._auto_dismiss = True
-        self._track_ignore = track_ignore
+        self._auto_dismiss = not fixed   # Fixed decisions NEVER auto-dismiss on timer!
+        self._track_ignore = track_ignore and not fixed
         self._user_interacted = False
         self._last_was_ignored = False
         self._user_moved_during_dialogue = False
@@ -2940,11 +2985,16 @@ class DialogueOverlay(QWidget):
         self._queue.clear()
         self._choices = list(choices)
         self._choice_rects.clear()
-        self._hovered_choice_idx = None
+        self._hovered_choice_idx = 0 if self._choices else None  # Default Soul Heart on first choice
         self._on_chosen_callback = on_chosen
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
+        self.setFocusPolicy(Qt.StrongFocus)
         self._display_text(text, pet_x, pet_y)
+        if fixed and fixed_pos:
+            self.move(int(fixed_pos[0]), int(fixed_pos[1]))
+        self.activateWindow()
+        self.setFocus()
 
     def say(
         self,
@@ -2959,14 +3009,10 @@ class DialogueOverlay(QWidget):
         hold_s: float | None = None,
         track_ignore: bool = True,
     ) -> None:
-        """Start a new speech bubble with typewriter animation beside the pet's head.
-
-        queue: optional list of additional messages or DialogueSteps to display sequentially after this one.
-        skippable: whether clicking can advance or dismiss this dialogue.
-        auto_dismiss: whether the bubble automatically closes after being read.
-        anim: optional animation associated with this initial step.
-        is_ghost: whether spectral ghost mode is active for this step.
-        """
+        """Start a new speech bubble with typewriter animation beside the pet's head."""
+        self._is_fixed_decision = False
+        self._fixed_pos = None
+        self.setFocusPolicy(Qt.NoFocus)
         self._choices.clear()
         self._choice_rects.clear()
         self._hovered_choice_idx = None
@@ -3159,6 +3205,12 @@ class DialogueOverlay(QWidget):
 
     def update_position(self, pet_x: float, pet_y: float, pet_w: float | None = None, pet_h: float | None = None) -> None:
         """Position the dialogue bubble beside the pet's head (left or right depends on screen half)."""
+        if getattr(self, "_is_fixed_decision", False):
+            if getattr(self, "_fixed_pos", None):
+                self.move(int(self._fixed_pos[0]), int(self._fixed_pos[1]))
+            ensure_window_topmost(self)
+            return
+
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
         if pet_w is not None:
@@ -3309,6 +3361,9 @@ class DialogueOverlay(QWidget):
         if clear_queue:
             self._queue.clear()
 
+        self._is_fixed_decision = False
+        self._fixed_pos = None
+        self.setFocusPolicy(Qt.NoFocus)
         self._choices.clear()
         self._choice_rects.clear()
         self._hovered_choice_idx = None
@@ -3379,6 +3434,9 @@ class DialogueOverlay(QWidget):
             return
         play_sound("menu_select")
         choice_label, reaction_text, reaction_anim = self._choices[idx]
+        self._is_fixed_decision = False
+        self._fixed_pos = None
+        self.setFocusPolicy(Qt.NoFocus)
         self._choices.clear()
         self._choice_rects.clear()
         self._hovered_choice_idx = None
@@ -3456,17 +3514,18 @@ class DialogueOverlay(QWidget):
                     self._play("wistful")
                 event.accept()
                 return
-            if self._visible_chars < self._total_chars:
-                self.advance_or_dismiss()
-                event.accept()
-                return
+            # Prioritize clicking choice buttons directly even while typewriter is running
             if self._choices:
                 pos = event.pos()
                 for i, r in enumerate(self._choice_rects):
                     if r.contains(pos):
+                        self._visible_chars = self._total_chars
                         self._choose_option(i)
                         event.accept()
                         return
+
+            if self._visible_chars < self._total_chars:
+                self.advance_or_dismiss()
                 event.accept()
                 return
             if DIALOGUE_CLICK_TO_DISMISS:
@@ -3474,6 +3533,57 @@ class DialogueOverlay(QWidget):
                 event.accept()
         else:
             super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        """Handle keyboard navigation and instant selection for interactive question choices."""
+        if not self._active or not self._choices:
+            super().keyPressEvent(event)
+            return
+
+        k = event.key()
+        if k in (Qt.Key_Left, Qt.Key_Up):
+            cur = self._hovered_choice_idx if self._hovered_choice_idx is not None else 0
+            self._hovered_choice_idx = max(0, cur - 1)
+            play_sound("menu_move")
+            self.update()
+            event.accept()
+            return
+
+        if k in (Qt.Key_Right, Qt.Key_Down, Qt.Key_Tab):
+            cur = self._hovered_choice_idx if self._hovered_choice_idx is not None else 0
+            self._hovered_choice_idx = min(len(self._choices) - 1, cur + 1)
+            play_sound("menu_move")
+            self.update()
+            event.accept()
+            return
+
+        if k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Z, Qt.Key_Space):
+            idx = self._hovered_choice_idx if self._hovered_choice_idx is not None else 0
+            self._choose_option(idx)
+            event.accept()
+            return
+
+        if k == Qt.Key_Y:
+            self._choose_option(0)
+            event.accept()
+            return
+
+        if k in (Qt.Key_N, Qt.Key_Escape):
+            if len(self._choices) > 1:
+                self._choose_option(1)
+            else:
+                self.dismiss(clear_queue=True)
+            event.accept()
+            return
+
+        if k in (Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4):
+            num_idx = k - Qt.Key_1
+            if num_idx < len(self._choices):
+                self._choose_option(num_idx)
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
 
     def paintEvent(self, event) -> None:
         if not self._active or self._cached_bg is None:
@@ -4100,6 +4210,19 @@ class ChatInputOverlay(QWidget):
         if hasattr(self, "_attachment_widget"):
             self._attachment_widget.hide()
         self._on_text_changed()
+
+    def set_language(self, lang: str) -> None:
+        """Update placeholder text and tooltips according to selected language ('en' or 'id')."""
+        self._language = lang if lang in ("en", "id") else "en"
+        if hasattr(self, "_text_edit"):
+            if self._language == "id":
+                self._text_edit.setPlaceholderText("Bicara ke Pink (atau drop gambar)...")
+                self._text_edit.setToolTip("Tekan Enter untuk kirim (Shift+Enter untuk baris baru)")
+            else:
+                self._text_edit.setPlaceholderText("Talk to Pink (or drop image)...")
+                self._text_edit.setToolTip("Press Enter to send (Shift+Enter for newline)")
+        if hasattr(self, "_send_btn"):
+            self._send_btn.setText("Kirim" if self._language == "id" else "Send")
 
     def _on_attach_clicked(self) -> None:
         self.reset_timeout()
@@ -10815,6 +10938,11 @@ class YellowsPixelBuddies(QWidget):
             self._takeover_banner.set_font_family(self._font_family)
         self._target_reticle = takeover_overlay.TargetReticleOverlay()
         self._desktop_action_worker: action_planner.DesktopActionWorkerThread | None = None
+        self._voice_manager: voice_service.VoiceManager | None = None
+        self._voice_overlay: takeover_overlay.VoiceModeOverlay | None = None
+        self._voice_mode_enabled: bool = False
+        self._voice_mode_context_action: QAction | None = None
+        self._voice_mode_tray_action: QAction | None = None
         self._memory = MemoryManager(USER_DATA_DIR)
         self._update_checker_thread: UpdateCheckerThread | None = None
         self._update_downloader_thread: UpdateDownloaderThread | None = None
@@ -11017,6 +11145,9 @@ class YellowsPixelBuddies(QWidget):
                 self._bomb_count = BOMB_COUNT
         if "jump_enabled" in saved_settings:
             self._jump_enabled = bool(saved_settings["jump_enabled"]) and getattr(self, "_jump_sprites_ready", True)
+        self._language: str = str(saved_settings.get("language", DEFAULT_LANGUAGE))
+        if self._language not in ("en", "id"):
+            self._language = DEFAULT_LANGUAGE
         # Sound effects setting: strictly MUTED / NO SOUND by default unless explicitly enabled
         self._audio_muted: bool = bool(saved_settings.get("audio_muted", True))
         self._sfx_volume: float = float(saved_settings.get("sfx_volume", 0.7))
@@ -12308,6 +12439,9 @@ class YellowsPixelBuddies(QWidget):
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        lang_block = self._get_language_prompt_block()
+        if lang_block:
+            system_inst += f"\n{lang_block}"
         if hasattr(self, "_codebase_provider") and self._codebase_provider:
             compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
             if compact_cb:
@@ -13018,6 +13152,7 @@ RULES:
         if self.state in MOVE_VELOCITY_PX_S:
             self._play("idle")
         if hasattr(self, "_chat_input"):
+            self._chat_input.set_language(getattr(self, "_language", "en"))
             self._chat_input.open_at(self._x, self._y)
 
     def _on_chat_cancelled(self) -> None:
@@ -13711,6 +13846,9 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        lang_block = self._get_language_prompt_block()
+        if lang_block:
+            system_inst += f"\n{lang_block}"
         if hasattr(self, "_codebase_provider") and self._codebase_provider:
             compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
             if compact_cb:
@@ -14110,6 +14248,8 @@ RULES:
         os_interop.set_window_exclude_from_capture(self, True)
         if hasattr(self, "_dialogue_overlay"):
             os_interop.set_window_exclude_from_capture(self._dialogue_overlay, True)
+        if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
+            os_interop.set_window_exclude_from_capture(self._voice_overlay, True)
 
         # Latch Pink onto the mouse cursor so she physically rides and steers it across the screen!
         self._is_taking_over_cursor = True
@@ -14154,9 +14294,12 @@ RULES:
                 return
             log.info("Desktop Action Plan Finished: success=%s, msg='%s'", success, msg)
             self._is_taking_over_cursor = False
+            self._confirm_pending = False
             os_interop.set_window_exclude_from_capture(self, False)
             if hasattr(self, "_dialogue_overlay"):
                 os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
+            if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
+                os_interop.set_window_exclude_from_capture(self._voice_overlay, False)
 
             if hasattr(self, "_takeover_banner"):
                 self._takeover_banner.dismiss()
@@ -14170,43 +14313,77 @@ RULES:
             if success:
                 play_sound("coin")
                 clean_msg = msg.strip() if msg else "Task finished"
-                self._say(f"* All done, minion! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
+                if getattr(self, "_language", "en") == "id":
+                    self._say(f"* Beres semua, babu! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
+                else:
+                    self._say(f"* All done, minion! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
             else:
                 clean_msg = msg.strip() if msg else "Something interrupted me"
-                self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
+                if getattr(self, "_language", "en") == "id":
+                    self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
+                else:
+                    self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
 
         def _on_confirm_req(a_type: str, target: str, text: str, win_title: str, proc_name: str) -> None:
             if not getattr(self, "_is_taking_over_cursor", False):
                 return
+            self._confirm_pending = True
             log.info("Desktop Takeover confirmation requested for '%s' on '%s' (text=%r, window='%s' [%s])",
                      a_type, target, text, win_title, proc_name)
             detail = f"\"{text[:60]}\"" if text else target
             app_display = proc_name or win_title or "this window"
-            question_text = f"* Minion! I'm about to {a_type.replace('_', ' ')}:\n* {detail}\n* in {app_display}. Proceed?"
-            choices = [
-                ("Proceed", "* Right away, minion! [anim: peace_sign]", "peace_sign"),
-                ("Cancel", "* Hmph! Canceled! [anim: angry]", "angry"),
-            ]
+
+            is_id = getattr(self, "_language", "en") == "id"
+            if is_id:
+                action_clean = a_type.replace('_', ' ')
+                question_text = f"* Babu! Aku bakal {action_clean}:\n* {detail}\n* di {app_display}. Lanjutkan?"
+                choices = [
+                    ("Lanjut", "* Siap laksanakan, babu! [anim: peace_sign]", "peace_sign"),
+                    ("Batal", "* Hmph! Dibatalkan! [anim: angry]", "angry"),
+                ]
+                banner_title = "⚠️ BUTUH KONFIRMASI — [ENTER/Y: Lanjut]  [ESC/N: Batal]"
+                banner_sub = f"Konfirmasi {action_clean} di {app_display} (atau klik opsi di bawah)..."
+            else:
+                question_text = f"* Minion! I'm about to {a_type.replace('_', ' ')}:\n* {detail}\n* in {app_display}. Proceed?"
+                choices = [
+                    ("Proceed", "* Right away, minion! [anim: peace_sign]", "peace_sign"),
+                    ("Cancel", "* Hmph! Canceled! [anim: angry]", "angry"),
+                ]
+                banner_title = "⚠️ CONFIRMATION REQUIRED — [ENTER/Y: Proceed]  [ESC/N: Cancel]"
+                banner_sub = f"Confirm {a_type} in {app_display} (or click option below)..."
+
+            # Center fixed decision box cleanly on screen right below Takeover Banner
+            screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+            fixed_x = self._x
+            fixed_y = self._y
+            if screen:
+                geom = screen.geometry()
+                fixed_x = geom.x() + (geom.width() - 380) // 2
+                fixed_y = geom.y() + 105
+
             if hasattr(self, "_takeover_banner"):
                 self._takeover_banner.show_banner(
-                    title="⚠️ CONFIRMATION REQUIRED — CHOOSE OR PRESS ESC",
-                    subtitle=f"Confirm {a_type} in {app_display}...",
+                    title=banner_title,
+                    subtitle=banner_sub,
                 )
 
             def _on_chosen(choice_label: str, _reaction_text: str, _reaction_anim: str) -> None:
+                self._confirm_pending = False
                 worker = getattr(self, "_desktop_action_worker", None)
                 if worker is not None and hasattr(worker, "deliver_confirmation"):
-                    approved = (choice_label == "Proceed")
+                    approved = (choice_label in ("Proceed", "Lanjut"))
                     worker.deliver_confirmation(approved)
 
             if hasattr(self, "_dialogue_overlay"):
                 self._dialogue_overlay.ask(
                     question_text,
                     choices,
-                    self._x,
-                    self._y,
+                    fixed_x,
+                    fixed_y,
                     on_chosen=_on_chosen,
                     track_ignore=False,
+                    fixed=True,
+                    fixed_pos=(int(fixed_x), int(fixed_y)),
                 )
 
         self._desktop_action_worker.sig_step_started.connect(_on_step_start)
@@ -14221,6 +14398,7 @@ RULES:
             return
         log.warning("Immediate UI-thread abort of desktop cursor takeover: %s", reason)
         self._is_taking_over_cursor = False
+        self._confirm_pending = False
         os_interop.trigger_panic_abort()
 
         worker = getattr(self, "_desktop_action_worker", None)
@@ -14238,6 +14416,8 @@ RULES:
         os_interop.set_window_exclude_from_capture(self, False)
         if hasattr(self, "_dialogue_overlay"):
             os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
+        if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
+            os_interop.set_window_exclude_from_capture(self._voice_overlay, False)
 
         if hasattr(self, "_takeover_banner"):
             self._takeover_banner.dismiss()
@@ -14247,6 +14427,145 @@ RULES:
         if self._phase is Phase.HANG:
             self._fall_after_jump(SHAKEN_REACTION)
         self._say("* W-wah?! Okay, okay! I let go of your mouse, minion! [anim: shocked]", force=True, auto_dismiss=True)
+
+    def _init_voice_system(self) -> None:
+        """Lazily initialize the background VoiceManager and VoiceModeOverlay."""
+        lang = getattr(self, "_language", "en")
+        if getattr(self, "_voice_manager", None) is None:
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            self._voice_manager = voice_service.VoiceManager(model_name="base", api_key=api_key, language=lang, parent=self)
+            self._voice_manager.preload()
+        else:
+            self._voice_manager.set_language(lang)
+
+        if getattr(self, "_voice_overlay", None) is None:
+            self._voice_overlay = takeover_overlay.VoiceModeOverlay(self._voice_manager, parent=None)
+            self._voice_overlay.set_language(lang)
+            if hasattr(self, "_font_family"):
+                self._voice_overlay.set_font_family(self._font_family)
+            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay is not None:
+                self._voice_overlay.set_dialogue_ref(self._dialogue_overlay)
+            self._voice_overlay.sig_voice_submitted.connect(self._on_voice_command_submitted)
+            self._voice_overlay.sig_dismissed.connect(self._on_voice_overlay_dismissed)
+        else:
+            self._voice_overlay.set_language(lang)
+
+    def _get_language_prompt_block(self) -> str:
+        """Return the strict language instruction prompt block for Gemini AI."""
+        if getattr(self, "_language", "en") == "id":
+            return (
+                "\n\n=======================================================\n"
+                "CRITICAL LANGUAGE DIRECTIVE: BAHASA INDONESIA ONLY\n"
+                "=======================================================\n"
+                "- You MUST speak, converse, comment, bicker, and react ENTIRELY in BAHASA INDONESIA!\n"
+                "- Do NOT output responses in English (except for structured action tags like [anim: ...], [emotion: ...], [seen: ...]).\n"
+                "- Maintain your authentic tsundere, Mad Mew Mew, anime doll royalty personality in Indonesian:\n"
+                "  * Always start spoken lines with '* '\n"
+                "  * Address the user as 'babu', 'manusia', 'tuan bodoh', 'boneka rendahan', or by their preferred name/nickname (e.g. '[Name], kamu babu!').\n"
+                "  * Use expressive, punchy, tsundere Indonesian phrasing:\n"
+                "    - 'Mew?!', 'Dasar babu!', 'Apa-apaan sih?!', 'Hmph!', 'B-Bukannya aku senang ya!', 'Jangan geer dulu!', 'Diam kamu, tubuh boneka!'\n"
+                "  * The doll body speaks innocently (e.g. '* Ayo main lagi, mew~', '* Tubuhku mau es krim!').\n"
+                "  * The ghost spirit bickers with the doll in Indonesian (e.g. '* DIAM KAMU, TUBUH BONEKA!!').\n"
+                "  * Keep code snippets or technical paths verbatim if discussing coding, but all dialogue and explanations must be in Indonesian."
+            )
+        return ""
+
+    def set_language(self, lang: str, notify: bool = True) -> None:
+        """Switch language between English ('en') and Indonesian ('id')."""
+        if lang not in ("en", "id"):
+            lang = "en"
+        self._language = lang
+        self._save_live_settings()
+
+        if getattr(self, "_voice_manager", None) is not None:
+            self._voice_manager.set_language(lang)
+
+        if getattr(self, "_voice_overlay", None) is not None:
+            self._voice_overlay.set_language(lang)
+
+        if hasattr(self, "_chat_input") and self._chat_input is not None:
+            self._chat_input.set_language(lang)
+
+        for act in (getattr(self, "_en_tray_action", None), getattr(self, "_en_context_action", None)):
+            if act is not None:
+                act.blockSignals(True)
+                act.setChecked(lang == "en")
+                act.blockSignals(False)
+
+        for act in (getattr(self, "_id_tray_action", None), getattr(self, "_id_context_action", None)):
+            if act is not None:
+                act.blockSignals(True)
+                act.setChecked(lang == "id")
+                act.blockSignals(False)
+
+        play_sound("menu_move")
+        if notify:
+            if lang == "id":
+                self._say("* Bahasa diubah ke Bahasa Indonesia, babu! Jangan bikin aku ngomong dua kali ya! [anim: tongue]", force=True)
+            else:
+                self._say("* Language set to English, minion! Don't make me repeat myself! [anim: tongue]", force=True)
+
+    def _toggle_voice_mode(self, enabled: bool | None = None) -> None:
+        """Toggle Push-to-Talk Voice Mode HUD and spacebar voice command capture."""
+        if enabled is None:
+            self._voice_mode_enabled = not getattr(self, "_voice_mode_enabled", False)
+        else:
+            self._voice_mode_enabled = bool(enabled)
+
+        # Synchronize checkable action states without recursive signal loops
+        for act in (getattr(self, "_voice_mode_tray_action", None), getattr(self, "_voice_mode_context_action", None)):
+            if act is not None:
+                act.blockSignals(True)
+                act.setChecked(self._voice_mode_enabled)
+                act.blockSignals(False)
+
+        if self._voice_mode_enabled:
+            self._init_voice_system()
+            if self._voice_overlay is not None:
+                self._voice_overlay.show_overlay()
+            play_sound("menu_move")
+        else:
+            if self._voice_overlay is not None and self._voice_overlay.isVisible():
+                self._voice_overlay.dismiss()
+
+    def _on_voice_overlay_dismissed(self) -> None:
+        """Sync menu states when user dismisses the Voice Mode HUD via ESC or [X]."""
+        self._voice_mode_enabled = False
+        for act in (getattr(self, "_voice_mode_tray_action", None), getattr(self, "_voice_mode_context_action", None)):
+            if act is not None:
+                act.blockSignals(True)
+                act.setChecked(False)
+                act.blockSignals(False)
+
+    def _on_voice_command_submitted(self, text: str) -> None:
+        """Handle transcribed voice command from VoiceModeOverlay and dispatch to Pink AI."""
+        clean = text.strip()
+        if not clean:
+            return
+        log.info("Voice Command submitted: %r", clean)
+
+        # If Pink is currently displaying an interactive question/decision with choices, answer it by voice!
+        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.has_active_choices():
+            lower = clean.lower()
+            affirmative_words = (
+                "yes", "proceed", "sure", "confirm", "do it", "ok", "okay", "go ahead", "yeah", "yep", "send",
+                "ya", "iya", "lanjut", "lanjutkan", "gas", "oke", "yoi", "sip", "boleh", "betul", "benar", "setuju"
+            )
+            negative_words = (
+                "no", "cancel", "stop", "abort", "don't", "dont", "nope",
+                "jangan", "batal", "batalkan", "stop", "ga", "gak", "nggak", "enggak", "tidak", "ogah", "hentikan"
+            )
+            if any(w in lower for w in affirmative_words):
+                log.info("Voice answered choice 0 (Proceed/Lanjut) with: %r", clean)
+                self._dialogue_overlay.choose_option(0)
+                return
+            elif any(w in lower for w in negative_words):
+                log.info("Voice answered choice 1 (Cancel/Batal) with: %r", clean)
+                self._dialogue_overlay.choose_option(1)
+                return
+
+        play_sound("text_blip")
+        self._on_chat_submitted(clean, see_screen=True)
 
     def _on_gemini_error(self, user_text: str, error_msg: str, had_screen: bool = False, is_auto: bool = False) -> None:
         """Handle error from Gemini AI."""
@@ -14394,6 +14713,9 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        lang_block = self._get_language_prompt_block()
+        if lang_block:
+            system_inst += f"\n{lang_block}"
         if hasattr(self, "_codebase_provider") and self._codebase_provider:
             compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
             if compact_cb:
@@ -15104,6 +15426,9 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        lang_block = self._get_language_prompt_block()
+        if lang_block:
+            system_inst += f"\n{lang_block}"
         if hasattr(self, "_codebase_provider") and self._codebase_provider:
             compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
             if compact_cb:
@@ -15441,10 +15766,10 @@ RULES:
             reach = DEBUG_CROSSHAIR_PX + 2
             return mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
                                        2 * reach + 1, 2 * reach + 1))
-        if getattr(self, "_is_taking_over_cursor", False) or self._phase == Phase.HANG:
+        if getattr(self, "_is_taking_over_cursor", False):
             hand_x, hand_y = self._hand_offset()
             hole_r = 16
-            # Exclude pixels around the cursor hotspot so automated clicks NEVER hit Pink's own window
+            # Exclude pixels around the cursor hotspot during desktop takeover so automated clicks NEVER hit Pink's own window
             hole = QRegion(round(hand_x) - hole_r, round(hand_y) - hole_r - 8, 2 * hole_r, 2 * hole_r + 8)
             return mask.subtracted(hole)
         return mask
@@ -16654,6 +16979,9 @@ RULES:
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
         system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
+        lang_block = self._get_language_prompt_block()
+        if lang_block:
+            system_inst += f"\n{lang_block}"
         if hasattr(self, "_codebase_provider") and self._codebase_provider:
             compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
             if compact_cb:
@@ -17219,7 +17547,11 @@ RULES:
 
         if getattr(self, "_is_taking_over_cursor", False):
             # Poll global ESC / mouse pull OR violent mouse shake at 60 FPS for instant abort!
-            if os_interop.is_panic_key_pressed() or (now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking()):
+            is_shaking_aborted = (now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking())
+            if getattr(self, "_confirm_pending", False):
+                is_shaking_aborted = False  # Suppress shake abort during decision prompt so user can move mouse
+
+            if os_interop.is_panic_key_pressed() or is_shaking_aborted:
                 self._abort_desktop_takeover("User pressed ESC or shook the mouse")
                 return
         else:
@@ -17854,6 +18186,25 @@ RULES:
             self._fall_after_jump(None)
         menu = QMenu(self)
         talk_action = menu.addAction("Talk to Pink")
+        voice_mode_act = menu.addAction("Voice Mode [SPACE]")
+        voice_mode_act.setCheckable(True)
+        voice_mode_act.setChecked(getattr(self, "_voice_mode_enabled", False))
+        voice_mode_act.toggled.connect(self._toggle_voice_mode)
+        self._voice_mode_context_action = voice_mode_act
+
+        lang_menu = menu.addMenu("Language / Bahasa")
+        cur_lang = getattr(self, "_language", "en")
+        en_act = lang_menu.addAction("English (Default)")
+        en_act.setCheckable(True)
+        en_act.setChecked(cur_lang == "en")
+        en_act.triggered.connect(lambda: self.set_language("en"))
+        self._en_context_action = en_act
+
+        id_act = lang_menu.addAction("Bahasa Indonesia")
+        id_act.setCheckable(True)
+        id_act.setChecked(cur_lang == "id")
+        id_act.triggered.connect(lambda: self.set_language("id"))
+        self._id_context_action = id_act
         ask_action = menu.addAction("Ask me something")
         shop_action = menu.addAction("Visit Shop")
         alarms_action = menu.addAction("Alarms & Timers (COMING SOON)")
@@ -18246,6 +18597,23 @@ RULES:
 
         self._talk_tray_action = tray_menu.addAction("Talk to Pink")
         self._talk_tray_action.triggered.connect(self._open_chat_input)
+
+        self._voice_mode_tray_action = tray_menu.addAction("Voice Mode [SPACE]")
+        self._voice_mode_tray_action.setCheckable(True)
+        self._voice_mode_tray_action.setChecked(getattr(self, "_voice_mode_enabled", False))
+        self._voice_mode_tray_action.toggled.connect(self._toggle_voice_mode)
+
+        lang_tray_menu = tray_menu.addMenu("Language / Bahasa")
+        cur_lang = getattr(self, "_language", "en")
+        self._en_tray_action = lang_tray_menu.addAction("English (Default)")
+        self._en_tray_action.setCheckable(True)
+        self._en_tray_action.setChecked(cur_lang == "en")
+        self._en_tray_action.triggered.connect(lambda: self.set_language("en"))
+
+        self._id_tray_action = lang_tray_menu.addAction("Bahasa Indonesia")
+        self._id_tray_action.setCheckable(True)
+        self._id_tray_action.setChecked(cur_lang == "id")
+        self._id_tray_action.triggered.connect(lambda: self.set_language("id"))
 
         self._shop_tray_action = tray_menu.addAction("Visit Shop")
         self._shop_tray_action.triggered.connect(self._open_shop_window)
@@ -18845,6 +19213,9 @@ RULES:
             f"watching a maximized video titled '{clean_title}' together with your user (minion) like a movie buddy. "
             "You are observing what is actively playing on screen."
         )
+        lang_block = self._get_language_prompt_block()
+        if lang_block:
+            system_inst += f"\n{lang_block}"
 
         cinema_prompt = (
             f"[Pink is watching the maximized video '{clean_title}' with the user.]\n"
@@ -19010,6 +19381,7 @@ RULES:
                 "audio_muted": getattr(self, "_audio_muted", True),
                 "sfx_volume": getattr(self, "_sfx_volume", 0.7),
                 "cinema_mode_enabled": getattr(self, "_cinema_mode_enabled", CINEMA_MODE_ENABLED),
+                "language": getattr(self, "_language", DEFAULT_LANGUAGE),
             }
             self._memory.save_settings(settings)
 
@@ -19255,6 +19627,9 @@ RULES:
         if hasattr(self, "_target_reticle"):
             self._target_reticle.dismiss()
             self._target_reticle.close()
+        if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
+            self._voice_overlay.dismiss()
+            self._voice_overlay.close()
         if getattr(self, "_desktop_action_worker", None) and self._desktop_action_worker.isRunning():
             self._desktop_action_worker.abort()
         if hasattr(self, "_dialogue_overlay"):

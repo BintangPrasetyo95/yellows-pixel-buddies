@@ -17,6 +17,7 @@ a = Analysis(
         'action_planner',
         'os_interop',
         'takeover_overlay',
+        'voice_service',
     ],
     hookspath=[],
     hooksconfig={},
