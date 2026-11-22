@@ -6,14 +6,14 @@
 
 ## 1. Project Architecture & Key Files
 
-- **`yellows_pixel_buddies.py`**: Main desktop pet application (~16,800 LOC monolith). Contains:
+- **`yellows_pixel_buddies.py`**: Main desktop pet application (~19,800 LOC monolith). Contains:
   - Configuration section (`1. CONFIGURATION` at top).
   - Windows API interop (`ctypes`, `user32`, `dwmapi`) for taskbar metrics (`ABM_GETTASKBARPOS`), DPI scaling, transparent click-through, and window switch tracking.
   - State machine, frame animations, physics (ballistic cursor jump, hanging, bomb tosses).
   - Gemini AI thread worker, vision screen capture, prompt builder, action tag parser.
   - Alarms, focus timers, and system tray control center (`QSystemTrayIcon`).
   - GitHub release auto-updater.
-- **`shop_window.py`**: Deltarune-styled Dark World Sanctuary / Shop UI (`DeltaruneShopWindow`, ~3,300 LOC). Handles tasks, goals, alarms/timers GUI, facts editor, Dark Dollars wallet, and item dialogue.
+- **`shop_window.py`**: Deltarune-styled Dark World Sanctuary / Shop UI (`DeltaruneShopWindow`, ~3,500 LOC). Handles tasks, goals, alarms/timers GUI, facts editor, Dark Dollars wallet, and item dialogue.
 - **`sprites/`**: Transparent PNG sequences sorted numerically (`1.png`, `2.png`, ...).
 - **`fonts/`**: Retro pixel typography (`fonts/determination/determination.ttf`).
 - **`sounds/`**: Retro audio effects for shop menus, coin clinks, and pet reactions.
@@ -32,10 +32,20 @@
   ```
 - **Install dependencies**:
   ```powershell
-  pip install PyQt5 requests pygame
+  pip install -r requirements.txt          # runtime
+  pip install -r requirements-dev.txt      # + pytest, ruff
   # Optional for Windows GSMTC media playback detection:
   pip install winrt-runtime winrt-Windows.Media.Control
   ```
+- **Run tests** (same command CI runs on every PR):
+  ```powershell
+  python -m pytest -m "not desktop"
+  ```
+  - Tests live in `tests/` (tracked). `scratch/` stays gitignored for throwaway scripts only.
+  - `tests/conftest.py` points `PINK_DATA_DIR` at a temp folder, so tests never touch your real `memory/` or `.env`.
+  - `-m desktop` tests drive the real screen/keyboard (e.g. a real Esc keypress); run them only locally, with nothing important focused.
+  - Known bugs from `temp/REVIEW.md` are `xfail(strict=True, reason="REVIEW <ID>")`. When a fix makes one pass, the suite fails until you remove its marker; list the closed IDs in the PR.
+  - Takeover executor tests use the `fake_os_interop` fixture (records clicks/keys instead of sending them). Never call `os_interop` input functions unmocked in a test.
 - **Build standalone executable & installer**:
   ```cmd
   build_release.bat
@@ -51,7 +61,7 @@
 ## 3. Engineering Rules & Constraints
 
 ### ⚠️ Surgical Edits on Monolithic Files
-- `yellows_pixel_buddies.py` is over 16,000 lines long.
+- `yellows_pixel_buddies.py` is nearly 20,000 lines long.
 - **Never attempt full file rewrites or indiscriminate bulk replacements.**
 - Always use targeted, minimal diffs (`edit_file`) with sufficient surrounding context.
 - Verify imports, class scopes, and method references before making changes.
@@ -68,6 +78,7 @@
 
 ### 💾 Storage & Persistence Hierarchy
 - User data must follow the resolution logic in `_resolve_user_data_dir()`:
+  0. **Explicit override**: `PINK_DATA_DIR` environment variable -> exactly that folder, and no legacy migration (used by the test suite).
   1. **Portable mode**: If `portable.txt` exists next to executable -> local directory.
   2. **Development mode**: If running raw script and local `./memory/` exists -> local directory.
   3. **Production mode**: Standard Windows `%APPDATA%\YellowsPixelBuddies\memory` (survives app updates and reinstalls).

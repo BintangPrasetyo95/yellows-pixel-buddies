@@ -1,0 +1,18 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "desktop: touches the real screen, windows, cursor or keyboard (excluded in CI; run locally with -m desktop)",
+    "slow: builds the full pet widget or otherwise takes several seconds",
+]
+xfail_strict = true
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+extend-exclude = ["build", "dist", "graphify-out", "temp", "scratch", "ignore this"]
+
+[tool.ruff.lint]
+# Warn-only in CI for now (see .github/workflows/tests.yml). BLE001/S110 track the
+# broad-except / except-pass debt from review finding M8.
+select = ["E9", "F63", "F7", "F82", "BLE001", "S110"]

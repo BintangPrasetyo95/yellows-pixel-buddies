@@ -1,0 +1,16 @@
+# Runtime dependencies for running Pink from source (python yellows_pixel_buddies.py).
+# Versions are the ones the app is currently developed against.
+PyQt5==5.15.11
+requests==2.34.2
+pygame==2.6.1
+numpy==2.4.6
+pillow==12.2.0
+psutil==5.9.6
+sounddevice==0.5.6
+
+# Optional, voice push-to-talk with local transcription (large download; the app falls back to Gemini without it):
+#   openai-whisper==20250625
+#   torch==2.13.0
+# Optional, Windows media (GSMTC) song detection:
+#   winrt-runtime
+#   winrt-Windows.Media.Control
