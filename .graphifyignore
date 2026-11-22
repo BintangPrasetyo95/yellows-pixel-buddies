@@ -1,0 +1,8 @@
+# graphify: keep the knowledge graph to code + top-level docs
+# sprite animation frames and sound effects add no semantic value
+sprites/
+sounds/
+# private scratch skills folder
+ignore this/
+# app icon (only image left after the folders above)
+icon.svg

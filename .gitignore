@@ -46,6 +46,8 @@ memory/
 .agents/
 .vscode/
 .idea/
+.claude/*
+!.claude/skills/
 *.sublime-project
 *.sublime-workspace
 
@@ -71,3 +73,5 @@ preview.png
 Pink_Battle_Notes.pdf
 /scratch
 /temp
+graphify-out/
+
