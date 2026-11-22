@@ -6,14 +6,14 @@
 
 ## 1. Project Architecture & Key Files
 
-- **`yellows_pixel_buddies.py`**: Main desktop pet application (~16,800 LOC monolith). Contains:
+- **`yellows_pixel_buddies.py`**: Main desktop pet application (~19,800 LOC monolith). Contains:
   - Configuration section (`1. CONFIGURATION` at top).
   - Windows API interop (`ctypes`, `user32`, `dwmapi`) for taskbar metrics (`ABM_GETTASKBARPOS`), DPI scaling, transparent click-through, and window switch tracking.
   - State machine, frame animations, physics (ballistic cursor jump, hanging, bomb tosses).
   - Gemini AI thread worker, vision screen capture, prompt builder, action tag parser.
   - Alarms, focus timers, and system tray control center (`QSystemTrayIcon`).
   - GitHub release auto-updater.
-- **`shop_window.py`**: Deltarune-styled Dark World Sanctuary / Shop UI (`DeltaruneShopWindow`, ~3,300 LOC). Handles tasks, goals, alarms/timers GUI, facts editor, Dark Dollars wallet, and item dialogue.
+- **`shop_window.py`**: Deltarune-styled Dark World Sanctuary / Shop UI (`DeltaruneShopWindow`, ~3,500 LOC). Handles tasks, goals, alarms/timers GUI, facts editor, Dark Dollars wallet, and item dialogue.
 - **`sprites/`**: Transparent PNG sequences sorted numerically (`1.png`, `2.png`, ...).
 - **`fonts/`**: Retro pixel typography (`fonts/determination/determination.ttf`).
 - **`sounds/`**: Retro audio effects for shop menus, coin clinks, and pet reactions.
@@ -61,7 +61,7 @@
 ## 3. Engineering Rules & Constraints
 
 ### ⚠️ Surgical Edits on Monolithic Files
-- `yellows_pixel_buddies.py` is over 16,000 lines long.
+- `yellows_pixel_buddies.py` is nearly 20,000 lines long.
 - **Never attempt full file rewrites or indiscriminate bulk replacements.**
 - Always use targeted, minimal diffs (`edit_file`) with sufficient surrounding context.
 - Verify imports, class scopes, and method references before making changes.
