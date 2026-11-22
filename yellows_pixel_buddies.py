@@ -245,10 +245,15 @@ def _resolve_user_data_dir() -> Path:
     """Resolve the persistent storage location for user memories, config, and facts.
 
     Priority:
+    0. Explicit environment override: PINK_DATA_DIR (used by the test suite so tests never touch real user data).
     1. Explicit portable mode override: 'portable.txt' next to the .exe / script.
     2. Development mode: Running raw python script in repo where local 'memory/' exists.
     3. Production mode: Standard Windows %APPDATA%/YellowsPixelBuddies (survives updates & re-installs).
     """
+    override = os.environ.get("PINK_DATA_DIR", "").strip()
+    if override:
+        return Path(override)
+
     if (_exe_dir / "portable.txt").exists():
         return _exe_dir
 
@@ -264,6 +269,8 @@ def _resolve_user_data_dir() -> Path:
 
 
 USER_DATA_DIR = _resolve_user_data_dir()
+# An explicit PINK_DATA_DIR means "use exactly this folder": never migrate the exe-adjacent memory/.env into it.
+LEGACY_DATA_DIR: Path | None = None if os.environ.get("PINK_DATA_DIR", "").strip() else _exe_dir
 
 # On-screen size in *logical* pixels. The window is exactly SPRITE_SIZE x SPRITE_SIZE.
 # PNGs of any size are scaled to fit (aspect ratio kept, anchored bottom-centre).
@@ -4923,9 +4930,12 @@ def verify_goal_progress_affirmation(user_prompt: str, note: str, was_responding
 class MemoryManager:
     """Manages local session chat logs, long-term facts, and config/API key storage."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, legacy_dir: Path | None = None) -> None:
         self.data_dir = data_dir
         self.base_dir = data_dir  # Backwards compatibility
+        # Old exe-adjacent folder to migrate memory/.env from. None (the default) disables migration,
+        # so tests and secondary instances never copy the developer's real memory or API key.
+        self._legacy_dir = legacy_dir
         self.memory_dir = data_dir / "memory"
         self.sessions_dir = self.memory_dir / "sessions"
         self.config_path = self.memory_dir / "config.json"
@@ -4964,10 +4974,13 @@ class MemoryManager:
 
     def _migrate_existing_data(self) -> None:
         """If transitioning from local exe directory to AppData, seamlessly copy existing memory."""
+        legacy_dir = self._legacy_dir
+        if legacy_dir is None:
+            return
         try:
-            if self.data_dir.resolve() == _exe_dir.resolve():
+            if self.data_dir.resolve() == legacy_dir.resolve():
                 return
-            local_mem = _exe_dir / "memory"
+            local_mem = legacy_dir / "memory"
             if local_mem.is_dir():
                 self.memory_dir.mkdir(parents=True, exist_ok=True)
                 for f in local_mem.glob("*.*[a-zA-Z0-9]"):
@@ -4978,7 +4991,7 @@ class MemoryManager:
                             log.info("Migrated memory file %s to %s", f.name, target_f)
                         except Exception as e:
                             log.warning("Could not migrate %s: %s", f.name, e)
-            local_env = _exe_dir / ".env"
+            local_env = legacy_dir / ".env"
             if local_env.is_file() and not self.env_path.exists():
                 shutil.copy2(str(local_env), str(self.env_path))
         except Exception as err:
@@ -10943,7 +10956,7 @@ class YellowsPixelBuddies(QWidget):
         self._voice_mode_enabled: bool = False
         self._voice_mode_context_action: QAction | None = None
         self._voice_mode_tray_action: QAction | None = None
-        self._memory = MemoryManager(USER_DATA_DIR)
+        self._memory = MemoryManager(USER_DATA_DIR, legacy_dir=LEGACY_DATA_DIR)
         self._update_checker_thread: UpdateCheckerThread | None = None
         self._update_downloader_thread: UpdateDownloaderThread | None = None
         self._available_update_info: tuple[str, str, str, str] | None = None
