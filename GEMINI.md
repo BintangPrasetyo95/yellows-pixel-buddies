@@ -32,10 +32,20 @@
   ```
 - **Install dependencies**:
   ```powershell
-  pip install PyQt5 requests pygame
+  pip install -r requirements.txt          # runtime
+  pip install -r requirements-dev.txt      # + pytest, ruff
   # Optional for Windows GSMTC media playback detection:
   pip install winrt-runtime winrt-Windows.Media.Control
   ```
+- **Run tests** (same command CI runs on every PR):
+  ```powershell
+  python -m pytest -m "not desktop"
+  ```
+  - Tests live in `tests/` (tracked). `scratch/` stays gitignored for throwaway scripts only.
+  - `tests/conftest.py` points `PINK_DATA_DIR` at a temp folder, so tests never touch your real `memory/` or `.env`.
+  - `-m desktop` tests drive the real screen/keyboard (e.g. a real Esc keypress); run them only locally, with nothing important focused.
+  - Known bugs from `temp/REVIEW.md` are `xfail(strict=True, reason="REVIEW <ID>")`. When a fix makes one pass, the suite fails until you remove its marker; list the closed IDs in the PR.
+  - Takeover executor tests use the `fake_os_interop` fixture (records clicks/keys instead of sending them). Never call `os_interop` input functions unmocked in a test.
 - **Build standalone executable & installer**:
   ```cmd
   build_release.bat
@@ -68,6 +78,7 @@
 
 ### 💾 Storage & Persistence Hierarchy
 - User data must follow the resolution logic in `_resolve_user_data_dir()`:
+  0. **Explicit override**: `PINK_DATA_DIR` environment variable -> exactly that folder, and no legacy migration (used by the test suite).
   1. **Portable mode**: If `portable.txt` exists next to executable -> local directory.
   2. **Development mode**: If running raw script and local `./memory/` exists -> local directory.
   3. **Production mode**: Standard Windows `%APPDATA%\YellowsPixelBuddies\memory` (survives app updates and reinstalls).
