@@ -929,9 +929,7 @@ def set_window_input_transparent(target: Any, enabled: bool = True, *, noactivat
     try:
         hwnd = int(target.winId()) if hasattr(target, "winId") else int(target)
         GWL_EXSTYLE = -20
-        WS_EX_TRANSPARENT = 0x00000020
         WS_EX_LAYERED = 0x00080000
-        WS_EX_NOACTIVATE = 0x08000000
         get_style = getattr(user32, "GetWindowLongPtrW", None) or user32.GetWindowLongW
         set_style = getattr(user32, "SetWindowLongPtrW", None) or user32.SetWindowLongW
         get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]

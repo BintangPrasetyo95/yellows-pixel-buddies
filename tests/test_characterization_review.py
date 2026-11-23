@@ -190,7 +190,6 @@ def test_add_fact_round_trip(mem):
     assert "likes tea" in json.loads(mem.facts_path.read_text(encoding="utf-8"))["notes"]
 
 
-@bug("C6")
 def test_corrupt_facts_file_is_not_overwritten(mem):
     mem.facts_path.parent.mkdir(parents=True, exist_ok=True)
     mem.facts_path.write_text('{"user_name": "Bin", "notes": ["a"]', encoding="utf-8")  # truncated mid-write
@@ -216,7 +215,6 @@ def frozen_now(monkeypatch):
     monkeypatch.setattr(ypb, "datetime", shim)
 
 
-@bug("H14")
 def test_reminders_added_in_same_second_get_unique_ids(mem, frozen_now):
     for text in ("call mom", "buy milk", "pay rent"):
         assert mem.add_reminder(text)

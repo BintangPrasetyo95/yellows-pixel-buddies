@@ -38,7 +38,7 @@ class RedactSecretsFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             msg = record.getMessage()
-        except Exception:
+        except (TypeError, ValueError):   # a malformed %-format: let logging report it as usual
             return True
         if contains_secret(msg):
             record.msg = redact_secrets(msg)

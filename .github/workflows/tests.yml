@@ -33,6 +33,10 @@ jobs:
       - name: Run tests (excluding tests that drive the real desktop)
         run: python -m pytest -m "not desktop"
 
-      - name: Ruff (report only for now; see review finding M8)
+      # Code extracted / cleaned in Phases 5-8 must not swallow exceptions silently (plan 8.5): blocking.
+      - name: Ruff blind-except rules (blocking for cleaned modules)
+        run: python -m ruff check --select BLE001,S110 pink/ takeover_controller.py privacy.py update_security.py
+
+      - name: Ruff (report only for the rest; see review finding M8)
         continue-on-error: true
         run: python -m ruff check .

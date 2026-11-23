@@ -16,3 +16,9 @@ extend-exclude = ["build", "dist", "graphify-out", "temp", "scratch", "ignore th
 # Warn-only in CI for now (see .github/workflows/tests.yml). BLE001/S110 track the
 # broad-except / except-pass debt from review finding M8.
 select = ["E9", "F63", "F7", "F82", "BLE001", "S110"]
+
+[tool.ruff.lint.per-file-ignores]
+# MemoryManager keeps broad, LOGGED catches on purpose: an exception escaping into a Qt slot aborts the app, and
+# every write already goes through JsonStore (which never overwrites a corrupt file). Silent `pass` (S110) is still
+# an error there.
+"pink/storage/manager.py" = ["BLE001"]

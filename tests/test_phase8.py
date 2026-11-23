@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_pure_modules_do_not_load_qt_or_torch():
     code = ("import sys; import pink.text.intents, pink.ai.protocol, pink.ai.prompt_builder, pink.chat.commands, "
-            "pink.shop.menus; heavy = [m for m in sys.modules if m.split('.')[0] in ('PyQt5', 'torch', 'whisper')]; "
+            "pink.shop.menus, pink.storage.manager, pink.storage.actions, pink.storage.sessions, pink.storage.json_store; heavy = [m for m in sys.modules if m.split('.')[0] in ('PyQt5', 'torch', 'whisper')]; "
             "print(heavy); sys.exit(1 if heavy else 0)")
     r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -128,7 +128,7 @@ def test_shop_and_bubble_hide_the_same_tags():
 def test_memory_sections_golden():
     ctx = pb.MemoryContext(facts="- likes cats", reminders="1. call mom", goals="1. thesis")
     assert pb.memory_sections(ctx) == (
-        "\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n- likes cats"
+        f"\n\n{pb.FACTS_HEADER}\n- likes cats"
         "\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n1. call mom"
         "\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n1. thesis"
     )
@@ -273,7 +273,7 @@ def _silent_handlers(path: str, cls: str | None = None) -> list[int]:
             and h.body[0].lineno != h.lineno]
 
 
-@pytest.mark.parametrize("path,cls", [("yellows_pixel_buddies.py", "MemoryManager"), ("takeover_controller.py", None),
+@pytest.mark.parametrize("path,cls", [("pink/storage/manager.py", "MemoryManager"), ("takeover_controller.py", None),
                                       ("action_planner.py", None)])
 def test_no_silent_excepts(path, cls):
     assert _silent_handlers(path, cls) == []

@@ -5,11 +5,13 @@ can fail with WinError 1114 (DLL initialisation), which is why the app still pre
 """
 from __future__ import annotations
 
+import logging
 import os
 import site
 import sys
 from pathlib import Path
 
+log = logging.getLogger("yellows_pixel_buddies.torch_dll")
 _DLL_HANDLES: list = []
 _done = False
 
@@ -18,14 +20,14 @@ def torch_lib_dirs() -> list[Path]:
     paths: list[str] = []
     try:
         paths.extend(site.getsitepackages())
-    except Exception:
-        pass
+    except AttributeError as err:   # some embedded/frozen Pythons have no getsitepackages()
+        log.debug("site.getsitepackages unavailable: %s", err)
     try:
         user_site = site.getusersitepackages()
         if user_site:
             paths.append(user_site)
-    except Exception:
-        pass
+    except AttributeError as err:
+        log.debug("site.getusersitepackages unavailable: %s", err)
     return [p / "torch" / "lib" for p in map(Path, paths) if (p / "torch" / "lib").exists()]
 
 
@@ -40,6 +42,6 @@ def register_torch_dll_dirs() -> list:
             os.environ["PATH"] = str(t_lib) + os.pathsep + os.environ.get("PATH", "")
             if hasattr(os, "add_dll_directory"):
                 _DLL_HANDLES.append(os.add_dll_directory(str(t_lib)))
-        except Exception:
-            pass
+        except OSError as err:
+            log.debug("Could not add %s to the DLL search path: %s", t_lib, err)
     return _DLL_HANDLES
