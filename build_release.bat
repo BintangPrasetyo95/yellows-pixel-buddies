@@ -47,5 +47,17 @@ if defined ISCC (
     echo and compile installer.iss.
 )
 
+:: Publish SHA-256 checksums. Pink only auto-installs an update whose hash matches this file, so
+:: SHA256SUMS.txt MUST be uploaded with every GitHub release next to the .exe files.
+echo.
+echo Writing dist\SHA256SUMS.txt ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -LiteralPath 'dist' -Filter '*.exe' | ForEach-Object { '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content -LiteralPath 'dist\SHA256SUMS.txt' -Encoding ascii"
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] Could not write dist\SHA256SUMS.txt - do NOT publish this release without it.
+    exit /b 1
+)
+type dist\SHA256SUMS.txt
+echo [SUCCESS] Upload dist\SHA256SUMS.txt with the release, or auto-update will refuse it.
+
 echo.
 echo All done!

@@ -319,7 +319,7 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
                 prompt_text = "Transcribe the speech in this audio exactly. Return ONLY the transcribed text, or nothing if silent."
             for model_id in fallback_models:
                 try:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={self._api_key}"
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
                     payload = {
                         "contents": [{
                             "parts": [
@@ -337,7 +337,8 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
                             "maxOutputTokens": 200,
                         }
                     }
-                    resp = requests.post(url, json=payload, timeout=8)
+                    # Key in a header so it can't leak through logged error URLs (REVIEW M9)
+                    resp = requests.post(url, json=payload, timeout=8, headers={"x-goog-api-key": self._api_key})
                     if resp.status_code == 200:
                         data = resp.json()
                         candidates = data.get("candidates", [])

@@ -931,6 +931,33 @@ ALLOWED_START_MENU_APPS = {
     "word", "excel", "powerpoint", "onenote",
 }
 
+# Allowed apps with a reliable direct launch target (registered App Paths): started with os.startfile, no typing.
+DIRECT_LAUNCH_TARGETS = {
+    "notepad": "notepad.exe", "calc": "calc.exe", "calculator": "calc.exe",
+    "explorer": "explorer.exe", "file explorer": "explorer.exe", "paint": "mspaint.exe", "mspaint": "mspaint.exe",
+    "chrome": "chrome.exe", "google chrome": "chrome.exe", "msedge": "msedge.exe", "edge": "msedge.exe",
+    "microsoft edge": "msedge.exe", "firefox": "firefox.exe", "brave": "brave.exe",
+    "word": "winword.exe", "excel": "excel.exe", "powerpoint": "powerpnt.exe", "onenote": "onenote.exe",
+}
+# Windows' Start / search UI processes. We only type a query after one of these has focus.
+START_SEARCH_PROCESSES = frozenset({"searchhost.exe", "searchapp.exe", "startmenuexperiencehost.exe", "searchui.exe"})
+
+
+def normalize_app_query(query: str) -> str:
+    """Lower-case, single-spaced, without a trailing ' app' (so 'Spotify App' == 'spotify')."""
+    q = re.sub(r"\s+", " ", (query or "").strip().lower())
+    return re.sub(r"\s+app$", "", q)
+
+
+def is_allowed_launch_query(query: str) -> bool:
+    """EXACT allowlist match. The old substring check let 'regedit calc' or 'settings edge' through (REVIEW M6)."""
+    return normalize_app_query(query) in ALLOWED_START_MENU_APPS
+
+
+def _start_search_has_focus() -> bool:
+    fg = get_foreground_window()
+    return bool(fg and fg.process_name.lower() in START_SEARCH_PROCESSES)
+
 
 def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_menu: bool = True) -> Optional[WindowInfo]:
     """Find an open window or launch it via URI / Start menu search, then focus it.
@@ -962,21 +989,38 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_me
             log.warning("Start menu launch rejected due to suspicious characters in query: %r", q_raw)
             return None
 
-        # Security Guard: Whitelist check
-        q_clean = q_raw.lower()
-        is_allowed = any(
-            q_clean == app or q_clean.startswith(f"{app} ") or app in q_clean
-            for app in ALLOWED_START_MENU_APPS
-        )
-        if not is_allowed:
+        # Security Guard: EXACT allowlist (REVIEW M6)
+        q_norm = normalize_app_query(q_raw)
+        if not is_allowed_launch_query(q_norm):
             log.warning("Start menu launch blocked for unvetted application '%s'.", query)
             return None
+
+        # Prefer a direct, typing-free launch for apps with a registered executable.
+        target = DIRECT_LAUNCH_TARGETS.get(q_norm)
+        if target:
+            try:
+                os.startfile(target)
+                time.sleep(1.2)
+                win = find_window(query)
+                if win:
+                    focus_window(win.hwnd)
+                return win
+            except OSError as e:
+                log.debug("Direct launch of %s failed (%s); trying Start search.", target, e)
 
         try:
             press_key("win")
             time.sleep(0.45)
-            type_text(q_raw, delay_between_chars_s=0.02)
+            # Never type blind: if Start search didn't open, the text and Enter would go to the previous window
+            # (a chat box or a terminal) (REVIEW M6).
+            if not _start_search_has_focus():
+                log.warning("Start search did not take focus; not typing '%s'.", q_norm)
+                return None
+            type_text(q_norm, delay_between_chars_s=0.02)
             time.sleep(0.45)
+            if not _start_search_has_focus():
+                log.warning("Focus left Start search while typing '%s'; not pressing Enter.", q_norm)
+                return None
             press_key("enter")
             time.sleep(1.2)
             win = find_window(query)
