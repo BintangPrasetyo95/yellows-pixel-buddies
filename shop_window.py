@@ -895,7 +895,8 @@ class DeltaruneShopWindow(QWidget):
         """Clean AI metadata tags, asterisks, and format into speech lines starting with '* '."""
         if not text:
             return ["* ..."]
-        t = re.sub(r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder):\s*[^\]]+\]", "", text, flags=re.IGNORECASE)
+        t = re.sub(r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|"
+                   r"set_timer|set_alarm|emotion|think|thought|desktop_action|quick_reply|click_ui|click_target|click|type_input|type_text):\s*[^\]]+\]", "", text, flags=re.IGNORECASE)
         t = re.sub(r"\*{2,}", "", t)
         lines = [l.strip() for l in t.splitlines() if l.strip()]
         out: list[str] = []

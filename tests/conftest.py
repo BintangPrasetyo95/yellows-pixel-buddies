@@ -68,6 +68,9 @@ def fake_os_interop(monkeypatch: pytest.MonkeyPatch):
 
     fake = FakeOsInterop()
     monkeypatch.setattr(action_planner, "os_interop", fake)
+    # The stale-target check grabs a screen patch: tests set ``fake.screen_patches`` instead of reading the real screen.
+    monkeypatch.setattr(action_planner, "_grab_patch",
+                        lambda bbox: fake.screen_patches.pop(0) if fake.screen_patches else None)
     return fake
 
 

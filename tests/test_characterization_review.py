@@ -167,13 +167,11 @@ def test_find_window_finds_real_whatsapp(monkeypatch):
     assert os_interop.find_window("whatsapp").hwnd == 1
 
 
-@bug("H5")
 def test_find_window_does_not_return_any_chrome_for_whatsapp(monkeypatch):
     monkeypatch.setattr(os_interop, "list_windows", lambda *a, **k: [_win(2, "GitHub - Google Chrome", "chrome.exe")])
     assert os_interop.find_window("whatsapp") is None
 
 
-@bug("L2")
 def test_absolute_mouse_coords_round_trip(monkeypatch):
     m = os_interop.ScreenMetrics(virtual_left=0, virtual_top=0, virtual_width=1920, virtual_height=1080,
                                  primary_width=1920, primary_height=1080)

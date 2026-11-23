@@ -1055,7 +1055,7 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - When the user gives a long prompt requesting MULTIPLE reminders, tasks, timers, or alarms (e.g. "remind me to call mom, set a timer for 15m for tea, and set an alarm for 6:00 PM for dinner"):
     - You MUST output ALL matching tags together in your response!
     - Example: "* I have scheduled all of those, minion! Don't you dare slack off! [add_task: Call mom] [set_timer: 15m, steep tea] [set_alarm: 06:00 PM, dinner] [anim: laughing]"
-    - The backend iteratively extracts and executes ALL tags simultaneously!
+    - The backend iteratively extracts and executes ALL tags simultaneously! (Exception: AT MOST ONE [desktop_action] per reply.)
   * CRITICAL VERBAL AFFIRMATION DIRECTIVE (NO SILENT EXECUTION, NO GASLIGHTING):
     - When the user asks you to add, create, edit, or remove ANY task, reminder, alarm, timer, or goal:
       1. You MUST EXPLICITLY VERBALLY CONFIRM in your dialogue that the action was performed (e.g. "* Added those 3 tasks to your quest board, minion! Don't let them gather dust!", "* Registered that to your tasks, mew!").
@@ -3023,6 +3023,8 @@ class DialogueOverlay(QWidget):
         self._choice_rects: list[QRect] = []
         self._hovered_choice_idx: int | None = None
         self._on_chosen_callback = None
+        self._on_cancel_callback = None              # called when a pending decision is closed without an answer
+        self._deferred_says: list[dict] = []         # lines that arrived while a fixed decision was pending
         self._soul_heart_pix: QPixmap | None = self._create_soul_heart_pixmap()
 
         self._font = QFont(self._font_family)
@@ -3145,13 +3147,19 @@ class DialogueOverlay(QWidget):
 
     def ask(self, text: str, choices: list[tuple[str, str, str | None]], pet_x: float, pet_y: float,
             on_chosen, track_ignore: bool = True, fixed: bool = False, fixed_pos: tuple[int, int] | None = None,
-            default_idx: int = 0, arm_delay_s: float = 0.0) -> None:
+            default_idx: int = 0, arm_delay_s: float = 0.0, on_cancel=None) -> bool:
         """Start a new question dialogue bubble with interactive choices.
 
         ``default_idx`` is the pre-selected choice (Enter picks it). ``arm_delay_s`` > 0 makes a fixed decision
         ignore approve input until the text has fully typed out plus that delay, so a keystroke meant for
-        another window can't answer a safety prompt (REVIEW M1).
+        another window can't answer a safety prompt (REVIEW M1). ``on_chosen(label, reaction_text, reaction_anim)``
+        gets the answer; ``on_cancel()`` runs if the prompt is closed without one (REVIEW M2).
+
+        A pending FIXED decision is modal: an ordinary question can't replace it (returns False).
         """
+        if self.has_pending_fixed_decision() and not fixed:
+            log.info("Not replacing a pending safety decision with question %r.", text[:60])
+            return False
         self._typing_done_at = None
         self._arm_delay_s = max(0.0, float(arm_delay_s)) if fixed else 0.0
         self._is_fixed_decision = fixed
@@ -3172,6 +3180,7 @@ class DialogueOverlay(QWidget):
         self._choice_rects.clear()
         self._hovered_choice_idx = (min(max(0, default_idx), len(self._choices) - 1)) if self._choices else None
         self._on_chosen_callback = on_chosen
+        self._on_cancel_callback = on_cancel
         self._last_pet_x = pet_x
         self._last_pet_y = pet_y
         self.setFocusPolicy(Qt.StrongFocus)
@@ -3180,6 +3189,7 @@ class DialogueOverlay(QWidget):
             self.move(int(fixed_pos[0]), int(fixed_pos[1]))
         self.activateWindow()
         self.setFocus()
+        return True
 
     def say(
         self,
@@ -3194,7 +3204,19 @@ class DialogueOverlay(QWidget):
         hold_s: float | None = None,
         track_ignore: bool = True,
     ) -> None:
-        """Start a new speech bubble with typewriter animation beside the pet's head."""
+        """Start a new speech bubble with typewriter animation beside the pet's head.
+
+        While a fixed (safety) decision is pending, the line is queued until it's answered instead of silently
+        replacing the prompt and dropping its callback (REVIEW M2).
+        """
+        if self.has_pending_fixed_decision():
+            if len(self._deferred_says) < 8:
+                self._deferred_says.append(dict(
+                    text=text, pet_x=pet_x, pet_y=pet_y, queue=list(queue) if queue else None, skippable=skippable,
+                    auto_dismiss=auto_dismiss, anim=anim, is_ghost=is_ghost, hold_s=hold_s, track_ignore=track_ignore,
+                ))
+            log.info("Deferred a line until the pending decision is answered: %r", text[:60])
+            return
         self._is_fixed_decision = False
         self._fixed_pos = None
         self.setFocusPolicy(Qt.NoFocus)
@@ -3202,6 +3224,7 @@ class DialogueOverlay(QWidget):
         self._choice_rects.clear()
         self._hovered_choice_idx = None
         self._on_chosen_callback = None
+        self._on_cancel_callback = None
         self._skippable = skippable
         self._auto_dismiss = auto_dismiss
         self._custom_hold_s = hold_s
@@ -3223,6 +3246,28 @@ class DialogueOverlay(QWidget):
     def append_queue(self, item: str | DialogueStep) -> None:
         """Append an additional dialogue step to the active sequence queue."""
         self._queue.append(item)
+
+    def _flush_deferred_says(self) -> None:
+        """Speak the lines that waited behind a decision, once it has been answered or closed."""
+        if not self._deferred_says or self.has_pending_fixed_decision():
+            return
+        items, self._deferred_says = self._deferred_says, []
+
+        def _steps(item: dict) -> list:
+            out: list = [DialogueStep(item["text"], item.get("anim"), bool(item.get("is_ghost")))]
+            out.extend(item.get("queue") or [])
+            return out
+
+        if self._active:
+            for item in items:
+                self._queue.extend(_steps(item))
+            return
+        first, rest = items[0], items[1:]
+        queue = list(first.get("queue") or [])
+        for item in rest:
+            queue.extend(_steps(item))
+        first["queue"] = queue or None
+        self.say(**first)
 
     def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
         """Render and begin typing a single dialogue bubble."""
@@ -3551,9 +3596,21 @@ class DialogueOverlay(QWidget):
             self.update()
 
     def dismiss(self, clear_queue: bool = False) -> None:
-        """Hide and clear the dialogue overlay, or advance to the next queued message."""
+        """Hide and clear the dialogue overlay, or advance to the next queued message.
+
+        Closing a decision that hasn't been answered calls its ``on_cancel`` (after this returns), so nobody is left
+        waiting for an answer that will never come (REVIEW M2).
+        """
         if clear_queue:
             self._queue.clear()
+
+        was_decision = bool(self._active and self._choices)
+        cancel_cb = self._on_cancel_callback if was_decision else None
+        self._on_cancel_callback = None
+        if cancel_cb is not None:
+            QTimer.singleShot(0, cancel_cb)
+        if was_decision and self._deferred_says:
+            QTimer.singleShot(0, self._flush_deferred_says)
 
         self._is_fixed_decision = False
         self._fixed_pos = None
@@ -3640,17 +3697,16 @@ class DialogueOverlay(QWidget):
         self.setCursor(Qt.ArrowCursor)
         callback = self._on_chosen_callback
         self._on_chosen_callback = None
+        self._on_cancel_callback = None
         if callback:
+            # One signature for every caller. A TypeError raised INSIDE a callback used to be "retried" with other
+            # argument shapes, running half of it twice (REVIEW M2).
             try:
                 callback(choice_label, reaction_text, reaction_anim)
-            except TypeError:
-                try:
-                    callback(idx, choice_label, reaction_text, reaction_anim)
-                except TypeError:
-                    try:
-                        callback(reaction_text, reaction_anim)
-                    except Exception as err:
-                        log.warning("Choice callback execution failed: %s", err)
+            except Exception:
+                log.exception("Choice callback for %r failed", choice_label)
+        if self._deferred_says:
+            QTimer.singleShot(0, self._flush_deferred_says)
 
     def enterEvent(self, event) -> None:
         """Pause the auto-dismiss countdown while cursor is inside the dialogue box."""
@@ -11266,6 +11322,8 @@ class YellowsPixelBuddies(QWidget):
         self._last_screen_capture: tuple[datetime.datetime, str] | None = None   # shown in the tray tooltip
         self._confirm_pending: bool = False
         self._confirm_token: int = 0
+        self._confirm_text_viewer: QDialog | None = None     # "Show all" view of a long confirmation payload
+        self._voice_hud_hidden_for_takeover: bool = False   # Voice HUD hidden while a takeover runs (REVIEW M5)
         self._sequence_area_rect: QRect | None = None   # monitor captured for hide/exit/summon sequences (REVIEW L7)
         self._takeover_last_progress: float = 0.0
         self._voice_was_visible_before_takeover: bool = False
@@ -11337,6 +11395,7 @@ class YellowsPixelBuddies(QWidget):
         self._filter_shorts_enabled: bool = SONG_FILTER_SHORTS_ENABLED
         self._is_handling_user_chat: bool = False
         self._question_thread: GeminiQuestionWorkerThread | None = None
+        self._question_token: int = 0   # bumped when chat opens / a takeover starts, so stale questions are dropped
         self._current_song: tuple[str, str] | None = None
         self._recent_question_texts: list[str] = []
         self._recent_reminder_highlights: list[str] = []
@@ -12748,20 +12807,26 @@ class YellowsPixelBuddies(QWidget):
         if v.get("ram_percent", 0.0) < 85.0 and last_alert_state == "ram_alert":
             self._last_hardware_alert_state = "normal"
 
+    def _refresh_foreground_context(self) -> dict:
+        """Record the app the user is actually in, on every poll and before every prompt (REVIEW H7).
+
+        This used to refresh only inside the app-reaction code, behind half a dozen guards, so takeovers were
+        told about an app the user had already left. Pink's own windows are skipped.
+        """
+        try:
+            hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
+        except Exception:
+            return self._current_app_context
+        if hwnd and exe_name and pid != os.getpid():
+            cat, disp, det = identify_active_app_context(exe_name, exe_path, title)
+            if disp:
+                self._current_app_context = {"category": cat, "display_name": disp, "detail": det,
+                                             "title": title, "exe": exe_name, "ts": time.time()}
+        return self._current_app_context
+
     def get_active_app_prompt_block(self) -> str:
         """Return formatted context about user's currently focused application / tab (native OS tracking)."""
-        ctx = getattr(self, "_current_app_context", None)
-        if not ctx or not ctx.get("display_name"):
-            try:
-                hwnd, exe_name, exe_path, title, pid = get_foreground_process_info()
-                if hwnd and exe_name:
-                    cat, disp, det = identify_active_app_context(exe_name, exe_path, title)
-                    if disp:
-                        ctx = {"category": cat, "display_name": disp, "detail": det, "title": title, "exe": exe_name}
-                        self._current_app_context = ctx
-            except Exception:
-                pass
-
+        ctx = self._refresh_foreground_context()
         if not ctx or not ctx.get("display_name"):
             return ""
 
@@ -12774,6 +12839,9 @@ class YellowsPixelBuddies(QWidget):
             "[CURRENT DESKTOP FOREGROUND CONTEXT (Native Win32 Tracking - No Vision Needed)]",
             f"- Focused App: {disp} ({exe})" if exe else f"- Focused App: {disp}",
         ]
+        ts = ctx.get("ts")
+        if isinstance(ts, (int, float)):
+            lines.append(f"- (as of {max(0, int(time.time() - ts))} s ago; Pink's own windows are not counted)")
         if title and title.lower() != disp.lower():
             # A browser tab title is chosen by whatever website is open: treat it as untrusted data, strip
             # bracket/tag syntax so it can't smuggle in action tags, and say so explicitly (REVIEW C1).
@@ -13102,10 +13170,21 @@ RULES:
             model_name=GEMINI_MODEL,
             parent=self,
         )
-        self._question_thread.question_ready.connect(self._on_ai_question_ready)
-        self._question_thread.error_occurred.connect(self._on_ai_question_error)
+        self._question_token += 1
+        tok = self._question_token
+        self._question_thread.question_ready.connect(lambda q, src, t=tok: self._on_ai_question_ready(q, src, t))
+        self._question_thread.error_occurred.connect(lambda err, t=tok: self._on_ai_question_error(err, t))
         self._question_thread.start()
         return True
+
+    def _question_may_show(self, token: int | None) -> bool:
+        """A question that arrives late must not pop over chat, a choice or a takeover (REVIEW M2)."""
+        if token is not None and token != self._question_token:
+            return False   # superseded: chat opened or a takeover started after it was requested
+        if self._is_taking_over_cursor or self._is_user_chat_or_choice_active():
+            return False
+        ov = getattr(self, "_dialogue_overlay", None)
+        return not (ov is not None and ov.has_pending_fixed_decision())
 
     def _abandon_question_loader(self) -> None:
         """Drop a question we won't show: close the '* ...?' loader and get Pink moving again.
@@ -13119,8 +13198,11 @@ RULES:
         if self._phase is Phase.PAUSE and not self._brain_timer.isActive():
             self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
 
-    def _on_ai_question_ready(self, q_item: QuestionItem, source_type: str) -> None:
+    def _on_ai_question_ready(self, q_item: QuestionItem, source_type: str, token: int | None = None) -> None:
         """Display AI-generated interactive question dialogue with choices."""
+        if token is not None and token != self._question_token or self._is_taking_over_cursor:
+            self._abandon_question_loader()
+            return
         if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
             self._abandon_question_loader()
             return
@@ -13175,12 +13257,16 @@ RULES:
             track_ignore=(not getattr(self, "_user_away_notified", False) and not getattr(self, "_is_annoyed_ignored", False)),
         )
 
-    def _on_ai_question_error(self, err_msg: str) -> None:
+    def _on_ai_question_error(self, err_msg: str, token: int | None = None) -> None:
         """Handle failure in AI question generation by falling back to static questions."""
         log.info("AI question generation failed (%s), falling back to static questions.", err_msg)
         if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
             if self._dialogue_overlay._full_text == "* ...?":
                 self._dialogue_overlay.dismiss(clear_queue=True)
+        if not self._question_may_show(token):
+            # The fallback used to pop a static question over chat, a choice, or a takeover confirmation (REVIEW M2).
+            self._abandon_question_loader()
+            return
 
         if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
             self._abandon_question_loader()
@@ -13496,6 +13582,7 @@ RULES:
         QTimer.singleShot(400, _play_deferred)
 
     def _open_chat_input(self) -> None:
+        self._question_token += 1   # a question still loading must not pop up over the chat (REVIEW M2)
         """Open the interactive chat text input bar to talk to Pink."""
         if hasattr(self, "_single_click_timer"):
             self._single_click_timer.stop()
@@ -14546,7 +14633,8 @@ RULES:
 
         self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
 
-        if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
+        if (hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active()
+                and not self._dialogue_overlay.has_pending_fixed_decision()):
             self._dialogue_overlay.dismiss(clear_queue=True)
 
         steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=had_screen)
@@ -14588,17 +14676,20 @@ RULES:
             )
 
         if desktop_actions:
+            # Several tags become ONE goal, in text order, so nothing is silently dropped (REVIEW M7).
+            action = action_planner.merge_desktop_actions(desktop_actions)
             if len(desktop_actions) > 1:
-                log.warning("Gemini emitted %d desktop action tags; only the first is considered.", len(desktop_actions))
+                log.warning("Gemini emitted %d desktop action tags; merged into one goal: %r",
+                            len(desktop_actions), action.get("intent"))
             decision = takeover_gate.takeover_decision(user_text, origin, had_visual=had_screen, mode=self._takeover_mode)
             if decision is takeover_gate.GateDecision.AUTO:
-                self.execute_desktop_action(desktop_actions[0], user_request=user_text)
+                self.execute_desktop_action(action, user_request=user_text)
             elif decision is takeover_gate.GateDecision.CONFIRM:
-                self._confirm_takeover_start(desktop_actions[0], user_text)
+                self._confirm_takeover_start(action, user_text)
             else:
                 log.warning(
                     "Dropped desktop action tag (origin=%s, mode=%s): user_text=%r tag=%r",
-                    getattr(origin, "value", origin), self._takeover_mode, user_text[:120], desktop_actions[0],
+                    getattr(origin, "value", origin), self._takeover_mode, user_text[:120], action,
                 )
 
         now = time.perf_counter()
@@ -14698,6 +14789,14 @@ RULES:
         if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
             os_interop.set_window_exclude_from_capture(self._voice_overlay, True)
 
+        # The Voice HUD sits over browser tab strips and address bars: hide it (voice mode stays on) so Gemini's
+        # clicks can't land on it. It comes back for confirmations (voice yes/no) and when the takeover ends (REVIEW M5).
+        vo = getattr(self, "_voice_overlay", None)
+        self._voice_hud_hidden_for_takeover = bool(vo is not None and vo.isVisible())
+        if self._voice_hud_hidden_for_takeover:
+            vo.hide()
+        self._question_token += 1   # no question may pop up mid-takeover (REVIEW M2)
+
         # Latch Pink onto the mouse cursor so she physically rides and steers it across the screen!
         self._is_taking_over_cursor = True
         self._confirm_pending = False
@@ -14793,6 +14892,7 @@ RULES:
                  token, a_type, target, text, win_title, proc_name)
 
         is_id = getattr(self, "_language", "en") == "id"
+        long_text = bool(text) and len(text) > 280
         if text:
             shown = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ⏎ ")
             if len(shown) > 280:
@@ -14821,24 +14921,43 @@ RULES:
             ]
             banner_title = "⚠️ CONFIRMATION REQUIRED — [Y: Proceed]  [ENTER/ESC/N: Cancel]"
             banner_sub = f"Confirm {a_type} in {app_display} (or click option below)..."
+        show_all_label = "Lihat semua" if is_id else "Show all"
+        if long_text:
+            # The bubble can only show 280 chars: offer the whole payload in a scrollable view (REVIEW M1).
+            choices.append((show_all_label, "", None))
 
         if hasattr(self, "_takeover_banner"):
             self._takeover_banner.show_banner(title=banner_title, subtitle=banner_sub, is_confirmation=True)
 
-        def _on_chosen(choice_label: str, _reaction_text: str, _reaction_anim: str) -> None:
-            if self._confirm_token != token:
-                return  # superseded or expired prompt
-            approved = choice_label in ("Proceed", "Lanjut")
+        def _finish(approved: bool) -> None:
             self._confirm_pending = False
             self._confirm_token = 0
-            # Close the bubble before the worker resumes, so it doesn't keep focus or sit over the target (REVIEW H2).
-            self._dialogue_overlay.dismiss(clear_queue=True)
+            self._close_confirm_text_viewer()
+            self._hide_voice_hud_for_takeover()
             if hasattr(self, "_takeover_banner"):
                 self._takeover_banner.restore_base_title()
             self._takeover_last_progress = time.perf_counter()
             w = self._desktop_action_worker
             if w is not None:
                 w.deliver_confirmation(token, approved)
+
+        def _on_chosen(choice_label: str, _reaction_text: str, _reaction_anim: str) -> None:
+            if self._confirm_token != token:
+                return  # superseded or expired prompt
+            if choice_label == show_all_label:
+                self._show_confirm_text_viewer(text, app_display, is_id)
+                self._show_takeover_confirmation(token, a_type, target, text, win_title, proc_name)   # ask again
+                return
+            # Close the bubble before the worker resumes, so it doesn't keep focus or sit over the target (REVIEW H2).
+            self._dialogue_overlay.dismiss(clear_queue=True)
+            _finish(choice_label in ("Proceed", "Lanjut"))
+
+        def _on_cancel() -> None:
+            # The prompt was closed without an answer (e.g. something else dismissed it): that's a NO, said now
+            # instead of after the worker's timeout (REVIEW M2).
+            if self._confirm_token == token:
+                log.info("Takeover confirmation #%d closed without an answer: denying.", token)
+                _finish(False)
 
         fixed_x, fixed_y = self._decision_box_pos()
         self._dialogue_overlay.ask(
@@ -14852,7 +14971,46 @@ RULES:
             fixed_pos=(fixed_x, fixed_y),
             default_idx=1,          # Cancel is the default (REVIEW M1)
             arm_delay_s=0.6,
+            on_cancel=_on_cancel,
         )
+        # Voice mode: bring the HUD back only while the decision is pending, so the user can say yes/no (REVIEW M5).
+        vo = getattr(self, "_voice_overlay", None)
+        if self._voice_hud_hidden_for_takeover and self._voice_mode_enabled and vo is not None:
+            vo.show_overlay()
+
+    def _show_confirm_text_viewer(self, text: str, app_display: str, is_id: bool) -> None:
+        """Read-only, scrollable view of the full text Pink is asking to type (REVIEW M1)."""
+        self._close_confirm_text_viewer()
+        dlg = QDialog(None, Qt.Window | Qt.WindowStaysOnTopHint)
+        dlg.setWindowTitle(f"Teks lengkap untuk {app_display}" if is_id else f"Full text Pink will type into {app_display}")
+        lay = QVBoxLayout(dlg)
+        box = QPlainTextEdit(dlg)
+        box.setReadOnly(True)
+        box.setPlainText(text)
+        lay.addWidget(QLabel((f"{len(text)} karakter. Tutup ini, lalu pilih Lanjut atau Batal." if is_id
+                              else f"{len(text)} characters. Close this, then choose Proceed or Cancel."), dlg))
+        lay.addWidget(box)
+        close_btn = QPushButton("Tutup" if is_id else "Close", dlg)
+        close_btn.clicked.connect(dlg.close)
+        lay.addWidget(close_btn)
+        dlg.resize(560, 360)
+        dlg.show()
+        self._confirm_text_viewer = dlg
+
+    def _close_confirm_text_viewer(self) -> None:
+        dlg = getattr(self, "_confirm_text_viewer", None)
+        self._confirm_text_viewer = None
+        if dlg is not None:
+            try:
+                dlg.close()
+                dlg.deleteLater()
+            except RuntimeError:
+                pass
+
+    def _hide_voice_hud_for_takeover(self) -> None:
+        vo = getattr(self, "_voice_overlay", None)
+        if self._voice_hud_hidden_for_takeover and vo is not None and vo.isVisible():
+            vo.hide()
 
     def _on_takeover_confirm_expired(self, token: int) -> None:
         """The worker stopped waiting for confirmation ``token``: drop the stale prompt (REVIEW M1)."""
@@ -14861,6 +15019,8 @@ RULES:
         log.info("Takeover confirmation #%d expired without an answer.", token)
         self._confirm_pending = False
         self._confirm_token = 0
+        self._close_confirm_text_viewer()
+        self._hide_voice_hud_for_takeover()
         if self._dialogue_overlay.has_pending_fixed_decision():
             self._dialogue_overlay.dismiss(clear_queue=True)
         if hasattr(self, "_takeover_banner"):
@@ -14912,6 +15072,12 @@ RULES:
             self._dialogue_overlay.dismiss(clear_queue=True)
         self._confirm_pending = False
         self._confirm_token = 0
+        self._close_confirm_text_viewer()
+        if self._voice_hud_hidden_for_takeover:
+            self._voice_hud_hidden_for_takeover = False
+            vo = getattr(self, "_voice_overlay", None)
+            if vo is not None and self._voice_mode_enabled:
+                vo.show_overlay()
         os_interop.set_window_exclude_from_capture(self, False)
         if hasattr(self, "_dialogue_overlay"):
             os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
@@ -18876,6 +19042,7 @@ RULES:
     # ------------------------------------------------------- window reactions
     def _check_foreground_window(self) -> None:
         """Poll foreground window to detect switches to maximized apps."""
+        self._refresh_foreground_context()   # before ANY guard below (REVIEW H7)
         if getattr(self, "_hidden_in_tray", False):
             return
         # Check user return if user previously notified away
@@ -18979,6 +19146,7 @@ RULES:
             "detail": detail,
             "title": title,
             "exe": exe_name,
+            "ts": time.time(),
         }
 
         if not category or category in ("general", "browser"):
@@ -20188,6 +20356,10 @@ RULES:
 
     def handle_instance_activation(self) -> None:
         """Handle activation signal when user tries to launch a second instance."""
+        if self._is_taking_over_cursor:
+            # show()/raise_()/activateWindow() mid-plan would steal the foreground from the target (REVIEW L4).
+            log.info("Ignoring duplicate launch request while a desktop takeover is running.")
+            return
         log.info("Focusing existing instance from duplicate launch request.")
         try:
             if getattr(self, "_hidden_in_tray", False):

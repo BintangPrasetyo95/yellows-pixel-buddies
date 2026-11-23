@@ -106,7 +106,7 @@ class TestTakeoverBrowserIntent(unittest.TestCase):
         """OS interop aliases should map claude and chatgpt to windows/browsers."""
         self.assertIn("claude", os_interop.APP_SEARCH_ALIASES)
         self.assertIn("chatgpt", os_interop.APP_SEARCH_ALIASES)
-        self.assertIn("chrome.exe", os_interop.APP_SEARCH_ALIASES["claude"])
+        self.assertIn("chrome.exe", os_interop.APP_SEARCH_ALIASES["claude"].hosts)  # a host, not the identity (REVIEW H5)
 
 
 if __name__ == "__main__":
