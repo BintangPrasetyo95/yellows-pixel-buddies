@@ -22,7 +22,11 @@
 - Known bugs are `xfail(strict=True, reason="REVIEW <ID>")` in `tests/`. A fix must remove the
   marker; put the finding IDs in the commit message, e.g. `fix(takeover): cancel ends plan [C3]`.
 - Current work: `temp/REVIEW.md` (68 findings) and `temp/IMPLEMENTATION_PLAN.md` (phases 0–8;
-  Phase 0 done on `chore/test-harness-ci`). Both are gitignored and exist locally only.
+  Phase 0 merged, Phase 1 on `fix/takeover-safety-gates`). Both are gitignored and exist locally only.
+- Pink Takeover may only start through `takeover_gate.takeover_decision()` (pure, tested). Any new code
+  that calls `_on_chat_submitted` / `_on_gemini_response` must pass the right `origin` (`TurnOrigin`);
+  ambient/screen/song/shop turns must never start a takeover. Sensitive-step policy lives in
+  `action_planner._is_sensitive_action` (allowlists: `SAFE_KEYS`, `SAFE_HOTKEYS`, `SHELL_PROCESSES`).
 - Any change to AI tag parsing must update both `yellows_pixel_buddies.py` and `shop_window.py`.
 
 ## Environment

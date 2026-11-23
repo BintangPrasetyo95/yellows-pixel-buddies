@@ -433,6 +433,29 @@ class VoiceManager(QObject if HAS_PYQT else object):
                 self.sig_transcription_error.emit(f"Microphone error: {exc}")
             return False
 
+    def cancel_recording(self) -> None:
+        """Stop microphone capture and DISCARD the audio: nothing is transcribed or dispatched.
+
+        Used when the user cancels Voice Mode (Esc, [X], toggle off, quit). Before this existed, cancelling went
+        through stop_recording(), so the command was still transcribed and could start a takeover (REVIEW H10).
+        """
+        was_recording = self._is_recording
+        self._is_recording = False
+        try:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+        except Exception as exc:
+            log.warning("Error closing sounddevice stream on cancel: %s", exc)
+        finally:
+            self._stream = None
+        with self._lock:
+            self._frames.clear()
+        if was_recording:
+            log.info("VoiceManager: Recording cancelled; audio discarded.")
+            if HAS_PYQT:
+                self.sig_recording_stopped.emit()
+
     def stop_recording(self) -> None:
         """Stop microphone capture, resample to 16kHz, and trigger Whisper transcription."""
         if not self._is_recording:

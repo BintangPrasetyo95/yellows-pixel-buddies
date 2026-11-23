@@ -2521,7 +2521,7 @@ class DeltaruneShopWindow(QWidget):
                     f"with sudden shopkeeper enthusiasm ('Enjoy. Enjoy! ENJOY!!'), dry humor ('Ever heard of dollars?', 'I could always use a knife.'), "
                     f"or uncanny whispers about cat bites and your body vessel. Keep it concise, under 45 words, starting every line with '* '.) {val}"
                 )
-                self._pet._on_chat_submitted(serious_prompt, see_screen=False)
+                self._pet._on_chat_submitted(serious_prompt, see_screen=False, origin="shop")
 
     # --- Mouse & Keyboard ------------------------------------------------------
 
