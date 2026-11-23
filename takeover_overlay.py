@@ -44,6 +44,8 @@ if HAS_PYQT:
             self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
             self._title = "⚔️ PINK IN CONTROL — PRESS ESC TO ABORT"
+            self._base_title = self._title
+            self._showing_confirmation = False
             self._subtitle = "Preparing desktop action..."
             self._pulse_tick = 0.0
             self._pulse_timer = QTimer(self)
@@ -59,10 +61,17 @@ if HAS_PYQT:
             self._font_family = family
             self.update()
 
-        def show_banner(self, title: Optional[str] = None, subtitle: str = "") -> None:
-            """Display the takeover HUD centered near the top of the active screen."""
+        def show_banner(self, title: Optional[str] = None, subtitle: str = "", is_confirmation: bool = False) -> None:
+            """Display the takeover HUD centered near the top of the active screen.
+
+            A confirmation banner is temporary: ``restore_base_title()`` (and the next ``update_step``) puts the
+            normal takeover title back, so the HUD never keeps saying "CONFIRMATION REQUIRED" (REVIEW M1).
+            """
             if title:
                 self._title = title
+                if not is_confirmation:
+                    self._base_title = title
+            self._showing_confirmation = bool(is_confirmation)
             self._subtitle = subtitle
             self._pulse_tick = 0.0
             self._pulse_timer.start()
@@ -81,8 +90,16 @@ if HAS_PYQT:
             os_interop.set_window_exclude_from_capture(self, True)
             self.update()
 
+        def restore_base_title(self) -> None:
+            """Drop a confirmation title and go back to the normal takeover title."""
+            if getattr(self, "_showing_confirmation", False):
+                self._title = getattr(self, "_base_title", self._title)
+                self._showing_confirmation = False
+                self.update()
+
         def update_step(self, step_idx: int, total_steps: int, action_type: str, target: str) -> None:
             """Update status text showing active automation progress."""
+            self.restore_base_title()
             type_clean = action_type.replace("_", " ").title()
             if target:
                 self._subtitle = f"Step {step_idx + 1}/{total_steps}: {type_clean} on '{target}'..."
@@ -370,13 +387,25 @@ if HAS_PYQT:
             """Hide and deactivate Voice Mode HUD."""
             self._pulse_timer.stop()
             self._reset_timer.stop()
+            # Cancelling must DISCARD an in-progress recording, never transcribe and dispatch it (REVIEW H10).
             if self._voice_manager and getattr(self._voice_manager, "is_recording", lambda: False)():
                 try:
-                    self._voice_manager.stop_recording()
+                    if hasattr(self._voice_manager, "cancel_recording"):
+                        self._voice_manager.cancel_recording()
+                    else:
+                        self._voice_manager.stop_recording()
                 except Exception:
                     pass
             self.hide()
             self.sig_dismissed.emit()
+
+        def show_hint(self, text: str) -> None:
+            """Briefly show a hint line (e.g. 'Say YES or NO clearly') under the HUD title."""
+            if not self.isVisible():
+                return
+            self._subtitle = text[:60]
+            self.update()
+            self._reset_timer.start(3000)
 
         def _on_pulse(self) -> None:
             self._pulse_tick += 0.08
@@ -393,6 +422,9 @@ if HAS_PYQT:
             self.update()
 
         def _on_transcription_finished(self, text: str) -> None:
+            if not self.isVisible():
+                # The HUD was dismissed while this was transcribing: the user cancelled, so drop it (REVIEW H10).
+                return
             clean_text = text.strip()
             if not clean_text:
                 self._state = "idle"

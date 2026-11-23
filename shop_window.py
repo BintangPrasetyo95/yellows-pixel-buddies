@@ -97,6 +97,15 @@ SCENE_FRAME_INTERVAL_MS = 380
 TYPEWRITER_INTERVAL_MS = 28
 
 
+SHOPKEEPER_PERSONA_HINT = (
+    "SPECIAL DELTARUNE SHOPKEEPER MODE: You are Mad Mew Mew inside your quiet boutique sanctuary with the breathtaking "
+    "sunset glowing outside. Answer in character with your canon shopkeeper voice: poetic, wistful, slightly surreal "
+    "reflections on sunsets, napkins, bodies, flowers, and loneliness, with sudden shopkeeper enthusiasm "
+    "('Enjoy. Enjoy! ENJOY!!'), dry humor ('Ever heard of dollars?', 'I could always use a knife.'), or uncanny whispers "
+    "about cat bites and your body vessel. Keep it concise, under 45 words, starting every line with '* '."
+)
+
+
 class ShopState(Enum):
     ROOT = auto()
     CHARACTER = auto()            # Wardrobe (Pink equipped; others Coming soon)
@@ -367,6 +376,7 @@ class DeltaruneShopWindow(QWidget):
 
         self._pet = pet_ref
         self._memory = memory
+        self._awaiting_ai_reply = False   # True only while an 'Ask Pink' question is waiting for Gemini (REVIEW M17)
         self._font_family = font_family
         wallet_path = self._memory.wallet_path if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "wallet_path") else WALLET_PATH
         self._wallet = PinkWallet(wallet_path)
@@ -649,10 +659,17 @@ class DeltaruneShopWindow(QWidget):
 
         return pages if pages else [text]
 
-    def deliver_ai_reply(self, lines: list[str]) -> None:
-        """Deliver AI-generated shopkeeper speech directly into the typewriter dialogue queue."""
+    def deliver_ai_reply(self, lines: list[str]) -> bool:
+        """Deliver AI-generated shopkeeper speech directly into the typewriter dialogue queue.
+
+        Only the reply to an outstanding "Ask Pink" question is taken; any other Gemini reply (ambient peeks, chat
+        sent from elsewhere) returns False so the pet shows it normally instead of hijacking the shop (REVIEW M17).
+        """
+        if not getattr(self, "_awaiting_ai_reply", False):
+            return False
+        self._awaiting_ai_reply = False
         if not lines:
-            return
+            return True
         clean_lines: list[str] = []
         for l in lines:
             text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", l)
@@ -664,11 +681,12 @@ class DeltaruneShopWindow(QWidget):
             clean_lines.extend(paginated)
 
         if not clean_lines:
-            return
+            return True
         self._dialogue_queue = clean_lines
         self._dialogue_queue_idx = 0
         self.state = ShopState.TALK_DIALOGUE
         self.set_dialogue(self._dialogue_queue[0])
+        return True
 
     def _get_topic_dialogue(self, topic_key: str) -> list[str]:
         if topic_key == "place":
@@ -1143,9 +1161,12 @@ class DeltaruneShopWindow(QWidget):
                         return True, True, kw
 
         # 2. Session logs (memory/sessions/*.json)
-        sessions_dir = _BASE_DIR / "memory" / "sessions"
+        mem = self._memory or (self._pet._memory if self._pet and hasattr(self._pet, "_memory") else None)
+        # In the packaged .exe, _BASE_DIR is PyInstaller's temp extract folder; sessions live in the user data
+        # folder MemoryManager writes to (REVIEW H17).
+        sessions_dir = getattr(mem, "sessions_dir", None) or (_BASE_DIR / "memory" / "sessions")
         if sessions_dir.exists():
-            for s_file in sorted(sessions_dir.glob("*.json"), reverse=True)[:12]:
+            for s_file in sorted(sessions_dir.glob("session_*.json"), reverse=True)[:12]:
                 try:
                     data = json.loads(s_file.read_text(encoding="utf-8"))
                     for msg in data.get("messages", []):
@@ -1562,7 +1583,13 @@ class DeltaruneShopWindow(QWidget):
 
     # --- Universal Scrolling & Navigation --------------------------------------
 
+    def _scroll_offsets(self) -> tuple:
+        return tuple(getattr(self, name, 0) for name in (
+            "_goals_scroll_offset", "_tasks_scroll_offset", "_alarms_scroll_offset", "_timers_scroll_offset",
+            "_notes_scroll_offset", "_talk_scroll_offset", "_sessions_scroll_offset", "_note_scroll_offset"))
+
     def _scroll_up(self) -> None:
+        before = self._scroll_offsets()
         if self.state == ShopState.TASKS:
             if self._tasks_tab == 0:
                 self._goals_scroll_offset = max(0, self._goals_scroll_offset - 1)
@@ -1580,10 +1607,12 @@ class DeltaruneShopWindow(QWidget):
             self._sessions_scroll_offset = max(0, self._sessions_scroll_offset - 1)
         elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
             self._note_scroll_offset = max(0, self._note_scroll_offset - 1)
-        play_sound("menu_move")
+        if self._scroll_offsets() != before:
+            play_sound("menu_move")
         self.update()
 
     def _scroll_down(self) -> None:
+        before = self._scroll_offsets()
         if self.state == ShopState.TASKS:
             if self._tasks_tab == 0:
                 max_off = max(0, len(self._get_goals()) + 1 - 4)
@@ -1608,7 +1637,8 @@ class DeltaruneShopWindow(QWidget):
             self._sessions_scroll_offset = min(max_off, self._sessions_scroll_offset + 1)
         elif self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
             self._note_scroll_offset += 1
-        play_sound("menu_move")
+        if self._scroll_offsets() != before:
+            play_sound("menu_move")
         self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
@@ -2342,8 +2372,9 @@ class DeltaruneShopWindow(QWidget):
             self._selected_index = self._tasks_tab
             self.set_dialogue("* Sanctuary Tasks & Alarms Center.\n* What would you like to inspect, darling?", typewriter=False)
         elif self.state in (ShopState.FACTS_EDIT, ShopState.TOGGLES_MENU, ShopState.SCALES_MENU):
+            prev_state = self.state   # read before reassigning, or Back always lands on 'Edit Facts' (REVIEW L12)
             self.state = ShopState.SETTINGS_MENU
-            self._selected_index = 0 if self.state == ShopState.SCALES_MENU else (1 if self.state == ShopState.TOGGLES_MENU else 2)
+            self._selected_index = {ShopState.SCALES_MENU: 0, ShopState.TOGGLES_MENU: 1}.get(prev_state, 2)
             self.set_dialogue("* Sanctuary settings.", typewriter=False)
         elif self.state == ShopState.ITEM_ACTION:
             if self._inspect_item_kind in ("goal", "task", "alarm", "timer"):
@@ -2515,13 +2546,9 @@ class DeltaruneShopWindow(QWidget):
             play_sound("menu_select")
             self.set_dialogue(f"* \"{val}\"\n* ... *pondering seriously with folded paws* ...")
             if self._pet and hasattr(self._pet, "_on_chat_submitted"):
-                serious_prompt = (
-                    f"(SPECIAL DELTARUNE SHOPKEEPER MODE: You are Mad Mew Mew inside your quiet boutique sanctuary with the breathtaking sunset glowing outside. "
-                    f"Answer in character with your canon shopkeeper voice: poetic, wistful, slightly surreal reflections on sunsets, napkins, bodies, flowers, and loneliness, "
-                    f"with sudden shopkeeper enthusiasm ('Enjoy. Enjoy! ENJOY!!'), dry humor ('Ever heard of dollars?', 'I could always use a knife.'), "
-                    f"or uncanny whispers about cat bites and your body vessel. Keep it concise, under 45 words, starting every line with '* '.) {val}"
-                )
-                self._pet._on_chat_submitted(serious_prompt, see_screen=False)
+                self._awaiting_ai_reply = True   # REVIEW M17
+                # The persona is a system-level hint, not part of what the user said (REVIEW L11).
+                self._pet._on_chat_submitted(val, see_screen=False, origin="shop", persona_hint=SHOPKEEPER_PERSONA_HINT)
 
     # --- Mouse & Keyboard ------------------------------------------------------
 
@@ -2636,6 +2663,12 @@ class DeltaruneShopWindow(QWidget):
                     self._confirm_selection()
                     return
 
+            # Scroll arrows: scroll exactly once per click (REVIEW H18)
+            arrow = self._hit_scroll_arrow(pos_canvas)
+            if arrow:
+                (self._scroll_up if arrow < 0 else self._scroll_down)()
+                return
+
             # 2. Single wide box inspection click (Note inspection actions)
             if self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
                 # Check choices at bottom
@@ -2644,16 +2677,6 @@ class DeltaruneShopWindow(QWidget):
                     self._inspect_choice_idx = btn_idx
                     self._confirm_item_action()
                     return
-
-            # 3. Check scroll arrow clicks (left side at x: 365..405)
-            if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
-                if 365 <= pos_canvas.x() <= 405:
-                    if 265 <= pos_canvas.y() <= 310:
-                        self._scroll_up()
-                        return
-                    elif 370 <= pos_canvas.y() <= 415:
-                        self._scroll_down()
-                        return
 
             # 4. Menu item selection & instant single-click execution
             clicked_idx = self._get_item_at_canvas_pos(pos_canvas)
@@ -2726,19 +2749,33 @@ class DeltaruneShopWindow(QWidget):
         y = round(pt.y() / self._scale)
         return QPoint(x, y)
 
+    def _hit_scroll_arrow(self, pt: QPoint) -> int:
+        """-1 / +1 if ``pt`` is on an up / down scroll arrow of the current list, else 0. Pure (no side effects)."""
+        if self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
+            if 570 <= pt.x() <= 610:          # note-inspection arrows (right side)
+                if 260 <= pt.y() <= 310:
+                    return -1
+                if 370 <= pt.y() <= 415:
+                    return 1
+            return 0
+        if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
+            if 365 <= pt.x() <= 405:          # list arrows (left side)
+                if 265 <= pt.y() <= 310:
+                    return -1
+                if 370 <= pt.y() <= 415:
+                    return 1
+        return 0
+
     def _get_item_at_canvas_pos(self, pt: QPoint) -> int | None:
         if self.state in (ShopState.TALK_DIALOGUE, ShopState.CHAT_HISTORY_VIEW, ShopState.EXITING):
             return None
 
-        # Check scroll arrows for note enter in ITEM_ACTION (right side at x: 570..610)
+        # Scroll-arrow zones are not items. This is a pure hit-test: mouseMoveEvent calls it on every move,
+        # so it must never scroll (REVIEW H18). Clicks on arrows are handled by _hit_scroll_arrow().
+        if self._hit_scroll_arrow(pt):
+            return None
+
         if self.state == ShopState.ITEM_ACTION and self._inspect_item_kind == "fact":
-            if 570 <= pt.x() <= 610:
-                if 260 <= pt.y() <= 310:
-                    self._scroll_up()
-                    return None
-                elif 370 <= pt.y() <= 415:
-                    self._scroll_down()
-                    return None
             if 420 <= pt.y() <= 465:
                 if 30 <= pt.x() <= 190:
                     return 0  # Edit Note
@@ -2747,16 +2784,6 @@ class DeltaruneShopWindow(QWidget):
                 elif 400 <= pt.x() <= 540:
                     return 2  # Back
             return None
-
-        # Check scroll arrows for scrollable states (left side at x: 365..405)
-        if self.state in (ShopState.TASKS, ShopState.FACTS_EDIT, ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
-            if 365 <= pt.x() <= 405:
-                if 265 <= pt.y() <= 310:
-                    self._scroll_up()
-                    return None
-                elif 370 <= pt.y() <= 415:
-                    self._scroll_down()
-                    return None
 
         # Left-side submenus: start_x = 44, start_y = 283, line_h = 36 (TOGGLES_MENU has line_h = 28)
         if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS,

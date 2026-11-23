@@ -958,7 +958,7 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_me
     if use_start_menu and query.strip():
         q_raw = query.strip()
         # Security Guard: Block metacharacters and arbitrary command injection
-        if any(c in q_raw for c in (";", "&", "|", ">", "<", "`", "$", "%", "\\", "/", '"', "'")):
+        if any(c in q_raw for c in (";", "&", "|", ">", "<", "`", "$", "%", "\\", "/", '"', "'", "\n", "\r", "\t")):
             log.warning("Start menu launch rejected due to suspicious characters in query: %r", q_raw)
             return None
 
@@ -994,9 +994,23 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_me
 # ---------------------------------------------------------------------------
 
 _PANIC_ABORT_TRIGGERED: bool = False
+# While Pink injects an Escape key herself, the physical-Esc panic check must ignore it: GetAsyncKeyState
+# cannot tell injected from physical input, and the UI thread polls it ~45x/s (REVIEW H3).
+_SELF_ESC_UNTIL: float = 0.0
+_SELF_ESC_GRACE_S: float = 0.25
 _LAST_AUTOMATED_CURSOR_POS: Optional[Tuple[int, int]] = None
 _IS_AUTOMATED_MOVE_IN_PROGRESS: bool = False
 _ABORT_SHAKE_THRESHOLD_PX: int = 280
+
+
+def _mark_self_injected_esc(hold_s: float) -> None:
+    """Open (or extend) the window in which an Escape press is known to be Pink's own."""
+    global _SELF_ESC_UNTIL
+    _SELF_ESC_UNTIL = max(_SELF_ESC_UNTIL, time.monotonic() + max(0.0, hold_s) + _SELF_ESC_GRACE_S)
+
+
+def _self_injected_esc_active() -> bool:
+    return time.monotonic() < _SELF_ESC_UNTIL
 
 
 def reset_panic_abort() -> None:
@@ -1025,7 +1039,8 @@ def is_panic_key_pressed(check_mouse_pull: bool = False) -> bool:
         return False
 
     # 0x8000 = currently held down; 0x0001 = pressed since last GetAsyncKeyState call
-    if bool(user32.GetAsyncKeyState(VK_ESCAPE) & 0x8001):
+    esc_state = user32.GetAsyncKeyState(VK_ESCAPE)   # always read: also consumes our own injected press
+    if bool(esc_state & 0x8001) and not _self_injected_esc_active():
         _PANIC_ABORT_TRIGGERED = True
         return True
 
@@ -1289,9 +1304,13 @@ def press_key(key: str, duration_s: float = 0.04) -> bool:
     check_emergency_abort()
     vk = _resolve_vk(key)
     is_esc = (vk == VK_ESCAPE)
+    if is_esc:
+        _mark_self_injected_esc(duration_s)
     success = key_down(key)
     time.sleep(duration_s)
     key_up(key)
+    if is_esc:
+        _mark_self_injected_esc(0.0)
     if is_esc and IS_WINDOWS and user32:
         # Swallow/clear transition state resulting from our own injected Escape key
         user32.GetAsyncKeyState(VK_ESCAPE)
@@ -1319,6 +1338,7 @@ def hotkey(*keys: str, interval_s: float = 0.04) -> bool:
         for k in keys:
             if _resolve_vk(k) == VK_ESCAPE:
                 has_esc = True
+                _mark_self_injected_esc(interval_s + 0.1)
             key_down(k)
             pressed.append(k)
             time.sleep(0.02)
@@ -1327,6 +1347,8 @@ def hotkey(*keys: str, interval_s: float = 0.04) -> bool:
         for k in reversed(pressed):
             key_up(k)
             time.sleep(0.01)
+        if has_esc:
+            _mark_self_injected_esc(0.0)
         if has_esc and IS_WINDOWS and user32:
             # Swallow/clear transition state resulting from our own injected Escape key
             user32.GetAsyncKeyState(VK_ESCAPE)
@@ -1372,15 +1394,24 @@ def type_text(
     chunk_size: int = 25,
     use_shift_enter: bool = False,
     expected_hwnd: Optional[int] = None,
+    enter_on_newline: bool = False,
 ) -> bool:
     """Type out a string using chunked atomic SendInput Unicode injection.
 
     Batches characters into atomic chunks (default 25 chars) to prevent physical
     user keystrokes from interleaving, while checking for panic aborts and window focus
     changes between chunks. Supports Shift+Enter for multiline text in chat apps.
+
+    A newline is a real Enter keypress (it submits chats and runs shell commands), so it is refused
+    unless the caller opts in with ``enter_on_newline=True`` after the user confirmed, or asks for
+    ``use_shift_enter`` (a line break that does not submit) (REVIEW C2).
     """
     if not text:
         return True
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if "\n" in text and not use_shift_enter and not enter_on_newline:
+        raise ValueError("type_text: newline would press Enter; caller must confirm and pass enter_on_newline=True")
 
     # Break text into chunks of chunk_size characters
     chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]

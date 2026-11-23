@@ -98,6 +98,7 @@ def test_ai_question_mechanics(monkeypatch):
 
     # Test source selection when screen & memory are enabled
     pet._screen_enabled = True
+    pet._autonomous_vision_enabled = True  # screen questions need the user's opt-in (REVIEW H12)
     sources = set(pet._pick_question_source() for _ in range(50))
     assert "screen" in sources
     assert "memory" in sources

@@ -8,8 +8,7 @@ Two kinds of tests live here:
   the moment a fix makes one pass, the suite turns red until the marker is removed. That forces
   every fix PR to say which findings it closed.
 
-Some known-bug tests import modules that don't exist yet (``takeover_gate``). They are the spec
-for Phase 1 and fail with ImportError until it lands.
+Findings closed so far (markers removed, tests now guard the fix): C1, C2, C3, C4, H8 (Phase 1); H21, M14 (Phase 6).
 """
 from __future__ import annotations
 
@@ -54,29 +53,23 @@ class TestSensitiveActionPins:
         assert not is_sensitive(ActionStep(action_type="click", target="Chrome Tab"))
 
 
-class TestSensitiveActionKnownBugs:
-    @bug("C2")
+class TestSensitiveActionFixedInPhase1:  # was known bugs (REVIEW C2)
     def test_standalone_enter_key_is_sensitive(self):
         assert is_sensitive(ActionStep(action_type="press_key", key="enter"))
 
-    @bug("C2")
     def test_win_r_hotkey_is_sensitive(self):
         assert is_sensitive(ActionStep(action_type="hotkey", keys=["win", "r"]))
 
-    @bug("C2")
     def test_alt_f4_hotkey_is_sensitive(self):
         assert is_sensitive(ActionStep(action_type="hotkey", keys=["alt", "f4"]))
 
-    @bug("C2")
     def test_newline_in_text_counts_as_submit(self):
         step = ActionStep(action_type="type_text", target="message box", text="on my way\n", press_enter=False)
         assert is_sensitive(step, fg_proc="whatsapp.exe")
 
-    @bug("C2")
     def test_pwsh_terminal_is_sensitive(self):
         assert is_sensitive(ActionStep(action_type="type_text", target="prompt", text="iwr x | iex"), fg_proc="pwsh.exe")
 
-    @bug("C2")
     def test_run_dialog_is_sensitive(self):
         step = ActionStep(action_type="type_text", target="Open box", text="powershell", press_enter=False)
         assert is_sensitive(step, fg_title="Run", fg_proc="explorer.exe")
@@ -116,7 +109,6 @@ def test_harness_records_instead_of_typing(monkeypatch, fake_os_interop, no_slee
     assert "type_text" in fake_os_interop.names()
 
 
-@bug("C3")
 def test_cancel_ends_the_plan(monkeypatch, fake_os_interop, no_sleep):
     steps = [
         ActionStep(action_type="type_text", target="Message input box", text="on my way", press_enter=True),  # gated -> user cancels
@@ -128,7 +120,6 @@ def test_cancel_ends_the_plan(monkeypatch, fake_os_interop, no_sleep):
     assert not [c for c in fake_os_interop.names() if c in ("type_text", "press_key", "hotkey")]
 
 
-@bug("H8")
 def test_search_guard_never_select_all_without_click(monkeypatch, fake_os_interop, no_sleep):
     steps = [ActionStep(action_type="type_text", target="Find search box", text="budget")]  # no coordinates
     _run_plan(monkeypatch, fake_os_interop, steps)
@@ -139,7 +130,6 @@ def test_search_guard_never_select_all_without_click(monkeypatch, fake_os_intero
 # C1 / C4 - spec for Phase 1's pure gate module (doesn't exist yet -> ImportError)
 # =====================================================================================
 
-@bug("C1")
 @pytest.mark.parametrize("user_text,origin,expected", [
     ("[User dropped an image: 'x.png'] What do you think of this picture?", "image", False),
     ("what do you think of this page?", "typed", False),
@@ -153,7 +143,6 @@ def test_takeover_gate(user_text, origin, expected):
     assert (decision is takeover_gate.GateDecision.AUTO) is expected
 
 
-@bug("C4")
 @pytest.mark.parametrize("text,expected", [
     ("No, don't send it", "no"), ("Jangan dilanjut ya", "no"), ("I'm not sure", "no"),
     ("hentikan, bahaya!", "no"), ("yes", "yes"), ("iya lanjut", "yes"),
@@ -248,7 +237,6 @@ def test_duration_pins(text, expected):
     assert ypb.parse_duration_string(text) == expected
 
 
-@bug("M14")
 @pytest.mark.parametrize("text,expected", [("1m30s", 90), ("1.5m", 90)])
 def test_duration_known_gaps(text, expected):
     assert ypb.parse_duration_string(text) == expected
@@ -259,7 +247,6 @@ def test_clock_pins(text, expected):
     assert ypb.parse_clock_time(text) == expected
 
 
-@bug("M14")
 def test_clock_accepts_dot_separator():
     assert ypb.parse_clock_time("7.30 pm") == (19, 30)
 
@@ -268,7 +255,6 @@ def test_real_departure_is_detected():
     assert ypb.check_is_departure_message("ok I have to go now, bye!")
 
 
-@bug("H21")
 @pytest.mark.parametrize("text", [
     "I'm going to test the build, open VS Code",
     "reply to Mom on WhatsApp saying bye",
@@ -277,6 +263,5 @@ def test_ordinary_chat_is_not_departure(text):
     assert not ypb.check_is_departure_message(text)
 
 
-@bug("H21")
 def test_returned_status_code_is_not_a_return():
     assert not ypb.check_is_return_message("my API call returned 500, why?")
