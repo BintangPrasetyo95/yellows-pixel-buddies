@@ -61,7 +61,7 @@ except Exception as exc:
     HAS_WHISPER = False
 
 try:
-    from PyQt5.QtCore import QObject, QThread, pyqtSignal
+    from PyQt5.QtCore import QObject, QThread, QTimer, pyqtSignal
     HAS_PYQT = True
 except Exception:
     HAS_PYQT = False
@@ -81,6 +81,12 @@ except Exception:
 log = logging.getLogger("yellows_pixel_buddies.voice")
 
 TARGET_SAMPLE_RATE = 16000  # Whisper native sample rate
+# Raw-signal RMS below this is treated as silence/mic noise and never transcribed (REVIEW L9). Quiet speech on a
+# weak mic is ~0.002+, a muted/idle mic ~0.0001-0.0004.
+SILENCE_RMS_THRESHOLD = 0.0008
+PRELOAD_MAX_RETRIES = 3          # Whisper preload retries after a failure (REVIEW M18)
+PRELOAD_RETRY_BASE_S = 30.0      # 30 s, 60 s, 120 s
+
 
 
 def resample_audio(audio_data: np.ndarray, orig_sr: int, target_sr: int = TARGET_SAMPLE_RATE) -> np.ndarray:
@@ -133,6 +139,28 @@ def find_best_input_device() -> Tuple[Optional[int], int, int]:
         devices = sd.query_devices()
         hostapis = sd.query_hostapis()
         
+        # 0. The microphone the user picked as their Windows default input (REVIEW M18). Its MME name is
+        #    truncated to 31 chars, so match the WASAPI twin by prefix; otherwise use the default itself.
+        try:
+            def_idx0 = sd.default.device[0]
+        except Exception:
+            def_idx0 = None
+        if def_idx0 is not None and 0 <= int(def_idx0) < len(devices):
+            def_dev = devices[int(def_idx0)]
+            prefix = str(def_dev.get("name", ""))[:28].lower()
+            if prefix and def_dev.get("max_input_channels", 0) > 0:
+                for i, d in enumerate(devices):
+                    if d.get("max_input_channels", 0) > 0 and "WASAPI" in hostapis[d["hostapi"]]["name"] \
+                            and str(d.get("name", "")).lower().startswith(prefix):
+                        sr = int(d.get("default_samplerate", 48000))
+                        ch = min(2, max(1, d.get("max_input_channels", 1)))
+                        log.info("Voice: Selected default input (WASAPI) #%d '%s' (sr=%d, ch=%d)", i, d["name"], sr, ch)
+                        return i, sr, ch
+                sr = int(def_dev.get("default_samplerate", 44100))
+                ch = min(2, max(1, def_dev.get("max_input_channels", 1)))
+                log.info("Voice: Selected default input #%d '%s' (sr=%d, ch=%d)", int(def_idx0), def_dev.get("name"), sr, ch)
+                return int(def_idx0), sr, ch
+
         # 1. Look for WASAPI Microphone
         for i, d in enumerate(devices):
             if d.get("max_input_channels", 0) > 0:
@@ -200,6 +228,7 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
     if HAS_PYQT:
         sig_transcribed = pyqtSignal(str)
         sig_error = pyqtSignal(str)
+        sig_model_loaded = pyqtSignal(object)   # a model loaded on demand, for VoiceManager to cache (REVIEW M18)
 
     def __init__(
         self,
@@ -209,6 +238,7 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
         api_key: str = "",
         language: str = "en",
         parent: Optional[QObject] = None,
+        allow_local_load: bool = True,
     ) -> None:
         if HAS_PYQT:
             super().__init__(parent)
@@ -217,6 +247,7 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
         self._model_name = model_name
         self._api_key = api_key
         self._language = language
+        self._allow_local_load = allow_local_load
 
     def run(self) -> None:
         # Check minimum duration (~0.25 seconds)
@@ -226,8 +257,18 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
                 self.sig_transcribed.emit("")
             return
 
+        # Silence gate on the RAW signal: normalize_audio_gain boosts quiet input up to 12x, which turned mic
+        # noise into "speech" that Whisper hallucinated words from (REVIEW L9).
+        raw_1d = self._audio_data.flatten().astype(np.float32)
+        raw_rms = float(np.sqrt(np.mean(raw_1d ** 2))) if raw_1d.size else 0.0
+        if raw_rms < SILENCE_RMS_THRESHOLD:
+            log.info("Audio buffer is silence/noise (raw rms=%.5f < %.5f), ignoring.", raw_rms, SILENCE_RMS_THRESHOLD)
+            if HAS_PYQT:
+                self.sig_transcribed.emit("")
+            return
+
         # Prepare normalized float32 audio
-        audio_1d = normalize_audio_gain(self._audio_data.flatten().astype(np.float32))
+        audio_1d = normalize_audio_gain(raw_1d)
         max_amp = float(np.max(np.abs(audio_1d)))
         log.info("Transcribing audio buffer (samples=%d, duration=%.2fs, max_amp=%.4f)",
                  len(audio_1d), len(audio_1d) / TARGET_SAMPLE_RATE, max_amp)
@@ -242,9 +283,13 @@ class WhisperTranscribeThread(QThread if HAS_PYQT else object):
         if HAS_WHISPER:
             try:
                 model = self._model
+                if model is None and not self._allow_local_load:
+                    raise RuntimeError("Whisper preload still in progress; using cloud fallback for this one")
                 if model is None:
                     log.info("Whisper model not preloaded, loading '%s' now...", self._model_name)
                     model = whisper.load_model(self._model_name)
+                    if HAS_PYQT:
+                        self.sig_model_loaded.emit(model)   # keep it: don't reload on every press (REVIEW M18)
 
                 t0 = time.perf_counter()
                 whisper_lang = "id" if self._language == "id" else ("en" if self._language == "en" else None)
@@ -337,6 +382,7 @@ class VoiceManager(QObject if HAS_PYQT else object):
         self._lock = threading.Lock()
         self._load_worker: Optional[WhisperLoadThread] = None
         self._transcribe_worker: Optional[WhisperTranscribeThread] = None
+        self._preload_failures: int = 0
 
     def set_api_key(self, api_key: str) -> None:
         self._api_key = api_key
@@ -366,6 +412,12 @@ class VoiceManager(QObject if HAS_PYQT else object):
 
     def _on_model_failed(self, err: str) -> None:
         log.warning("VoiceManager: Failed to preload Whisper model (%s), fallback ready.", err)
+        # Retry with backoff (e.g. a first-run download that failed offline) instead of giving up forever (REVIEW M18)
+        self._preload_failures += 1
+        if HAS_PYQT and self._preload_failures <= PRELOAD_MAX_RETRIES:
+            delay_ms = int(PRELOAD_RETRY_BASE_S * 1000 * (2 ** (self._preload_failures - 1)))
+            log.info("VoiceManager: retrying Whisper preload in %.0f s (attempt %d).", delay_ms / 1000, self._preload_failures + 1)
+            QTimer.singleShot(delay_ms, self.preload)
 
     def is_recording(self) -> bool:
         return self._is_recording
@@ -412,13 +464,31 @@ class VoiceManager(QObject if HAS_PYQT else object):
                 pass
 
         try:
-            self._stream = sd.InputStream(
-                samplerate=self._native_sr,
-                channels=self._native_channels,
-                device=self._device_idx,
-                dtype="float32",
-                callback=_audio_callback,
-            )
+            try:
+                self._stream = sd.InputStream(
+                    samplerate=self._native_sr,
+                    channels=self._native_channels,
+                    device=self._device_idx,
+                    dtype="float32",
+                    callback=_audio_callback,
+                )
+            except Exception as first_exc:
+                if self._device_idx is None:
+                    raise
+                # Fall back to whatever Windows says the default input is (REVIEW M18)
+                log.warning("VoiceManager: device #%s failed to open (%s); retrying with the default input.",
+                            self._device_idx, first_exc)
+                def_info = sd.query_devices(kind="input")
+                self._device_idx = None
+                self._native_sr = int(def_info.get("default_samplerate", 44100))
+                self._native_channels = min(2, max(1, int(def_info.get("max_input_channels", 1))))
+                self._stream = sd.InputStream(
+                    samplerate=self._native_sr,
+                    channels=self._native_channels,
+                    device=None,
+                    dtype="float32",
+                    callback=_audio_callback,
+                )
             self._stream.start()
             self._is_recording = True
             log.info("VoiceManager: Started microphone recording (device=%s, sr=%d, ch=%d).",
@@ -488,6 +558,7 @@ class VoiceManager(QObject if HAS_PYQT else object):
         # Launch background transcription worker
         if HAS_PYQT:
             self.sig_transcription_started.emit()
+        preload_in_flight = bool(self._load_worker is not None and self._load_worker.isRunning())
         self._transcribe_worker = WhisperTranscribeThread(
             audio_data=resampled_audio,
             model=self._whisper_model,
@@ -495,7 +566,10 @@ class VoiceManager(QObject if HAS_PYQT else object):
             api_key=self._api_key,
             language=self._language,
             parent=self,
+            allow_local_load=not preload_in_flight,   # never load a 2nd copy while the preload runs (REVIEW M18)
         )
+        if HAS_PYQT:
+            self._transcribe_worker.sig_model_loaded.connect(self._on_model_loaded)
         self._transcribe_worker.sig_transcribed.connect(self._on_transcribed)
         self._transcribe_worker.sig_error.connect(self._on_transcribe_error)
         self._transcribe_worker.start()

@@ -8,7 +8,7 @@ Two kinds of tests live here:
   the moment a fix makes one pass, the suite turns red until the marker is removed. That forces
   every fix PR to say which findings it closed.
 
-Findings closed so far (markers removed, tests now guard the fix): C1, C2, C3, C4, H8 (Phase 1).
+Findings closed so far (markers removed, tests now guard the fix): C1, C2, C3, C4, H8 (Phase 1); H21, M14 (Phase 6).
 """
 from __future__ import annotations
 
@@ -237,7 +237,6 @@ def test_duration_pins(text, expected):
     assert ypb.parse_duration_string(text) == expected
 
 
-@bug("M14")
 @pytest.mark.parametrize("text,expected", [("1m30s", 90), ("1.5m", 90)])
 def test_duration_known_gaps(text, expected):
     assert ypb.parse_duration_string(text) == expected
@@ -248,7 +247,6 @@ def test_clock_pins(text, expected):
     assert ypb.parse_clock_time(text) == expected
 
 
-@bug("M14")
 def test_clock_accepts_dot_separator():
     assert ypb.parse_clock_time("7.30 pm") == (19, 30)
 
@@ -257,7 +255,6 @@ def test_real_departure_is_detected():
     assert ypb.check_is_departure_message("ok I have to go now, bye!")
 
 
-@bug("H21")
 @pytest.mark.parametrize("text", [
     "I'm going to test the build, open VS Code",
     "reply to Mom on WhatsApp saying bye",
@@ -266,6 +263,5 @@ def test_ordinary_chat_is_not_departure(text):
     assert not ypb.check_is_departure_message(text)
 
 
-@bug("H21")
 def test_returned_status_code_is_not_a_return():
     assert not ypb.check_is_return_message("my API call returned 500, why?")

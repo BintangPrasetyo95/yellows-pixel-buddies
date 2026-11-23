@@ -199,47 +199,95 @@ EYE_OFF_PATH = SPRITES_DIR / "eye" / "off.png"
 EYE_ON_PATH = SPRITES_DIR / "eye" / "on.png"
 
 
+_DURATION_UNITS = (
+    (r"hours?|hrs?|jam|h", 3600),
+    (r"minutes?|mins?|menit|m", 60),
+    (r"seconds?|secs?|detik|s", 1),
+)
+_DURATION_PART = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(" + "|".join(u for u, _ in _DURATION_UNITS) + r")(?![a-z])"
+)
+
+
+def _duration_unit_seconds(unit: str) -> int:
+    for pattern, secs in _DURATION_UNITS:
+        if re.fullmatch(pattern, unit):
+            return secs
+    return 0
+
+
 def parse_duration_string(text: str) -> int | None:
-    """Parse duration string (e.g. '25m', '15min', '1h30m', '45s', '10') into seconds."""
-    text = text.strip().lower()
-    m_compound = re.match(r"^(\d+)\s*h(?:ours?|rs?)?\s*(?:and\s*)?(\d+)\s*m(?:in(?:ute)?s?)?$", text)
-    if m_compound:
-        return int(m_compound.group(1)) * 3600 + int(m_compound.group(2)) * 60
-    m_h = re.match(r"^(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?$", text)
-    if m_h:
-        return int(float(m_h.group(1)) * 3600)
-    m_m = re.match(r"^(\d+)\s*m(?:in(?:ute)?s?)?$", text)
-    if m_m:
-        return int(m_m.group(1)) * 60
-    m_s = re.match(r"^(\d+)\s*s(?:ec(?:ond)?s?)?$", text)
-    if m_s:
-        return int(m_s.group(1))
-    if text.isdigit():
-        return int(text) * 60
-    return None
+    """Parse a duration into seconds: '25m', '15min', '1h30m', '1m30s', '1.5m', '2 hours and 15 minutes',
+    '45s', '10' (bare number = minutes), Indonesian '15 menit', '1 jam', '30 detik' (REVIEW M14)."""
+    t = (text or "").strip().lower()
+    if not t:
+        return None
+    if t.isdigit():
+        return int(t) * 60
+    m_hm = re.fullmatch(r"(\d+)\s*h(?:ours?|rs?)?\s*(\d{1,2})", t)   # '1h30' = 1 h 30 min
+    if m_hm:
+        return int(m_hm.group(1)) * 3600 + int(m_hm.group(2)) * 60
+    t = re.sub(r"\b(?:and|dan)\b|,(?!\d)", " ", t)
+    parts = list(_DURATION_PART.finditer(t))
+    if not parts or _DURATION_PART.sub("", t).strip():
+        return None                     # unknown words left over -> not a duration
+    total = sum(float(m.group(1).replace(",", ".")) * _duration_unit_seconds(m.group(2)) for m in parts)
+    total_s = int(round(total))
+    return total_s if total_s > 0 else None
+
+
+_MERIDIEM = r"a\.?m\.?|p\.?m\.?|pagi|siang|sore|malam"
 
 
 def parse_clock_time(text: str) -> tuple[int, int] | None:
-    """Parse clock time string (e.g. '14:30', '2:30pm', '8am', '08:00') into (hour, minute)."""
-    text = text.strip().lower()
-    m12 = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$", text)
+    """Parse a clock time into (hour, minute): '14:30', '2:30pm', '7.30 pm', '7:30 a.m.', '8am', '08:00',
+    Indonesian '7 malam', '07.30 pagi', 'jam 3 sore' (REVIEW M14)."""
+    t = (text or "").strip().lower()
+    t = re.sub(r"^(?:at|jam|pukul|pkl\.?)\s+", "", t)
+    m12 = re.fullmatch(r"(\d{1,2})(?:[:.](\d{2}))?\s*(" + _MERIDIEM + r")", t)
     if m12:
         hour = int(m12.group(1))
         minute = int(m12.group(2) or 0)
-        meridiem = m12.group(3)
-        if 1 <= hour <= 12 and 0 <= minute < 60:
-            if meridiem == "pm" and hour < 12:
+        mer = m12.group(3).replace(".", "")
+        if not (1 <= hour <= 12 and 0 <= minute < 60):
+            return None
+        if mer in ("pm", "sore", "malam") or (mer == "siang" and hour < 10):
+            if hour < 12:
                 hour += 12
-            elif meridiem == "am" and hour == 12:
+            elif mer == "malam":        # '12 malam' = midnight
                 hour = 0
-            return (hour, minute)
-    m24 = re.match(r"^(\d{1,2})[:.](\d{2})(?::\d{2})?$", text)
+        elif mer in ("am", "pagi") and hour == 12:
+            hour = 0
+        return (hour, minute)
+    m24 = re.fullmatch(r"(\d{1,2})[:.](\d{2})(?::\d{2})?", t)
     if m24:
-        hour = int(m24.group(1))
-        minute = int(m24.group(2))
+        hour, minute = int(m24.group(1)), int(m24.group(2))
         if 0 <= hour < 24 and 0 <= minute < 60:
             return (hour, minute)
     return None
+
+
+def nl_alarm_probe(text: str) -> bool:
+    """True if ``text`` is a plain-language alarm request ('set an alarm for 7:30 am ...')."""
+    return bool(re.match(
+        r"^(?:please\s+)?(?:set\s+(?:an?\s+)?)?alarm(?:\s+(?:for|at))?\s+\d{1,2}(?:[:.]\d{2})?",
+        (text or "").strip(), re.IGNORECASE,
+    ))
+
+
+def split_leading_value(text: str, parser, max_tokens: int = 4) -> tuple[str | None, str]:
+    """Split '<value> <label...>' where the value may span several words ('1 hour', '7:30 PM').
+
+    Tries the longest leading run of up to ``max_tokens`` words that ``parser`` accepts and returns
+    (value_text, rest). Used by /timer and /alarm, which used to split on the first space and so read
+    '/timer 1 hour' as 1 minute and '/alarm 7:30 PM' as 07:30 (REVIEW M14).
+    """
+    toks = (text or "").split()
+    for n in range(min(max_tokens, len(toks)), 0, -1):
+        head = " ".join(toks[:n])
+        if parser(head) is not None:
+            return head, " ".join(toks[n:])
+    return None, (text or "").strip()
 
 
 def _resolve_user_data_dir() -> Path:
@@ -641,6 +689,13 @@ DIALOGUE_QUESTION_COOLDOWN_S = 240.0  # Backwards-compatible alias for question 
 DIALOGUE_QUESTION_MAX_COOLDOWN_S = 1200.0  # Maximum adaptive backoff when questions are repeatedly ignored (20 minutes)
 CHAT_INPUT_TIMEOUT_S = 120.0          # Inactivity timeout in seconds for chat input overlay (2 minutes)
 CHAT_INPUT_TIMEOUT_MS = int(CHAT_INPUT_TIMEOUT_S * 1000)
+
+# Alarms & countdown timers. The ringing engine (_check_alarms_and_timers) is still under construction, so the
+# feature ships OFF: Pink must not promise alarms that never ring (REVIEW H15). Flip to True only together with
+# a working _check_alarms_and_timers.
+ALARMS_ENABLED = False
+ALARMS_UNAVAILABLE_LINE_EN = "* Hmph! My royal alarm clock is still under construction, minion! I can't set timers or alarms yet... but I can add it to your tasks! [anim: wistful]"
+ALARMS_UNAVAILABLE_LINE_ID = "* Hmph! Jam alarm kerajaanku masih dalam perbaikan, babu! Aku belum bisa pasang timer atau alarm... tapi aku bisa catat sebagai tugas! [anim: wistful]"
 CHAT_INPUT_EXTRA_WIDTH = 75                      # Additional horizontal width (in base pixels) for comfortable typing
 
 # --- Native Win32 App & Tab Activity Awareness (Zero AI Required) ------------
@@ -1017,6 +1072,26 @@ You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vess
     - User: "check git status in my vscode terminal" -> "* Hmph, relying on your royal doll to command your terminal for you?! Fine, watch and learn! [anim: peace_sign] [desktop_action: Visual Studio Code, run git status in the terminal]"
     - User: "reply to Mom on WhatsApp: on my way" -> "* Ugh, fine! I'll reply to Mom for you, but only because her notifications are distracting ME! [anim: tongue] [desktop_action: WhatsApp, reply to Mom saying I am on my way]"
 """
+
+
+_TIMERS_SECTION_START = "- TIMERS & SCHEDULED ALARMS ("
+_TIMERS_SECTION_END = "  * MULTIPLE ACTIONS IN A SINGLE PROMPT:"
+_TIMERS_DISABLED_NOTE = (
+    "- TIMERS & ALARMS ARE UNDER CONSTRUCTION:\n"
+    "  * You CANNOT set, cancel or check countdown timers or clock alarms right now: that system is still being built.\n"
+    "  * NEVER emit [set_timer], [set_alarm], [cancel_timer] or [cancel_alarm] tags, and NEVER claim a timer or alarm was set.\n"
+    "  * If the user asks for one, tell them in character that your alarm clock is still under construction, and offer to save "
+    "it as a task instead with [add_task: ...].\n"
+)
+if not ALARMS_ENABLED and _TIMERS_SECTION_START in PINK_SYSTEM_INSTRUCTION:   # REVIEW H15
+    _a = PINK_SYSTEM_INSTRUCTION.index(_TIMERS_SECTION_START)
+    _b = PINK_SYSTEM_INSTRUCTION.index(_TIMERS_SECTION_END, _a)
+    PINK_SYSTEM_INSTRUCTION = PINK_SYSTEM_INSTRUCTION[:_a] + _TIMERS_DISABLED_NOTE + PINK_SYSTEM_INSTRUCTION[_b:]
+    PINK_SYSTEM_INSTRUCTION = PINK_SYSTEM_INSTRUCTION.replace(
+        "[add_task: Call mom] [set_timer: 15m, steep tea] [set_alarm: 06:00 PM, dinner]",
+        "[add_task: Call mom] [add_task: Steep tea] [add_task: Dinner at 6 PM]",
+    ).replace("remind me to call mom, set a timer for 15m for tea, and set an alarm for 6:00 PM for dinner",
+              "remind me to call mom, steep tea, and have dinner at 6 PM")
 
 # Curated pool of high-quality, varied exemplar lines mined from real logs
 # (Used to dynamically condition screen observations with fresh voices and diverse sentence starters)
@@ -1969,52 +2044,78 @@ WELCOME_BACK_RESPONSES: list[str] = [
 ]
 
 
+def _looks_like_instruction(clean: str) -> bool:
+    """A command or a request for Pink to do something: never an announcement about the user."""
+    if clean.startswith("/"):
+        return True
+    return takeover_gate.is_imperative_request(clean)
+
+
 def check_is_departure_message(text: str) -> bool:
-    """Return True if the text indicates the user is leaving / stepping away / going AFK."""
-    clean = text.strip().lower()
+    """Return True if the text indicates the user is leaving / stepping away / going AFK.
+
+    Phrases must actually announce leaving (REVIEW H21): "I'm going to test the build", "I need to run the
+    tests" or "reply to Mom saying bye" are ordinary requests, not goodbyes.
+    """
+    clean = text.strip().lower().replace("’", "'")
     if not clean:
         return False
     if clean in ("/afk", "/away", "/brb", "/bye", "/leave", "/gtg", "/g2g", "/gotta_go"):
         return True
-    if clean in ("afk", "brb", "bbl", "gtg", "g2g", "bye", "goodbye", "bye bye", "cya", "farewell", "ttyl"):
+    if clean.strip(" .!") in ("afk", "brb", "bbl", "gtg", "g2g", "bye", "goodbye", "bye bye", "cya", "farewell", "ttyl",
+                              "dadah", "pamit", "otw"):
         return True
+    if _looks_like_instruction(clean):
+        return False
     if re.search(r"\b(?:you|u|they|we|he|she)\s+(?:have|got|need|must|gotta)", clean):
         return False
+    end = r"\s*(?:now|soon|asap|for\s+(?:a\s+bit|a\s+while|now|today|tonight))?\s*[.!,]*\s*(?:bye[!. ]*)?$"
     patterns = [
-        r"\b(?:i\s+)?(?:have|got|need|must)\s+to\s+(?:go|leave|head\s+out|bounce|run|step\s+out)\b",
-        r"\b(?:i\s+)?gotta\s+(?:go|leave|head\s+out|bounce|run|step\s+out)\b",
-        r"\b(?:i\s*['’]?m|i\s+am)\s+(?:leaving|heading\s+out|going(?:\s+(?:out|away|now|to\s+(?:sleep|bed|work|school)))?)\b",
+        r"\b(?:i\s+)?(?:have|got|need|must)\s+to\s+(?:go|leave|head\s+out|bounce|step\s+out)\b(?!\s+(?:and|through|over|back|with|for\s+it))",
+        r"\b(?:i\s+)?(?:have|got|need|must)\s+to\s+run" + end,          # '...need to run' only as a sign-off
+        r"\b(?:i\s+)?gotta\s+(?:go|leave|head\s+out|bounce|step\s+out)\b",
+        r"\b(?:i\s+)?gotta\s+run" + end,
+        r"\b(?:i'?m|i\s+am)\s+(?:leaving|heading\s+out|logging\s+off|signing\s+off|"
+        r"going\s+(?:out|away|offline|home|to\s+(?:sleep|bed|work|school|class|the\s+gym)))\b",
+        r"\b(?:i'?m|i\s+am)\s+(?:off|going|gonna\s+go)" + end,
         r"\b(?:going\s+)?afk\b",
         r"\b(?:brb|be\s+right\s+back|bbl)\b",
         r"\b(?:gtg|g2g)\b",
-        r"\b(?:stepping\s+(?:away|out))\b",
-        r"\b(?:good\s*bye|bye\s*bye|bye\b|farewell|see\s+ya|see\s+you(?:\s+later)?|cya|ttyl|talk\s+to\s+you\s+later)\b",
+        r"\bstepping\s+(?:away|out)\b",
+        # goodbyes only when they close the message
+        r"(?:^|[.!,;]\s*|\b(?:ok(?:ay)?|alright|well)\s+)(?:good\s*bye|bye(?:\s*bye)?|farewell|see\s+ya|see\s+you(?:\s+(?:later|soon|tomorrow))?|"
+        r"cya|ttyl|talk\s+to\s+you\s+later|good\s*night)[!. ]*$",
+        # Indonesian
+        r"\b(?:aku|saya|gue|gw)\s+(?:pergi|cabut|pamit|tidur|off)\s+dulu\b",
+        r"\b(?:mau|harus)\s+(?:pergi|cabut|tidur|keluar)(?:\s+dulu)?" + end,
+        r"\b(?:sampai\s+jumpa|dadah|pamit\s+dulu)\b",
     ]
-    for pat in patterns:
-        if re.search(pat, clean):
-            return True
-    return False
+    return any(re.search(pat, clean) for pat in patterns)
 
 
 def check_is_return_message(text: str) -> bool:
-    """Return True if the text indicates the user has returned from being away."""
-    clean = text.strip().lower()
+    """Return True if the text indicates the user has returned from being away.
+
+    Requires the user to be the one returning (REVIEW H21): "my API call returned 500" is not a return.
+    """
+    clean = text.strip().lower().replace("’", "'")
     if not clean:
         return False
     if clean in ("/back", "/return", "/here", "/im_back"):
         return True
-    if clean in ("back", "im back", "i'm back", "i am back", "returned", "i returned", "i have returned"):
+    if clean.strip(" .!") in ("back", "im back", "i'm back", "i am back", "i returned", "i have returned", "i'm here",
+                              "aku balik", "aku kembali", "udah balik", "sudah balik", "sudah kembali"):
         return True
+    if clean.startswith("/"):
+        return False
     patterns = [
-        r"\b(?:i\s*['’]?m|i\s+am)\s+back\b",
-        r"\b(?:i\s+)?(?:have\s+)?returned\b",
-        r"\b(?:i\s+)?came\s+back\b",
-        r"\bback\s+now\b",
+        r"\b(?:i'?m|i\s+am)\s+back\b",
+        r"\bi\s+(?:have\s+|'ve\s+)?returned\b(?!\s+(?:the|a|an|my|your|it|them|this|that)\b)",
+        r"\bi\s+(?:came|got)\s+back\b",
+        r"^back\s+(?:now|again|from)\b",
+        r"\b(?:aku|saya|gue|gw)\s+(?:udah\s+|sudah\s+)?(?:balik|kembali|pulang)\b",
     ]
-    for pat in patterns:
-        if re.search(pat, clean):
-            return True
-    return False
+    return any(re.search(pat, clean) for pat in patterns)
 
 
 DEFAULT_FOCUS_ANNOYANCE_DURATION_S: float = 8 * 60.0  # 8 minutes
@@ -2034,12 +2135,21 @@ UNFOCUS_RESPONSES: list[str] = [
 ]
 
 
-def check_is_focus_message(text: str) -> tuple[bool, float]:
-    """Return (True, duration_seconds) if the text indicates the user is focusing or trying to focus.
+_NOT_PINK_FOCUS = re.compile(r"focus\s+assist|windows\s+focus|focus\s+session|focus\s+time\b|focus\s+on\s+(?:the|this|that|my)\s+\w+\s+(?:window|tab|app)")
+_QUESTION_OR_REQUEST = re.compile(
+    r"^(?:what|how|why|when|where|which|who|is|does|do|can|could|would|should|will|please|pls|pink[,!:]?|hey|help|tell\s+me|"
+    r"turn\s+(?:on|off)|enable|disable|open|set\s+up|show\s+me|explain)\b"
+)
 
-    Defaults to 8 minutes (480.0 seconds).
+
+def check_is_focus_message(text: str) -> tuple[bool, float]:
+    """Return (True, duration_seconds) if the user says THEY are focusing now.
+
+    Defaults to 8 minutes (480.0 seconds). Questions, requests and Windows "Focus assist" talk don't count, and
+    the phrasing must be about the user ("I need to focus"), not "you need to focus" or "I'm locked in my
+    account" (REVIEW M13).
     """
-    clean = text.strip().lower()
+    clean = text.strip().lower().replace("’", "'")
     if not clean:
         return False, 0.0
 
@@ -2050,27 +2160,31 @@ def check_is_focus_message(text: str) -> tuple[bool, float]:
             mins = float(m_dur.group(1))
             return True, max(1.0, mins) * 60.0
         return True, DEFAULT_FOCUS_ANNOYANCE_DURATION_S
+    if clean.startswith("/"):
+        return False, 0.0
 
-    # Negative / question filters: e.g. "what is focus", "can you focus", "how to focus"
-    if re.search(r"^(?:what|how|why|can\s+you|could\s+you|tell\s+me\s+about)\b", clean):
+    if _QUESTION_OR_REQUEST.search(clean) or _NOT_PINK_FOCUS.search(clean) or clean.endswith("?"):
         return False, 0.0
 
     patterns = [
-        r"\b(?:i\s*['’]?m|i\s+am)\s+(?:trying\s+to\s+focus|focusing)\b",
-        r"\b(?:try|trying)\s+to\s+focus\b",
-        r"\b(?:need|have|got|gotta)\s+to\s+focus\b",
-        r"\b(?:gonna|going\s+to)\s+focus\b",
+        r"\b(?:i'?m|i\s+am)\s+(?:trying\s+to\s+focus|focusing|in\s+focus\s+mode|entering\s+focus\s+mode|doing\s+deep\s+work)\b",
+        r"^(?:(?:i'?m\s+)?(?:try|trying)\s+to\s+focus)\b",
+        r"\bi\s+(?:really\s+)?(?:need|have|got|gotta|want)\s+to\s+focus\b",
+        r"^(?:need|gotta|have)\s+to\s+focus\b",
+        r"\bi'?m\s+(?:gonna|going\s+to)\s+focus\b",
+        r"^(?:gonna|going\s+to)\s+focus\b",
         r"\blet\s+me\s+focus\b",
-        r"\bfocusing\s+(?:on|right\s+now|here|today|now)\b",
-        r"\b(?:in\s+)?focus\s+mode\b",
-        r"\bdeep\s+work\b",
-        r"\blocked\s+in\b",
+        r"^focusing\s+(?:on|right\s+now|here|today|now)\b",
+        r"^(?:focus\s+mode|deep\s+work)(?:\s+(?:on|time|now))?[.!]*$",
+        r"\b(?:i'?m|i\s+am)\s+locked\s+in(?!\s+(?:my|the|a|an|this|that|your)\b)",
+        r"^(?:locking\s+in|locked\s+in)[.!]*$",
         r"^(?:focusing|trying\s+to\s+focus)[.!]?$",
+        r"\b(?:aku|saya|gue|gw)\s+(?:mau|lagi|harus)\s+fokus\b",
     ]
     for pat in patterns:
         if re.search(pat, clean):
             # Check if custom minutes mentioned, e.g. "trying to focus for 15 minutes"
-            m_dur = re.search(r"\bfor\s+(\d+)\s*(?:m|min|minutes?)\b", clean)
+            m_dur = re.search(r"\bfor\s+(\d+)\s*(?:m|min|minutes?|menit)\b", clean)
             if m_dur:
                 mins = float(m_dur.group(1))
                 return True, max(1.0, mins) * 60.0
@@ -2080,21 +2194,26 @@ def check_is_focus_message(text: str) -> tuple[bool, float]:
 
 
 def check_is_unfocus_message(text: str) -> bool:
-    """Return True if user explicitly announces they are done focusing."""
-    clean = text.strip().lower()
+    """Return True if the user explicitly announces they are done focusing (not a question or a
+    Windows "Focus assist" request) (REVIEW M13)."""
+    clean = text.strip().lower().replace("’", "'")
     if not clean:
         return False
     if clean in ("/unfocus", "/stopfocus", "/done_focus", "/end_focus"):
         return True
+    if clean.startswith("/") or _NOT_PINK_FOCUS.search(clean) or clean.endswith("?"):
+        return False
+    if re.search(r"^(?:what|how|why|can|could|would|please|pink[,!:]?|help|tell\s+me|turn|enable|disable)\b", clean):
+        return False
     patterns = [
-        r"\b(?:done|finished|stopped)\s+focusing\b",
-        r"\b(?:stop|end|cancel)\s+focus\b",
-        r"\bout\s+of\s+focus\s+mode\b",
+        r"\b(?:i'?m\s+|i\s+am\s+|i'?ve\s+)?(?:done|finished|stopped)\s+focusing\b",
+        r"^(?:stop|end|cancel)\s+focus(?:\s+mode)?[.!]*$",
+        r"\b(?:i'?m\s+|i\s+am\s+)out\s+of\s+focus\s+mode\b",
+        r"^(?:focus\s+mode\s+(?:off|over|done))[.!]*$",
+        r"\b(?:aku|saya|gue|gw)\s+(?:udah|sudah|selesai)\s+fokus\b",
     ]
-    for pat in patterns:
-        if re.search(pat, clean):
-            return True
-    return False
+    return any(re.search(pat, clean) for pat in patterns)
+
 
 # --- Windows Startup ---------------------------------------------------------
 # --- Single Instance Configuration & IPC -------------------------------------
@@ -2236,7 +2355,8 @@ def setup_single_instance_server(buddy: "YellowsPixelBuddies") -> QLocalServer |
 
 
 STARTUP_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-STARTUP_APP_NAME = "YellowsPixelBuddies"
+STARTUP_APP_NAME = "YellowsPixelBuddies"          # managed by the installer (installer.iss) for the packaged .exe
+STARTUP_DEV_APP_NAME = "YellowsPixelBuddiesDev"    # running from source: never overwrite the installed app's entry (REVIEW L6)
 
 log = logging.getLogger("yellows_pixel_buddies")
 
@@ -2245,17 +2365,37 @@ log = logging.getLogger("yellows_pixel_buddies")
 #  2. SMALL HELPERS
 # =============================================================================
 
-def is_run_at_startup_enabled() -> bool:
-    """Check if the application is set to run at Windows logon in HKCU\\...\\Run."""
+def _startup_value_name() -> str:
+    return STARTUP_APP_NAME if getattr(sys, "frozen", False) else STARTUP_DEV_APP_NAME
+
+
+def _same_command(a: str, b: str) -> bool:
+    return os.path.normcase(str(a or "").strip()) == os.path.normcase(str(b or "").strip())
+
+
+def _read_startup_value(name: str) -> str:
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_READ) as key:
-            val, _ = winreg.QueryValueEx(key, STARTUP_APP_NAME)
-            return bool(val)
+            val, _ = winreg.QueryValueEx(key, name)
+            return str(val or "")
     except FileNotFoundError:
-        return False
+        return ""
     except OSError as err:
         log.debug("Error reading startup registry key: %s", err)
-        return False
+        return ""
+
+
+def is_run_at_startup_enabled() -> bool:
+    """True only if Windows logon will launch THIS copy of the app (HKCU\\...\\Run).
+
+    Any non-empty value used to count, so a moved portable folder or a dev checkout's entry showed "enabled"
+    while logon started something else or nothing (REVIEW L6).
+    """
+    cmd = get_startup_command()
+    if _same_command(_read_startup_value(_startup_value_name()), cmd):
+        return True
+    # Older dev builds wrote their command under the installer's value name: still ours if it matches exactly.
+    return not getattr(sys, "frozen", False) and _same_command(_read_startup_value(STARTUP_APP_NAME), cmd)
 
 
 def get_startup_command() -> str:
@@ -2276,15 +2416,24 @@ def get_startup_command() -> str:
 def set_run_at_startup(enable: bool) -> bool:
     """Add or remove the app from Windows startup (HKCU\\...\\Run)."""
     try:
+        name = _startup_value_name()
+        cmd = get_startup_command()
+        # A dev entry left under the installer's name by older versions: remove it if (and only if) it's ours.
+        legacy_dev = not getattr(sys, "frozen", False) and _same_command(_read_startup_value(STARTUP_APP_NAME), cmd)
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_REG_KEY, 0, winreg.KEY_SET_VALUE) as key:
             if enable:
-                cmd = get_startup_command()
-                winreg.SetValueEx(key, STARTUP_APP_NAME, 0, winreg.REG_SZ, cmd)
-                log.info("Enabled Run at Startup: %s", cmd)
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, cmd)
+                log.info("Enabled Run at Startup (%s): %s", name, cmd)
             else:
                 try:
+                    winreg.DeleteValue(key, name)
+                    log.info("Disabled Run at Startup (%s)", name)
+                except FileNotFoundError:
+                    pass
+            if legacy_dev:
+                try:
                     winreg.DeleteValue(key, STARTUP_APP_NAME)
-                    log.info("Disabled Run at Startup")
+                    log.info("Removed legacy dev Run-at-Startup entry under %s", STARTUP_APP_NAME)
                 except FileNotFoundError:
                     pass
         return True
@@ -3085,6 +3234,12 @@ class DialogueOverlay(QWidget):
         if not text or text in ("*", "* ...", ""):
             self._type_timer.stop()
             self._hold_timer.stop()
+            if self._queue:
+                # Skip the empty/placeholder step but keep the conversation going: before, the queue silently
+                # stalled here (e.g. summoning Pink from hide-peek says "* ..." then "* ..?", and she froze) (REVIEW H19).
+                QTimer.singleShot(0, self.dismiss)
+                return
+            # Empty queue: stay silent on purpose (prevents the endless shop "* ..." loop fixed in 4f1229a).
             self._active = False
             self.hide()
             return
@@ -4431,7 +4586,14 @@ class ChatInputOverlay(QWidget):
         self.move(round(target_x), round(target_y))
 
     def reset_timeout(self) -> None:
-        """Reset the inactivity timeout countdown to 2 minutes."""
+        """Reset the inactivity timeout countdown to 2 minutes (only while the chat input is on screen).
+
+        clear_attachment() -> _on_text_changed() calls this on every close path; arming it while hidden made
+        timed_out fire every 2 minutes forever and cancel in-flight chats (REVIEW H20).
+        """
+        if not self.isVisible():
+            self._timeout_timer.stop()
+            return
         self._timeout_timer.start(CHAT_INPUT_TIMEOUT_MS)
 
     def _on_timeout(self) -> None:
@@ -4460,9 +4622,9 @@ class ChatInputOverlay(QWidget):
         self.reset_timeout()
 
     def cancel(self) -> None:
-        self._timeout_timer.stop()
         self.clear_attachment()
         self.hide()
+        self._timeout_timer.stop()
         self.cancelled.emit()
 
     def _on_submit(self) -> None:
@@ -4476,13 +4638,13 @@ class ChatInputOverlay(QWidget):
         self.submitted.emit(text, see_screen, b64, name)
 
     def hideEvent(self, event) -> None:
-        self._timeout_timer.stop()
         self.clear_attachment()
+        self._timeout_timer.stop()   # after clear_attachment(), which re-arms it (REVIEW H20)
         super().hideEvent(event)
 
     def closeEvent(self, event) -> None:
-        self._timeout_timer.stop()
         self.clear_attachment()
+        self._timeout_timer.stop()
         super().closeEvent(event)
 
 
@@ -4800,12 +4962,27 @@ def identify_active_app_context(exe_name: str, exe_path: str, title: str) -> tup
     return "general", exe_name.removesuffix(".exe").replace("_", " ").title(), t
 
 
-def compute_screen_fingerprint(pixmap: QPixmap) -> bytes:
-    """Downscale a QPixmap to a 32x32 grayscale image and return the raw 1024 bytes."""
+FINGERPRINT_SIZE = 32
+
+
+def compute_screen_fingerprint(pixmap: QPixmap | QImage) -> bytes:
+    """Downscale to a 32x32 grayscale image and return its 1024 luminance bytes (row-major, whole screen).
+
+    Scale FIRST, convert to Grayscale8 AFTER (Qt's smooth scale turns Grayscale8 back into RGB32), and copy row by
+    row honouring bytesPerLine. The old version read only the first 8 rows as BGRA, so changes in the lower 75% of
+    the screen were invisible to the auto-comment / tray / cinema change gates (REVIEW M16). Scaling first is also
+    far cheaper than converting a full 4K frame.
+    """
     if pixmap.isNull():
         return b""
-    img = pixmap.toImage().convertToFormat(QImage.Format_Grayscale8).scaled(32, 32, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-    return bytes(img.bits().asstring(32 * 32))
+    src = pixmap.toImage() if isinstance(pixmap, QPixmap) else pixmap
+    n = FINGERPRINT_SIZE
+    img = src.scaled(n, n, Qt.IgnoreAspectRatio, Qt.SmoothTransformation).convertToFormat(QImage.Format_Grayscale8)
+    bpl = img.bytesPerLine()
+    ptr = img.constBits()
+    ptr.setsize(bpl * n)
+    raw = bytes(ptr)
+    return b"".join(raw[y * bpl:y * bpl + n] for y in range(n))
 
 
 def compute_fingerprint_diff(fp1: bytes, fp2: bytes) -> float:
@@ -4865,85 +5042,110 @@ def evaluate_goal_value(text: str) -> int:
     return max(3, min(8, score))
 
 
-def parse_target_date(text: str | None) -> str | None:
-    """Parse a date string or relative duration into ISO YYYY-MM-DD format."""
+_MONTH_NAMES = {
+    "jan": 1, "january": 1, "januari": 1, "feb": 2, "february": 2, "februari": 2, "mar": 3, "march": 3, "maret": 3,
+    "apr": 4, "april": 4, "may": 5, "mei": 5, "jun": 6, "june": 6, "juni": 6, "jul": 7, "july": 7, "juli": 7,
+    "aug": 8, "august": 8, "agu": 8, "agt": 8, "agustus": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "okt": 10, "oktober": 10, "nov": 11, "november": 11,
+    "dec": 12, "december": 12, "des": 12, "desember": 12,
+}
+_WEEKDAY_NAMES = (
+    ("monday", "senin"), ("tuesday", "selasa"), ("wednesday", "rabu"), ("thursday", "kamis"),
+    ("friday", "jumat"), ("saturday", "sabtu"), ("sunday", "minggu"),
+)
+
+
+def parse_target_date(text: str | None, day_first: bool | None = None) -> str | None:
+    """Parse a date string or relative duration into ISO YYYY-MM-DD format.
+
+    Numeric dates: if one part can only be a day (> 12) the order is unambiguous; otherwise ``day_first``
+    decides (pass True for Indonesian users, who write 05/12/2026 for 5 December). Indonesian month names and
+    'besok' / 'lusa' / 'minggu depan' / 'bulan depan' are understood, and a date whose year was written
+    explicitly is never pushed into next year (REVIEW L8).
+    """
     clean = (text or "").strip().lower()
     if not clean or clean in ("none", "null", "clear", "cancel", "remove", "no", "off"):
         return None
 
-    clean = re.sub(r"^(?:by|on|deadline|target|until)[:\s]*", "", clean).strip()
+    clean = re.sub(r"^(?:by|on|deadline|target|until|sebelum|tanggal|tgl\.?)[:\s]*", "", clean).strip()
     today = datetime.date.today()
 
-    m_iso = re.match(r"^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$", clean)
+    m_iso = re.match(r"^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})$", clean)
     if m_iso:
         y, m, d = int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3))
         try:
             return datetime.date(y, m, d).isoformat()
         except ValueError:
-            pass
+            return None
 
-    m_us = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$", clean)
-    if m_us:
-        m, d, y = int(m_us.group(1)), int(m_us.group(2)), int(m_us.group(3))
+    m_num = re.match(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$", clean)
+    if m_num:
+        a, b, y = int(m_num.group(1)), int(m_num.group(2)), int(m_num.group(3))
+        if a > 12 and b <= 12:
+            d, m = a, b
+        elif b > 12 and a <= 12:
+            m, d = a, b
+        elif day_first:
+            d, m = a, b
+        else:
+            m, d = a, b
         try:
             return datetime.date(y, m, d).isoformat()
         except ValueError:
-            pass
+            return None
 
-    m_rel = re.match(r"^(?:in\s+)?(\d+)\s*(days?|d)$", clean)
+    m_rel = re.match(r"^(?:in\s+|dalam\s+)?(\d+)\s*(days?|d|hari)$", clean)
     if m_rel:
         return (today + datetime.timedelta(days=int(m_rel.group(1)))).isoformat()
 
-    m_rel_w = re.match(r"^(?:in\s+)?(\d+)\s*(weeks?|w)$", clean)
+    m_rel_w = re.match(r"^(?:in\s+|dalam\s+)?(\d+)\s*(weeks?|w|minggu|pekan)$", clean)
     if m_rel_w:
         return (today + datetime.timedelta(weeks=int(m_rel_w.group(1)))).isoformat()
 
-    m_rel_m = re.match(r"^(?:in\s+)?(\d+)\s*(months?|m)$", clean)
+    m_rel_m = re.match(r"^(?:in\s+|dalam\s+)?(\d+)\s*(months?|m|bulan)$", clean)
     if m_rel_m:
         return (today + datetime.timedelta(days=int(m_rel_m.group(1)) * 30)).isoformat()
 
-    if clean in ("tomorrow", "tmrw"):
+    if clean in ("tomorrow", "tmrw", "besok"):
         return (today + datetime.timedelta(days=1)).isoformat()
-    if clean in ("next week",):
+    if clean in ("lusa",):
+        return (today + datetime.timedelta(days=2)).isoformat()
+    if clean in ("next week", "minggu depan", "pekan depan"):
         return (today + datetime.timedelta(days=7)).isoformat()
-    if clean in ("next month",):
+    if clean in ("next month", "bulan depan"):
         return (today + datetime.timedelta(days=30)).isoformat()
 
-    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-    for idx, day_name in enumerate(weekdays):
-        if day_name in clean:
-            days_ahead = (idx - today.weekday()) % 7
-            if days_ahead <= 0 or "next" in clean:
-                days_ahead += 7
-            return (today + datetime.timedelta(days=days_ahead)).isoformat()
-
-    months = {
-        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
-        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
-        "aug": 8, "august": 8, "sep": 9, "september": 9, "oct": 10, "october": 10,
-        "nov": 11, "november": 11, "dec": 12, "december": 12
-    }
     tokens = re.findall(r"[a-zA-Z]+|\d+", clean)
     month_val = None
     day_val = None
     year_val = today.year
+    year_explicit = False
     for tok in tokens:
-        if tok in months:
-            month_val = months[tok]
+        if tok in _MONTH_NAMES:
+            month_val = _MONTH_NAMES[tok]
         elif tok.isdigit():
             v = int(tok)
             if v > 1000:
                 year_val = v
+                year_explicit = True
             elif day_val is None and 1 <= v <= 31:
                 day_val = v
     if month_val and day_val:
         try:
             d_res = datetime.date(year_val, month_val, day_val)
-            if d_res < today and year_val == today.year:
+            if d_res < today and not year_explicit:
                 d_res = datetime.date(year_val + 1, month_val, day_val)
             return d_res.isoformat()
         except ValueError:
-            pass
+            return None
+
+    words = set(tokens)
+    for idx, names in enumerate(_WEEKDAY_NAMES):
+        if words & set(names):
+            days_ahead = (idx - today.weekday()) % 7
+            if days_ahead <= 0 or "next" in words or "depan" in words:
+                days_ahead += 7
+            return (today + datetime.timedelta(days=days_ahead)).isoformat()
 
     return None
 
@@ -4979,6 +5181,8 @@ class MemoryManager:
         # Old exe-adjacent folder to migrate memory/.env from. None (the default) disables migration,
         # so tests and secondary instances never copy the developer's real memory or API key.
         self._legacy_dir = legacy_dir
+        # Read ambiguous numeric dates (05/12/2026) day-first; the pet sets this from its language (REVIEW L8).
+        self.day_first_dates: bool = False
         self.memory_dir = data_dir / "memory"
         self.sessions_dir = self.memory_dir / "sessions"
         self.config_path = self.memory_dir / "config.json"
@@ -5817,7 +6021,7 @@ class MemoryManager:
         if not created_at:
             created_at = legacy_mtime_iso  # May be None for legacy goals without timestamps
 
-        target_date = parse_target_date(raw.get("target_date")) if raw.get("target_date") else None
+        target_date = parse_target_date(raw.get("target_date"), day_first=self.day_first_dates) if raw.get("target_date") else None
 
         notes = []
         for n in raw.get("progress_notes", []):
@@ -5967,7 +6171,7 @@ class MemoryManager:
         if any(g.get("text", "").strip().lower() == goal_text.lower() and not g.get("completed") for g in goals):
             return False
         
-        parsed_target = parse_target_date(target_date) if target_date else None
+        parsed_target = parse_target_date(target_date, day_first=self.day_first_dates) if target_date else None
         now_iso = datetime.datetime.now().isoformat(timespec="seconds")
         new_g = {
             "id": f"goal_{uuid.uuid4().hex[:8]}",
@@ -6097,7 +6301,7 @@ class MemoryManager:
             return False, "", None
         
         target_g = active[idx]
-        parsed = parse_target_date(target_date_str) if target_date_str else None
+        parsed = parse_target_date(target_date_str, day_first=self.day_first_dates) if target_date_str else None
         target_g["target_date"] = parsed
         self.save_goals(goals)
         log.info("[GoalEngine] Set goal [%s] deadline to %s", target_g.get("id"), parsed)
@@ -6590,6 +6794,8 @@ class MemoryManager:
 
     def get_alarms_prompt(self, numbered: bool = True) -> str:
         """Format active timers and alarms for Gemini prompt context and chat display."""
+        if not ALARMS_ENABLED:
+            return ""   # REVIEW H15
         active = self.get_active_alarms()
         active_items = [a for a in active if a.get("state") in ("active", "ringing")]
         if not active_items:
@@ -7559,7 +7765,12 @@ class AlarmsDialog(QDialog):
         layout.addWidget(title_label)
 
         # Subtitle / Hint
-        hint_label = QLabel("Active countdowns trigger automatically on your desktop with animations and choice dialogues!", self)
+        hint_label = QLabel(
+            "Active countdowns trigger automatically on your desktop with animations and choice dialogues!"
+            if ALARMS_ENABLED else
+            "COMING SOON: alarms and timers don't ring yet. Anything listed here is saved, but nothing will alert you.",
+            self,
+        )
         hint_font = QFont(self._font_family)
         hint_font.setPixelSize(11)
         hint_label.setFont(hint_font)
@@ -7955,7 +8166,10 @@ def split_dual_dialogue(
             r"add_task|add_reminder|add_todo|task|todo|delete_task|del_task|rm_task|delete_reminder|del_reminder|rm_reminder|delete_todo|del_todo|rm_todo|"
             r"edit_task|update_task|edit_reminder|update_reminder|edit_todo|update_todo|"
             r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
-            r"set_timer|timer|set_alarm|alarm|cancel_timer|del_timer|cancel_alarm|del_alarm):\s*[^\]]+\]",
+            r"set_timer|timer|set_alarm|alarm|cancel_timer|del_timer|cancel_alarm|del_alarm|"
+            # Same metadata tags _display_text strips: a line holding only one of these must vanish here, not
+            # become an empty step that stalls the dialogue queue (REVIEW H19).
+            r"emotion|think|thought):\s*[^\]]+\]",
             "",
             l,
             flags=re.IGNORECASE,
@@ -8466,13 +8680,13 @@ class GeminiWorkerThread(QThread):
                             n_val = m.group(2).strip()
                             if t_val and n_val:
                                 memory.edit_reminder(t_val, n_val)
-                        for m in re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", chosen_cand, re.IGNORECASE):
+                        for m in (re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", chosen_cand, re.IGNORECASE) if ALARMS_ENABLED else ()):
                             dur_str = m.group(1).strip()
                             lbl = m.group(2).strip() if m.group(2) else "Focus Timer"
                             secs = parse_duration_string(dur_str)
                             if secs and secs > 0:
                                 memory.add_timer(secs, lbl)
-                        for m in re.finditer(r"\[(?:set_alarm|alarm):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", chosen_cand, re.IGNORECASE):
+                        for m in (re.finditer(r"\[(?:set_alarm|alarm):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", chosen_cand, re.IGNORECASE) if ALARMS_ENABLED else ()):
                             time_str = m.group(1).strip()
                             lbl = m.group(2).strip() if m.group(2) else "Alarm"
                             memory.add_alarm(time_str, lbl)
@@ -8624,13 +8838,13 @@ class GeminiWorkerThread(QThread):
                 if c_mode in ("gentle", "soft", "royal", "overlord"):
                     normalized_mode = "gentle" if c_mode in ("gentle", "soft") else "royal"
                     memory.set_goal_coaching_config({"mode": normalized_mode, "snooze_until": None})
-            for m in re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE):
+            for m in (re.finditer(r"\[(?:set_timer|timer):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE) if ALARMS_ENABLED else ()):
                 dur_str = m.group(1).strip()
                 lbl = m.group(2).strip() if m.group(2) else "Focus Timer"
                 secs = parse_duration_string(dur_str)
                 if secs and secs > 0:
                     memory.add_timer(secs, lbl)
-            for m in re.finditer(r"\[(?:set_alarm|alarm):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE):
+            for m in (re.finditer(r"\[(?:set_alarm|alarm):\s*([^,\]]+)(?:,\s*([^\]]+))?\]", raw_text, re.IGNORECASE) if ALARMS_ENABLED else ()):
                 time_str = m.group(1).strip()
                 lbl = m.group(2).strip() if m.group(2) else "Alarm"
                 memory.add_alarm(time_str, lbl)
@@ -11001,6 +11215,7 @@ class YellowsPixelBuddies(QWidget):
         self._tray_vision_enabled: bool = False         # ...even while hidden in the tray
         self._confirm_pending: bool = False
         self._confirm_token: int = 0
+        self._sequence_area_rect: QRect | None = None   # monitor captured for hide/exit/summon sequences (REVIEW L7)
         self._takeover_last_progress: float = 0.0
         self._voice_was_visible_before_takeover: bool = False
         self._voice_manager: voice_service.VoiceManager | None = None
@@ -11216,6 +11431,7 @@ class YellowsPixelBuddies(QWidget):
         self._language: str = str(saved_settings.get("language", DEFAULT_LANGUAGE))
         if self._language not in ("en", "id"):
             self._language = DEFAULT_LANGUAGE
+        self._memory.day_first_dates = self._language == "id"   # 05/12 = 5 Dec for Indonesian users (REVIEW L8)
         # Sound effects setting: strictly MUTED / NO SOUND by default unless explicitly enabled
         self._audio_muted: bool = bool(saved_settings.get("audio_muted", True))
         self._sfx_volume: float = float(saved_settings.get("sfx_volume", 0.7))
@@ -11423,6 +11639,20 @@ class YellowsPixelBuddies(QWidget):
         return EAR_PEEK_OFFSET_X * self._scale_modifier
 
     # --------------------------------------------------------------- geometry & multi-monitor
+    def _capture_sequence_area(self) -> None:
+        """Remember the screen Pink is on when a hide/exit sequence starts, so the whole sequence (and the later
+        summon) runs on that monitor instead of the primary one (REVIEW L7)."""
+        scr = self._current_screen() or QApplication.primaryScreen()
+        self._sequence_area_rect = scr.availableGeometry() if scr else None
+
+    def _sequence_area(self) -> QRect:
+        """Work area for hide / peek / summon / exit sequences: the captured screen, else the current one."""
+        area = getattr(self, "_sequence_area_rect", None)
+        if area is None:
+            scr = self._current_screen() or QApplication.primaryScreen()
+            area = scr.availableGeometry()
+        return area
+
     def _current_screen(self) -> QScreen:
         """Return the QScreen containing Pink's center, falling back to primaryScreen."""
         center = QPoint(round(self._x + self.width() / 2.0), round(self._y + self.height() / 2.0))
@@ -12821,11 +13051,25 @@ RULES:
         self._question_thread.start()
         return True
 
+    def _abandon_question_loader(self) -> None:
+        """Drop a question we won't show: close the '* ...?' loader and get Pink moving again.
+
+        Without this, an early return (PC locked, shop open, Pink hidden) left the non-skippable, never-dismissing
+        loader on screen with the brain timer stopped, so Pink stood frozen after unlock (REVIEW M12).
+        """
+        ov = getattr(self, "_dialogue_overlay", None)
+        if ov is not None and ov.is_active() and ov._full_text == "* ...?":
+            ov.dismiss(clear_queue=True)   # emits dismissed -> _on_dialogue_dismissed restarts the brain
+        if self._phase is Phase.PAUSE and not self._brain_timer.isActive():
+            self._brain_timer.start(random_ms(PAUSE_MIN_S, PAUSE_MAX_S))
+
     def _on_ai_question_ready(self, q_item: QuestionItem, source_type: str) -> None:
         """Display AI-generated interactive question dialogue with choices."""
         if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
+            self._abandon_question_loader()
             return
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            self._abandon_question_loader()
             return
         if self._is_user_chat_or_choice_active():
             if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
@@ -12883,8 +13127,10 @@ RULES:
                 self._dialogue_overlay.dismiss(clear_queue=True)
 
         if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
+            self._abandon_question_loader()
             return
         if hasattr(self, "_shop_window") and self._shop_window and self._shop_window.isVisible():
+            self._abandon_question_loader()
             return
 
         if QUESTION_ITEMS:
@@ -13253,8 +13499,12 @@ RULES:
         attached_image_name: str = "",
         is_direct_drop: bool = False,
         origin: "takeover_gate.TurnOrigin | str | None" = None,
+        persona_hint: str = "",
     ) -> None:
         """Process user text input from the chat overlay and call Gemini AI in background.
+
+        ``persona_hint`` is extra system-level instruction (e.g. the shopkeeper persona); it is never recorded as
+        part of the user's message (REVIEW L11).
 
         ``origin`` (TurnOrigin) tells the takeover gate where this text came from. Callers that are not the
         chat box must pass it (voice -> VOICE, shop -> SHOP); image drops are detected automatically.
@@ -13336,11 +13586,13 @@ RULES:
             self._user_focus_until = 0.0
             self._consecutive_ignored_dialogues = 0
             self._consecutive_ignored_idle = 0
-            reply = random.choice(UNFOCUS_RESPONSES)
-            if hasattr(self, "_memory") and self._memory:
-                self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
-            self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
-            return
+            api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
+            if not api_key:   # with a key, let Gemini answer the actual message (REVIEW M13)
+                reply = random.choice(UNFOCUS_RESPONSES)
+                if hasattr(self, "_memory") and self._memory:
+                    self._memory.record_turn(user_text=clean_input, pink_response=reply, anim="peace_sign", had_screen=False)
+                self._say(reply, force=True, step_anim="peace_sign", record_memory=True, track_ignore=False)
+                return
 
         if is_focus:
             self._user_focus_until = now + focus_dur_s
@@ -13673,7 +13925,7 @@ RULES:
             if goal_content:
                 ok = self._memory.add_goal(goal_content, target_date=target_date)
                 val = evaluate_goal_value(goal_content)
-                parsed_dl = parse_target_date(target_date) if target_date else None
+                parsed_dl = parse_target_date(target_date, day_first=self._language == "id") if target_date else None
                 dl_msg = f" (Deadline: {parsed_dl})" if parsed_dl else ""
                 reply = (
                     f"* Target milestone registered, minion!\n* \"{goal_content}\"{dl_msg}\n* Valuation: +P$ {val:02d} upon completion! Don't you dare slack off, mew! [anim: laughing]"
@@ -13713,12 +13965,15 @@ RULES:
             )
             self._say(reply, force=True, record_memory=False)
             return
+        elif lower_input.startswith(("/timer ", "/countdown ", "/alarm ", "/clock ")) and not ALARMS_ENABLED:
+            self._say(ALARMS_UNAVAILABLE_LINE_ID if self._language == "id" else ALARMS_UNAVAILABLE_LINE_EN,
+                      force=True, record_memory=True)   # REVIEW H15
+            return
         elif lower_input.startswith(("/timer ", "/countdown ")):
             rest = clean_input.split(" ", 1)[1].strip()
-            parts = rest.split(" ", 1)
-            dur_str = parts[0].strip()
-            label = parts[1].strip() if len(parts) > 1 else "Focus Timer"
-            secs = parse_duration_string(dur_str)
+            dur_str, label = split_leading_value(rest, parse_duration_string)   # REVIEW M14
+            label = label or "Focus Timer"
+            secs = parse_duration_string(dur_str) if dur_str else None
             if secs and secs > 0:
                 item = self._memory.add_timer(secs, label)
                 mins, s = divmod(secs, 60)
@@ -13730,10 +13985,9 @@ RULES:
             return
         elif lower_input.startswith(("/alarm ", "/clock ")):
             rest = clean_input.split(" ", 1)[1].strip()
-            parts = rest.split(" ", 1)
-            time_str = parts[0].strip()
-            label = parts[1].strip() if len(parts) > 1 else "Alarm"
-            item = self._memory.add_alarm(time_str, label)
+            time_str, label = split_leading_value(rest, parse_clock_time)   # REVIEW M14
+            label = label or "Alarm"
+            item = self._memory.add_alarm(time_str, label) if time_str else None
             if item:
                 reply = f"* Alarm set for {item.get('clock_time')} (\"{label}\"), mew! Don't oversleep, minion!"
             else:
@@ -13847,6 +14101,10 @@ RULES:
             clean_input,
             re.IGNORECASE,
         )
+        if (nl_timer or nl_alarm_probe(clean_input)) and not ALARMS_ENABLED:
+            self._say(ALARMS_UNAVAILABLE_LINE_ID if self._language == "id" else ALARMS_UNAVAILABLE_LINE_EN,
+                      force=True, record_memory=True)   # REVIEW H15
+            return
         if nl_timer:
             dur_str = nl_timer.group(1).strip()
             label = nl_timer.group(2).strip() if nl_timer.group(2) else "Focus Timer"
@@ -14138,6 +14396,8 @@ RULES:
             system_inst += f"\n\n{active_app_block}"
 
         system_inst += f"\n\n{self._desktop_control_prompt_note()}"
+        if persona_hint:
+            system_inst += f"\n\n{persona_hint}"
         had_visual = bool(see_screen or attached_image_b64)
         if origin:
             turn_origin = takeover_gate.TurnOrigin(origin)
@@ -14248,10 +14508,17 @@ RULES:
             if remaining_steps:
                 for s in remaining_steps:
                     all_lines.append(s.text if hasattr(s, "text") else str(s))
-            if hasattr(self._shop_window, "deliver_ai_reply"):
-                self._shop_window.deliver_ai_reply(all_lines)
-            else:
-                self._shop_window.set_dialogue(first_step.text)
+            if not self._shop_window.deliver_ai_reply(all_lines):
+                self._say(
+                    first_step.text,
+                    force=True,
+                    auto_dismiss=True,
+                    record_memory=False,
+                    is_ghost=first_step.is_ghost,
+                    extra_queue=remaining_steps,
+                    step_anim=first_step.anim,
+                    hold_s=hold_s,
+                )
         else:
             self._say(
                 first_step.text,
@@ -14673,6 +14940,8 @@ RULES:
         if lang not in ("en", "id"):
             lang = "en"
         self._language = lang
+        if hasattr(self, "_memory") and self._memory:
+            self._memory.day_first_dates = lang == "id"   # REVIEW L8
         self._save_live_settings()
 
         if getattr(self, "_voice_manager", None) is not None:
@@ -14791,6 +15060,8 @@ RULES:
         """Periodically check if Pink should spontaneously inspect the user's screen and comment."""
         if not AUTO_SCREEN_COMMENT_ENABLED or not self._autonomous_vision_enabled:
             return  # unprompted screenshots require the user's opt-in (REVIEW H12)
+        if getattr(self, "_shop_window", None) is not None and self._shop_window.isVisible():
+            return  # don't screenshot the shop and comment on it while the user is using it (REVIEW M17)
         if getattr(self, "_hidden_in_tray", False):
             return
 
@@ -15964,7 +16235,7 @@ RULES:
         if self._phase == Phase.HIDE_PEEK:
             return mask.intersected(QRegion(0, 0, self.width(), self._ear_peek_height))
         if self._phase == Phase.HIDE_OUTRO and getattr(self, "_hide_subphase", "") in ("ghost_rise_from_below", "ghost_sink"):
-            area = QApplication.primaryScreen().availableGeometry()
+            area = self._sequence_area()
             vis_h = max(0, min(self.height(), round(area.y() + area.height() - self._y)))
             return mask.intersected(QRegion(0, 0, self.width(), vis_h))
         if DEBUG_DRAW_HAND_ANCHOR and self.state == HANGING_STATE:
@@ -16541,7 +16812,7 @@ RULES:
         min_x, max_x, _min_y, ground_y = bounds
 
         if self._phase is Phase.HIDE_PEEK:
-            area = QApplication.primaryScreen().availableGeometry()
+            area = self._sequence_area()
             self._x = float(area.x() + area.width() - self.width() - self._ear_peek_offset_x)
             self._y = float(area.y() + area.height() - self._ear_peek_height)
             self._sync_window_position()
@@ -16776,7 +17047,7 @@ RULES:
             self.setMask(self._mask_for(frame))
         self.update()
 
-        area = QApplication.primaryScreen().availableGeometry()
+        area = self._sequence_area()
         ground_y = float(area.y() + area.height() - self.height() + FOOT_PADDING)
         self._intro_apex_y = ground_y
         self._vy = -340.0
@@ -16784,7 +17055,7 @@ RULES:
 
     def _tick_summon_intro(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
         min_x, max_x, min_y, ground_y = bounds
-        area = QApplication.primaryScreen().availableGeometry()
+        area = self._sequence_area()
         screen_right = float(area.x() + area.width())
 
         if self._intro_subphase == "rise":
@@ -17299,6 +17570,7 @@ RULES:
         """User chose 'Hide': Pink runs to the right offscreen, then the ghost slowly takes over the hide spot."""
         if self._phase in (Phase.HIDE_PEEK, Phase.SUMMON_DIALOGUE, Phase.SUMMON_INTRO, Phase.HIDE_OUTRO, Phase.EXIT_OUTRO):
             return
+        self._capture_sequence_area()   # hide, peek and the later summon all stay on this monitor (REVIEW L7)
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.mark_user_interacted()
             self._dialogue_overlay.dismiss(clear_queue=True)
@@ -17338,7 +17610,7 @@ RULES:
 
     def _tick_hide_outro(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
         _min_x, _max_x, _min_y, ground_y = bounds
-        area = QApplication.primaryScreen().availableGeometry()
+        area = self._sequence_area()
         screen_right = float(area.x() + area.width())
         target_hide_x = float(area.x() + area.width() - self.width() - self._ear_peek_offset_x)
         target_hide_y = float(area.y() + area.height() - self._ear_peek_height)
@@ -17400,6 +17672,7 @@ RULES:
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
             self._do_real_quit()
             return
+        self._capture_sequence_area()
 
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.mark_user_interacted()
@@ -17429,7 +17702,7 @@ RULES:
         self._y = ground_y
         self._vy = 0.0
 
-        area = QApplication.primaryScreen().availableGeometry()
+        area = self._sequence_area()
         screen_left = float(area.x())
         screen_right = float(area.x() + area.width())
         dist_left = self._x - screen_left
@@ -17450,7 +17723,7 @@ RULES:
     def _tick_exit_outro(self, now: float, dt: float, bounds: tuple[float, float, float, float]) -> None:
         _min_x, _max_x, _min_y, ground_y = bounds
         self._y = ground_y
-        area = QApplication.primaryScreen().availableGeometry()
+        area = self._sequence_area()
         screen_left = float(area.x())
         screen_right = float(area.x() + area.width())
 
@@ -18861,11 +19134,11 @@ RULES:
         self._key_tray_action = tray_menu.addAction("Set Gemini API Key")
         self._key_tray_action.triggered.connect(self._prompt_api_key_dialog)
 
-        self._alarms_tray_action = tray_menu.addAction("Alarms & Timers")
+        self._alarms_tray_action = tray_menu.addAction("Alarms & Timers" if ALARMS_ENABLED else "Alarms & Timers (coming soon)")
         self._alarms_tray_action.triggered.connect(self._open_alarms_dialog)
 
         memory_menu = tray_menu.addMenu("Memory Storage")
-        manage_alarms_action = memory_menu.addAction("Alarms & Timers")
+        manage_alarms_action = memory_menu.addAction("Alarms & Timers" if ALARMS_ENABLED else "Alarms & Timers (coming soon)")
         manage_alarms_action.triggered.connect(self._open_alarms_dialog)
         manage_reminders_action = memory_menu.addAction("Manage Reminders")
         manage_reminders_action.triggered.connect(self._open_reminders_dialog)

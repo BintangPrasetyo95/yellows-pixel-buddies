@@ -77,3 +77,21 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch):
     import action_planner
 
     monkeypatch.setattr(action_planner.time, "sleep", lambda *_a, **_k: None)
+
+
+def shutdown_pet(pet) -> None:
+    """Stop every QThread the pet started (e.g. MediaWatcher) before the process exits.
+
+    A QThread still running when Python shuts down makes Qt abort the process, which kills pytest before it can
+    print its summary. The app itself has the same gap at quit (REVIEW H13, fixed in Phase 2); until then every
+    test that builds the full pet must tear it down with this.
+    """
+    from PyQt5.QtCore import QThread
+
+    for thread in pet.findChildren(QThread):
+        if thread.isRunning():
+            if hasattr(thread, "stop"):
+                thread.stop()
+            thread.requestInterruption()
+            thread.wait(5000)
+    pet.hide()

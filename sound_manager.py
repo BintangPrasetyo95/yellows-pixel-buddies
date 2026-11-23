@@ -188,6 +188,9 @@ SOUND_VOLUME_NORMALIZATION: Dict[str, float] = {
 }
 
 
+MIXER_RETRY_INTERVAL_S = 30.0   # min seconds between pygame.mixer re-init attempts after a failure (REVIEW M23)
+
+
 class SoundManager:
     """Zero-latency, polyphonic sound effects manager powered by pygame.mixer."""
 
@@ -201,6 +204,7 @@ class SoundManager:
         # Pygame mixer sound cache: maps absolute file paths to pygame.mixer.Sound instances
         self._sounds: Dict[str, Any] = {}
         self._mixer_initialized: bool = False
+        self._last_init_attempt: float = 0.0
 
         # Fallback Qt effects cache (only if pygame is unavailable)
         self._qt_effects: Dict[str, Any] = {}
@@ -211,6 +215,7 @@ class SoundManager:
         """Initialize the audio engine (pygame.mixer preferred for zero GIL latency)."""
         if self._mixer_initialized:
             return True
+        self._last_init_attempt = time.perf_counter()
         if HAS_PYGAME_MIXER:
             try:
                 # 44.1 kHz, 16-bit signed, stereo, 512-sample buffer (~11ms latency)
@@ -306,8 +311,9 @@ class SoundManager:
             return False
 
         if not self._mixer_initialized:
-            if not self._init_engine():
-                # Fallback to Qt multimedia if pygame is not available
+            # Without an audio device every blip used to re-open the device on the GUI thread and log a warning
+            # (~15x/s while Pink types). Retry at most every MIXER_RETRY_INTERVAL_S, use Qt meanwhile (REVIEW M23).
+            if (now - self._last_init_attempt) < MIXER_RETRY_INTERVAL_S or not self._init_engine():
                 return self._play_qt_fallback(sound_name, volume_scale)
 
         sound = self._get_sound(sound_name)
