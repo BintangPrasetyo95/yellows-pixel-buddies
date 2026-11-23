@@ -30,6 +30,21 @@ import os_interop
 log = logging.getLogger("yellows_pixel_buddies.takeover_overlay")
 
 
+def physical_to_logical(px: float, py: float, screens) -> Tuple[float, float]:
+    """Map a physical desktop pixel to Qt logical coordinates (REVIEW L1).
+
+    ``screens``: iterable of (origin_x, origin_y, logical_w, logical_h, dpr). With Qt5 high-DPI scaling a screen's
+    geometry ORIGIN is already in native pixels while its SIZE is logical, so a physical point maps to
+    ``origin + (phys - origin) / dpr``. The old code multiplied the origin by dpr as well, drawing the reticle
+    hundreds of pixels away on scaled secondary monitors.
+    """
+    for ox, oy, w, h, dpr in screens:
+        dpr = dpr or 1.0
+        if ox <= px < ox + w * dpr and oy <= py < oy + h * dpr:
+            return ox + (px - ox) / dpr, oy + (py - oy) / dpr
+    return float(px), float(py)
+
+
 if HAS_PYQT:
     class TakeoverBannerOverlay(QWidget):
         """Floating top-centered HUD banner indicating autonomous desktop takeover."""
@@ -196,27 +211,14 @@ if HAS_PYQT:
             self._progress = 0.0
             half = self._size // 2
 
-            # Map physical desktop coordinates to Qt logical widget coordinates across monitors
-            target_screen = None
+            # Map physical desktop coordinates to Qt logical widget coordinates across monitors (REVIEW L1)
+            screens = []
             for scr in QApplication.screens():
+                g = scr.geometry()
                 dpr = scr.devicePixelRatio() if hasattr(scr, "devicePixelRatio") else 1.0
-                geom = scr.geometry()
-                phys_x = geom.x() * dpr
-                phys_y = geom.y() * dpr
-                phys_w = geom.width() * dpr
-                phys_h = geom.height() * dpr
-                if phys_x <= center_x <= phys_x + phys_w and phys_y <= center_y <= phys_y + phys_h:
-                    target_screen = scr
-                    break
-
-            if target_screen:
-                dpr = target_screen.devicePixelRatio() if hasattr(target_screen, "devicePixelRatio") else 1.0
-                geom = target_screen.geometry()
-                log_x = geom.x() + (center_x - geom.x() * dpr) / dpr
-                log_y = geom.y() + (center_y - geom.y() * dpr) / dpr
-                self.move(int(round(log_x - half)), int(round(log_y - half)))
-            else:
-                self.move(center_x - half, center_y - half)
+                screens.append((g.x(), g.y(), g.width(), g.height(), dpr))
+            log_x, log_y = physical_to_logical(center_x, center_y, screens)
+            self.move(int(round(log_x - half)), int(round(log_y - half)))
 
             total_ticks = max(4, duration_ms // 20)
             self._tick_step = 1.0 / total_ticks

@@ -22,7 +22,7 @@ import time
 from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Any, Callable, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple
 
 log = logging.getLogger("yellows_pixel_buddies.os_interop")
 
@@ -498,8 +498,9 @@ def get_screen_metrics() -> ScreenMetrics:
 def coords_to_normalized_virtual(x: int, y: int) -> Tuple[int, int]:
     """Convert desktop pixel coordinates into normalized (0..65535) coordinates for SendInput."""
     metrics = get_screen_metrics()
-    norm_x = int(math.floor(((x - metrics.virtual_left) * 65536) / max(1, metrics.virtual_width)))
-    norm_y = int(math.floor(((y - metrics.virtual_top) * 65536) / max(1, metrics.virtual_height)))
+    # Aim at the pixel CENTRE: flooring the left edge made Windows map many points 1 px up/left (REVIEW L2).
+    norm_x = int(((x - metrics.virtual_left) + 0.5) * 65536 / max(1, metrics.virtual_width))
+    norm_y = int(((y - metrics.virtual_top) + 0.5) * 65536 / max(1, metrics.virtual_height))
     # Clamp to valid 16-bit range
     norm_x = max(0, min(65535, norm_x))
     norm_y = max(0, min(65535, norm_y))
@@ -725,28 +726,76 @@ def list_windows(
     return windows
 
 
-APP_SEARCH_ALIASES = {
-    "vscode": ("visual studio code", "code.exe", "antigravity"),
-    "vs code": ("visual studio code", "code.exe", "antigravity"),
-    "code": ("visual studio code", "code.exe", "antigravity"),
-    "chrome": ("google chrome", "chrome.exe"),
-    "claude": ("claude", "chrome.exe", "msedge.exe"),
-    "chatgpt": ("chatgpt", "chrome.exe", "msedge.exe"),
-    "browser": ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"),
-    "edge": ("microsoft edge", "msedge.exe"),
-    "firefox": ("mozilla firefox", "firefox.exe"),
-    "whatsapp": ("whatsapp", "chrome.exe", "msedge.exe"),
-    "youtube music": ("youtube music", "music.youtube", "chrome.exe", "msedge.exe"),
-    "youtube": ("youtube", "chrome.exe", "msedge.exe"),
-    "spotify": ("spotify", "spotify.exe"),
-    "terminal": ("windowsterminal.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "visual studio code", "code.exe"),
-    "powershell": ("powershell.exe", "pwsh.exe", "windowsterminal.exe"),
-    "explorer": ("file explorer", "explorer.exe"),
-    "files": ("file explorer", "explorer.exe"),
-    "word": ("winword.exe", "word"),
-    "excel": ("excel.exe", "excel"),
-    "discord": ("discord", "discord.exe"),
+class AppAlias(NamedTuple):
+    """How to recognise an app's window (REVIEW H5).
+
+    ``identity``: words its window TITLE contains. ``native``: its own executables (always a match).
+    ``hosts``: processes that may *host* it (browsers for web apps); a host window only counts if its title also
+    contains an identity term. Before, "whatsapp" returned ANY Chrome window, so "open WhatsApp" focused a random
+    tab and reported success.
+    """
+    identity: Tuple[str, ...]
+    native: Tuple[str, ...]
+    hosts: Tuple[str, ...]
+
+
+BROWSER_PROCESSES = ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "vivaldi.exe")
+_VSCODE = AppAlias(("visual studio code",), ("code.exe", "antigravity.exe"), ())
+_EXPLORER = AppAlias(("file explorer",), ("explorer.exe",), ())
+
+APP_SEARCH_ALIASES: Dict[str, AppAlias] = {
+    "vscode": _VSCODE,
+    "vs code": _VSCODE,
+    "visual studio code": _VSCODE,
+    "code": _VSCODE,
+    "chrome": AppAlias(("google chrome",), ("chrome.exe",), ()),
+    "google chrome": AppAlias(("google chrome",), ("chrome.exe",), ()),
+    "claude": AppAlias(("claude",), ("claude.exe",), BROWSER_PROCESSES),
+    "chatgpt": AppAlias(("chatgpt",), ("chatgpt.exe",), BROWSER_PROCESSES),
+    "browser": AppAlias((), BROWSER_PROCESSES, ()),
+    "edge": AppAlias(("microsoft edge",), ("msedge.exe",), ()),
+    "microsoft edge": AppAlias(("microsoft edge",), ("msedge.exe",), ()),
+    "firefox": AppAlias(("mozilla firefox",), ("firefox.exe",), ()),
+    "whatsapp": AppAlias(("whatsapp",), ("whatsapp.exe", "whatsapp.root.exe"), BROWSER_PROCESSES),
+    "youtube music": AppAlias(("youtube music",), ("youtube music.exe",), BROWSER_PROCESSES),
+    "youtube": AppAlias(("youtube",), (), BROWSER_PROCESSES),
+    "spotify": AppAlias(("spotify",), ("spotify.exe",), BROWSER_PROCESSES),
+    "terminal": AppAlias(("terminal", "powershell", "command prompt"),
+                         ("windowsterminal.exe", "powershell.exe", "pwsh.exe", "cmd.exe"), ()),
+    "powershell": AppAlias(("powershell",), ("powershell.exe", "pwsh.exe"), ("windowsterminal.exe",)),
+    "explorer": _EXPLORER,
+    "file explorer": _EXPLORER,
+    "files": _EXPLORER,
+    "word": AppAlias(("word",), ("winword.exe",), ()),
+    "excel": AppAlias(("excel",), ("excel.exe",), ()),
+    "discord": AppAlias(("discord",), ("discord.exe",), BROWSER_PROCESSES),
 }
+
+
+def _title_has_term(title: str, term: str) -> bool:
+    return bool(re.search(r"\b" + re.escape(term) + r"\b", title or "", re.IGNORECASE))
+
+
+def _alias_matches(alias: AppAlias, win: "WindowInfo") -> bool:
+    proc = (win.process_name or "").lower()
+    if proc in alias.native:
+        return True
+    allowed = alias.native + alias.hosts
+    return any(_title_has_term(win.title, t) for t in alias.identity) and (not allowed or proc in allowed)
+
+
+def window_matches_app(win: Optional["WindowInfo"], query: str) -> bool:
+    """True if ``win`` really is the app/window ``query`` names (used to verify "open X" goals) (REVIEW H5)."""
+    if win is None:
+        return False
+    q = (query or "").strip().lower()
+    if not q:
+        return False
+    alias = APP_SEARCH_ALIASES.get(q)
+    if alias is not None:
+        return _alias_matches(alias, win)
+    proc_base = re.sub(r"\.exe$", "", (win.process_name or "").lower())
+    return proc_base == q or _title_has_term(win.title, q)
 
 
 def find_window(query: str, app_name: Optional[str] = None, exact: bool = False) -> Optional[WindowInfo]:
@@ -776,18 +825,18 @@ def find_window(query: str, app_name: Optional[str] = None, exact: bool = False)
             if w.process_name.lower() == q_lower or w.process_name.lower() == f"{q_lower}.exe":
                 return w
 
-    # 3. Known application search aliases (prioritizing process name, then word-boundary title)
-    alias_terms = APP_SEARCH_ALIASES.get(q_lower, ())
-    for term in alias_terms:
-        # Check process name first
+    # 3. Known apps: the app's own process first, then a HOST window (e.g. a browser tab) whose title names the app.
+    # A known app that isn't open returns None, so the caller launches it instead of focusing a random
+    # browser / editor window (REVIEW H5).
+    alias = APP_SEARCH_ALIASES.get(q_lower)
+    if alias is not None:
         for w in candidates:
-            if term.endswith(".exe") and w.process_name.lower() == term:
+            if (w.process_name or "").lower() in alias.native:
                 return w
-        # Check title using word boundaries
-        term_clean = re.sub(r"\.exe$", "", term)
         for w in candidates:
-            if re.search(r"\b" + re.escape(term_clean) + r"\b", w.title, re.IGNORECASE):
+            if _alias_matches(alias, w):
                 return w
+        return None
 
     # 4. Word-boundary search in title (e.g. 'word' matches 'Document - Word' but NOT 'Password Manager')
     if q_lower:
@@ -1136,6 +1185,20 @@ def get_cursor_pos() -> Tuple[int, int]:
     with ensure_input_desktop():
         user32.GetCursorPos(ctypes.byref(pt))
     return pt.x, pt.y
+
+
+def reanchor_automated_cursor() -> None:
+    """Treat wherever the cursor is NOW as Pink's own position for the "mouse pulled away" abort.
+
+    Call after the user answers a confirmation with the mouse: moving to the bubble isn't a pull-away (REVIEW H2).
+    """
+    global _LAST_AUTOMATED_CURSOR_POS
+    if _LAST_AUTOMATED_CURSOR_POS is None:
+        return
+    try:
+        _LAST_AUTOMATED_CURSOR_POS = tuple(int(v) for v in get_cursor_pos())  # type: ignore[assignment]
+    except Exception:
+        pass
 
 
 def set_cursor_pos(x: int, y: int) -> bool:

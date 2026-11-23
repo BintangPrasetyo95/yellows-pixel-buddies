@@ -16,7 +16,7 @@ import os_interop as _real
 RECORDED = (
     "move_mouse", "smooth_move_mouse", "click_mouse", "scroll_mouse", "set_cursor_pos",
     "type_text", "press_key", "hotkey", "key_down", "key_up",
-    "focus_window", "launch_or_focus", "trigger_panic_abort",
+    "focus_window", "launch_or_focus", "trigger_panic_abort", "reanchor_automated_cursor",
     "set_window_input_transparent", "set_window_exclude_from_capture",
 )
 
@@ -33,6 +33,7 @@ class FakeOsInterop:
         self.elevated: Tuple[bool, str] = (False, "")
         self.cursor = (0, 0)
         self.monitor = (0, 0, 1920, 1080)
+        self.screen_patches: List[Any] = []   # images returned by action_planner._grab_patch, in order
 
     # ---- recorded side effects -------------------------------------------------------------
     def __getattr__(self, name: str) -> Any:

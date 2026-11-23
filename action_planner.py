@@ -54,6 +54,13 @@ GEMINI_READ_TIMEOUT_S = 20
 DEFAULT_MAX_OUTPUT_TOKENS = 1200
 MAX_VISION_STEPS = 10
 CONFIRM_TIMEOUT_S = 45.0        # how long a takeover confirmation waits for the user before denying
+# A decision older than this is never acted on: the screen it was made from is too stale (REVIEW H6).
+STEP_DECISION_BUDGET_S = 30.0
+# Pixel change (%) around the target between "observed" and "about to act" that counts as a layout shift (REVIEW H6).
+TARGET_SHIFT_THRESHOLD_PCT = 15.0
+# Actions that send input to the foreground window; they must still be acting on the window that was observed.
+INPUT_ACTIONS = frozenset({"click", "double_click", "right_click", "click_and_type", "type_text", "press_key",
+                           "hotkey", "scroll"})
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +141,9 @@ class DesktopPlan:
     context_notes: str = ""
     steps: List[ActionStep] = field(default_factory=list)
     max_steps: int = MAX_VISION_STEPS
+    # The explicit text the user wants typed/sent ("" for read-only or navigation goals). Decides whether a
+    # premature "done" is rejected, instead of guessing from verbs like "reply" (REVIEW M4).
+    message_text: str = ""
     current_step_index: int = 0
     is_finished: bool = False
     success: bool = False
@@ -538,8 +548,16 @@ def _call_gemini_json(
     model: str = DEFAULT_GEMINI_MODEL,
     max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     temperature: float = 0.1,
+    response_schema: Optional[dict] = None,
+    allow_bare_box: bool = False,
+    _truncation_retry: bool = True,
 ) -> Optional[dict]:
-    """Call Gemini with fallback model chain and parse the returned JSON object."""
+    """Call Gemini with fallback model chain and parse the returned JSON object.
+
+    With ``response_schema`` Gemini is asked for ``application/json`` matching it (REVIEW M3); if a model rejects
+    the schema (HTTP 400) the call is retried once without it. A reply cut off at the token limit is re-asked once
+    with twice the budget instead of being half-parsed.
+    """
     if not api_key:
         log.warning("No Gemini API key provided for vision agent.")
         return None
@@ -574,11 +592,19 @@ def _call_gemini_json(
             "maxOutputTokens": max_tokens,
         },
     }
+    if response_schema:
+        payload["generationConfig"]["responseMimeType"] = "application/json"
+        payload["generationConfig"]["responseSchema"] = response_schema
 
     models_to_try = [model] + [m for m in FALLBACK_GEMINI_MODELS if m != model]
     raw_response_text = ""
+    truncated = False
+    schema_dropped = False
 
-    for attempt_model in models_to_try:
+    i = 0
+    while i < len(models_to_try):
+        attempt_model = models_to_try[i]
+        i += 1
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{attempt_model}:generateContent"
         try:
             resp = requests.post(
@@ -596,8 +622,17 @@ def _call_gemini_json(
                     if not text_chunks:
                         text_chunks = [p.get("text", "") for p in c_parts if "text" in p]
                     raw_response_text = "".join(text_chunks).strip()
+                    truncated = str(candidates[0].get("finishReason", "")).upper() == "MAX_TOKENS"
                     if raw_response_text:
                         break
+            elif resp.status_code == 400 and response_schema and not schema_dropped:
+                # Some models don't support responseSchema: retry this model once without it.
+                log.info("Vision model '%s' rejected the response schema (HTTP 400); retrying without it.", attempt_model)
+                payload["generationConfig"].pop("responseSchema", None)
+                payload["generationConfig"].pop("responseMimeType", None)
+                schema_dropped = True
+                i -= 1
+                continue
             elif resp.status_code in (400, 401, 403):
                 # Fatal auth or client error - fail fast immediately without cycling fallback models
                 log.error("Fatal API error with vision model '%s' (HTTP %s): failing fast without fallback.", attempt_model, resp.status_code)
@@ -627,9 +662,13 @@ def _call_gemini_json(
     if not raw_response_text:
         return None
 
-
-
-    return _parse_json_object(raw_response_text)
+    parsed = _parse_json_object(raw_response_text, allow_bare_box=allow_bare_box)
+    if parsed is None and truncated and _truncation_retry:
+        log.warning("Vision reply was cut off at %d tokens; re-asking once with a larger budget.", max_tokens)
+        return _call_gemini_json(system_prompt, user_prompt, screenshot_b64, api_key, model=model,
+                                 max_tokens=max_tokens * 2, temperature=temperature, response_schema=response_schema,
+                                 allow_bare_box=allow_bare_box, _truncation_retry=False)
+    return parsed
 
 
 def ground_ui_element(
@@ -652,6 +691,8 @@ def ground_ui_element(
         api_key=api_key,
         model=model,
         max_tokens=250,
+        response_schema=GROUNDING_RESPONSE_SCHEMA,
+        allow_bare_box=True,
     )
     if not parsed or not parsed.get("box_2d"):
         log.info("Target '%s' was not detected in screenshot.", target_description)
@@ -668,8 +709,12 @@ def ground_ui_element(
     )
 
 
-def _parse_json_object(text: str) -> Optional[dict]:
-    """Extract and parse a JSON object from model output."""
+def _parse_json_object(text: str, allow_bare_box: bool = False) -> Optional[dict]:
+    """Extract and parse a JSON object from model output.
+
+    ``allow_bare_box`` enables the "first [a, b, c, d] anywhere in the text" fallback. Only grounding uses it: for
+    an action decision it turned random prose into a click (REVIEW M3).
+    """
     cleaned = text.strip()
     # 1. Try markdown codeblock ```json ... ```
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
@@ -694,7 +739,9 @@ def _parse_json_object(text: str) -> Optional[dict]:
             except Exception:
                 pass
 
-    # 3. Fallback for bare box_2d array
+    # 3. Fallback for bare box_2d array (grounding only)
+    if not allow_bare_box:
+        return None
     m_box = re.search(r"\[\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\]", cleaned)
     if m_box:
         return {
@@ -706,7 +753,221 @@ def _parse_json_object(text: str) -> Optional[dict]:
     return None
 
 
-_parse_grounding_json = _parse_json_object
+def _parse_grounding_json(text: str) -> Optional[dict]:
+    """Grounding replies may be a bare [ymin, xmin, ymax, xmax] array."""
+    return _parse_json_object(text, allow_bare_box=True)
+
+
+# ---------------------------------------------------------------------------
+# Strict decision schema (REVIEW M3)
+# ---------------------------------------------------------------------------
+VALID_ACTIONS = frozenset({
+    "focus_window", "click", "double_click", "right_click", "click_and_type", "type_text",
+    "press_key", "hotkey", "scroll", "wait", "done", "fail",
+})
+SELF_CHECK_VALUES = ("initial", "step_succeeded", "goal_confirmed_complete", "last_step_failed_or_missed")
+COORDINATE_ACTIONS = frozenset({"click", "double_click", "right_click", "click_and_type"})
+
+DECISION_RESPONSE_SCHEMA: dict = {
+    "type": "OBJECT",
+    "properties": {
+        "self_check": {"type": "STRING", "enum": list(SELF_CHECK_VALUES)},
+        "self_check_reason": {"type": "STRING"},
+        "thought": {"type": "STRING"},
+        "action": {"type": "STRING", "enum": sorted(VALID_ACTIONS)},
+        "target": {"type": "STRING"},
+        "box_2d": {"type": "ARRAY", "items": {"type": "INTEGER"}, "nullable": True},
+        "text": {"type": "STRING", "nullable": True},
+        "press_enter": {"type": "BOOLEAN"},
+        "select_all_first": {"type": "BOOLEAN"},
+        "key": {"type": "STRING", "nullable": True},
+        "keys": {"type": "ARRAY", "items": {"type": "STRING"}, "nullable": True},
+        "scroll_clicks": {"type": "INTEGER"},
+        "done_after_this": {"type": "BOOLEAN"},
+        "summary": {"type": "STRING"},
+    },
+    "required": ["self_check", "action", "target"],
+}
+GROUNDING_RESPONSE_SCHEMA: dict = {
+    "type": "OBJECT",
+    "properties": {
+        "box_2d": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+        "label": {"type": "STRING"},
+        "confidence": {"type": "NUMBER"},
+    },
+    "required": ["box_2d"],
+}
+
+
+class DecisionSchemaError(ValueError):
+    """The model's decision doesn't fit the action schema; never turn it into input."""
+
+
+def _as_bool(value: Any) -> bool:
+    """Strict boolean: only true / "true" / "1" / "yes" are True. ``bool("false")`` used to be True (REVIEW M3)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return isinstance(value, str) and value.strip().lower() in ("true", "1", "yes")
+
+
+def _as_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and re.fullmatch(r"\s*[+-]?\d+\s*", value):
+        return int(value)
+    return None
+
+
+def step_from_decision(
+    parsed: dict,
+    region_orig_size: Tuple[int, int],
+    region_offset: Tuple[int, int],
+) -> ActionStep:
+    """Validate one model decision and turn it into an ActionStep, or raise DecisionSchemaError."""
+    if not isinstance(parsed, dict):
+        raise DecisionSchemaError("decision is not an object")
+    action_type = str(parsed.get("action") or "").strip().lower()
+    if action_type not in VALID_ACTIONS:
+        raise DecisionSchemaError(f"unknown action {action_type!r}")
+
+    self_check = str(parsed.get("self_check") or "").strip()
+    self_check_reason = str(parsed.get("self_check_reason") or "").strip()
+    thought = str(parsed.get("thought") or "").strip()
+    target = str(parsed.get("target") or parsed.get("summary") or thought or action_type).strip()
+
+    text_val = parsed.get("text")
+    if text_val is not None and not isinstance(text_val, (str, int, float)):
+        raise DecisionSchemaError("'text' must be a string")
+    text_val = str(text_val) if text_val is not None else None
+    press_enter = _as_bool(parsed.get("press_enter", False))
+    select_all_first = _as_bool(parsed.get("select_all_first", False))
+    done_after_this = _as_bool(parsed.get("done_after_this", False))
+
+    key_raw = parsed.get("key")
+    key_val = str(key_raw).strip() if isinstance(key_raw, (str, int)) and str(key_raw).strip() else None
+    keys_raw = parsed.get("keys")
+    keys_val: Optional[List[str]] = None
+    if keys_raw is not None:
+        if not isinstance(keys_raw, list) or not all(isinstance(k, str) for k in keys_raw):
+            raise DecisionSchemaError("'keys' must be a list of strings")
+        keys_val = [k.strip().lower() for k in keys_raw if k.strip()] or None
+
+    scroll_clicks = 0
+    if action_type == "scroll":
+        sc = _as_int(parsed.get("scroll_clicks"))
+        if sc is None:
+            raise DecisionSchemaError("'scroll_clicks' must be an integer")
+        scroll_clicks = sc
+    if action_type == "press_key" and not key_val:
+        raise DecisionSchemaError("press_key needs 'key'")
+    if action_type == "hotkey" and not keys_val:
+        raise DecisionSchemaError("hotkey needs 'keys'")
+    if action_type in ("click_and_type", "type_text") and not text_val and not press_enter:
+        raise DecisionSchemaError(f"{action_type} needs 'text'")
+
+    grounded: Optional[GroundedBox] = None
+    coords: Optional[Tuple[int, int]] = None
+    box_raw = parsed.get("box_2d")
+    if box_raw is not None:
+        nums = [_as_int(v) for v in box_raw] if isinstance(box_raw, list) else []
+        if len(nums) != 4 or any(n is None for n in nums):
+            raise DecisionSchemaError("'box_2d' must be four integers [ymin, xmin, ymax, xmax]")
+        grounded = _box_to_grounded(box=nums, label=target, confidence=0.92,
+                                    region_orig_size=region_orig_size, region_offset=region_offset)
+        if grounded:
+            coords = (grounded.pixel_x, grounded.pixel_y)
+
+    # Wait time tuning: slightly longer after navigation / Enter / app focus / window close
+    wait_s = 0.65
+    if action_type in ("focus_window", "wait") or press_enter or (key_val and key_val.lower() in ("enter", "return", "win")):
+        wait_s = 1.0
+
+    summary_val = str(parsed.get("summary") or "").strip()
+    if action_type in ("done", "fail") and summary_val:
+        target = summary_val
+
+    return ActionStep(
+        action_type=action_type,
+        target=target,
+        thought=thought,
+        text=text_val,
+        press_enter=press_enter,
+        select_all_first=select_all_first,
+        key=key_val,
+        keys=keys_val,
+        scroll_clicks=scroll_clicks,
+        coordinates=coords,
+        grounded_box=grounded,
+        wait_s=wait_s,
+        done_after_this=done_after_this,
+        self_check=self_check,
+        self_check_reason=self_check_reason,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stale-screen check around the target (REVIEW H6)
+# ---------------------------------------------------------------------------
+_PATCH_HALF_W, _PATCH_HALF_H = 120, 80
+
+
+def _grab_patch(bbox: Tuple[int, int, int, int]) -> Optional[Image.Image]:
+    """Grab a small physical-pixel screen region (None if it can't be captured)."""
+    try:
+        with os_interop.ensure_input_desktop():
+            return ImageGrab.grab(bbox=bbox, all_screens=True)
+    except Exception as err:  # noqa: BLE001 - a failed check must not block the step
+        log.debug("Target patch grab failed: %s", err)
+        return None
+
+
+def _patch_change_pct(a: Image.Image, b: Image.Image) -> float:
+    if a.size != b.size:
+        return 100.0
+    hist = ImageChops.difference(a.convert("L"), b.convert("L")).histogram()
+    return sum(hist[15:]) / max(1, sum(hist)) * 100.0
+
+
+def target_region_shifted(
+    observed_img: Optional[Image.Image],
+    offset: Tuple[int, int],
+    coords: Tuple[int, int],
+    threshold_pct: float = TARGET_SHIFT_THRESHOLD_PCT,
+) -> bool:
+    """True if the area around ``coords`` looks different now than in the screenshot the step was decided on.
+
+    A region that keeps changing by itself (video, spinner, typing indicator) is not counted as a shift, otherwise
+    such targets could never be clicked.
+    """
+    if observed_img is None:
+        return False
+    cx, cy = int(coords[0]), int(coords[1])
+    rx, ry = cx - offset[0], cy - offset[1]
+    w, h = observed_img.size
+    if not (0 <= rx < w and 0 <= ry < h):
+        return False   # target isn't on the observed screenshot: nothing to compare
+    x0, y0 = max(0, rx - _PATCH_HALF_W), max(0, ry - _PATCH_HALF_H)
+    x1, y1 = min(w, rx + _PATCH_HALF_W), min(h, ry + _PATCH_HALF_H)
+    if x1 <= x0 + 10 or y1 <= y0 + 10:
+        return False
+    bbox = (x0 + offset[0], y0 + offset[1], x1 + offset[0], y1 + offset[1])
+    now = _grab_patch(bbox)
+    if now is None:
+        return False
+    before = observed_img.crop((x0, y0, x1, y1))
+    if _patch_change_pct(before, now) <= threshold_pct:
+        return False
+    time.sleep(0.15)
+    again = _grab_patch(bbox)
+    if again is not None and _patch_change_pct(now, again) > threshold_pct / 2:
+        return False   # the region animates on its own: not a layout shift
+    return True
 
 
 
@@ -820,6 +1081,69 @@ Respond ONLY with a single valid JSON object:
 ```"""
 
 
+# (regex, app label) checked in order; whole words only (REVIEW M4)
+_APP_INFERENCE_RULES: Tuple[Tuple[str, str], ...] = (
+    (r"\b(?:vs\s?code|visual studio code)\b", "Visual Studio Code"),
+    (r"\b(?:youtube music|music yt|yt music)\b", "Chrome"),
+    (r"\b(?:chrome|claude|chatgpt|youtube|gmail)\b", "Chrome"),
+    (r"\bgithub\b(?!\s+desktop)", "Chrome"),
+    (r"\bwhatsapp\b", "WhatsApp"),
+    (r"\bspotify\b", "Spotify"),
+    (r"\bdiscord\b", "Discord"),
+    (r"\b(?:ms\s+|microsoft\s+)?word\b(?!\s*(?:count|for\s+word|by\s+word))|\.docx?\b", "Word"),
+    (r"\b(?:ms\s+|microsoft\s+)?excel\b|\.xlsx?\b", "Excel"),
+    (r"(?<!internet )\b(?:file\s+)?explorer\b", "File Explorer"),
+)
+
+
+def infer_target_app(text: str) -> str:
+    """Guess the app a request is about, by whole words ("password" is not Word). "" if unsure."""
+    t = (text or "").lower()
+    for pattern, label in _APP_INFERENCE_RULES:
+        if re.search(pattern, t):
+            return label
+    return ""
+
+
+_QUESTION_START = re.compile(
+    r"^\s*(?:hey\s+pink[,!]?\s+)?(?:did|does|do|has|have|is|are|was|were|what|who|whom|whose|when|where|why|how|which|any)\b",
+    re.IGNORECASE,
+)
+_READ_ONLY_START = re.compile(
+    r"^\s*(?:read|check|look\s+at|see|show\s+me|tell\s+me\s+(?:what|if|whether|who|when)|find\s+out)\b", re.IGNORECASE
+)
+_PAYLOAD_PATTERNS: Tuple[re.Pattern, ...] = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"\b(?:saying|that\s+says|which\s+says|with\s+(?:the\s+)?(?:message|text|words?))\s*[:\-]?\s*(.+)",
+    r"\b(?:reply|send|message|text|tell|dm|post|type|write)\b[^:\n]{0,60}:\s*(.+)",
+    r"\b(?:type|write|paste|enter)\s+(?!(?:a\s+)?(?:reply|message|response|something)\b)(.+?)"
+    r"(?:\s+(?:in|into|on)\s+(?:the\s+|my\s+)?[\w .\-]+)?$",
+    r"\b(?:tell|ask|prompt|message|remind)\s+(?:[\w.'\-]+\s+){0,3}?(?:to|that|if|whether|about|for)\s+(.+)",
+    r"\b(?:prompt|ask|message|answer|reply(?:\s+to)?)\s+(?:[\w.'\-]+\s+){0,3}?with\s+(.+)",
+    r"\b(?:run|execute)\s+(?:the\s+)?(?:command|script|terminal)\s*[:\-]?\s*(.+)",
+    r"\b(?:run|execute)\s+((?:git|npm|pip|python|py|node|dir|ls|cd)\b.*)",
+))
+
+
+def extract_message_payload(text: str) -> str:
+    """The explicit text a request wants typed or sent ("" for questions and payload-less requests) (REVIEW M4).
+
+    "reply to Mom saying on my way" -> "on my way"; "did Mom reply?" -> ""; "read messages from Sarah" -> "".
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    quoted = re.search(r"[\"“](.+?)[\"”]|(?:^|\s)['‘]([^'’]+)['’](?=\s|$|[.,!?])", t)
+    if quoted:
+        return (quoted.group(1) or quoted.group(2) or "").strip()
+    if _QUESTION_START.match(t) or _READ_ONLY_START.match(t):
+        return ""
+    for pat in _PAYLOAD_PATTERNS:
+        m = pat.search(t)
+        if m and m.group(1).strip(" .!?"):
+            return m.group(1).strip()
+    return ""
+
+
 def create_desktop_plan(
     intent: str,
     api_key: Optional[str] = None,
@@ -831,33 +1155,12 @@ def create_desktop_plan(
     clean_intent = intent.strip()
     clean_app = target_app.strip()
 
-    # Infer target app from intent/user_request if not explicitly provided
+    # Infer target app from intent/user_request if not explicitly provided. Whole words only: plain substrings
+    # turned "password"/"keyword" into Word, "excellent" into Excel and "internet explorer" into File Explorer
+    # (REVIEW M4). The model can still call focus_window itself when this finds nothing.
     combined = f"{user_request} {clean_intent}".lower()
     if not clean_app or clean_app.lower() in ("desktop", "screen", "active window", "window"):
-        for app_kw, label in (
-            ("vscode", "Visual Studio Code"),
-            ("vs code", "Visual Studio Code"),
-            ("visual studio code", "Visual Studio Code"),
-            ("chrome", "Chrome"),
-            ("claude", "Chrome"),
-            ("chatgpt", "Chrome"),
-            ("youtube music", "Chrome"),
-            ("music yt", "Chrome"),
-            ("yt music", "Chrome"),
-            ("youtube", "Chrome"),
-            ("github", "Chrome"),
-            ("gmail", "Chrome"),
-            ("whatsapp", "WhatsApp"),
-            ("spotify", "Spotify"),
-            ("discord", "Discord"),
-            ("word", "Word"),
-            ("docx", "Word"),
-            ("excel", "Excel"),
-            ("explorer", "File Explorer"),
-        ):
-            if app_kw in combined:
-                clean_app = label
-                break
+        clean_app = infer_target_app(combined) or clean_app
 
     return DesktopPlan(
         intent=clean_intent or user_request.strip(),
@@ -866,6 +1169,7 @@ def create_desktop_plan(
         context_notes=context_notes.strip(),
         steps=[],
         max_steps=MAX_VISION_STEPS,
+        message_text=extract_message_payload(user_request) or extract_message_payload(clean_intent),
     )
 
 
@@ -909,6 +1213,11 @@ def _refocus_after_confirmation(win: Optional["os_interop.WindowInfo"]) -> None:
     Answering the prompt makes Pink's own bubble the foreground window; without this, the approved
     keystrokes land in the bubble or the typing focus guard aborts the plan (REVIEW H2, partial).
     """
+    # Moving the mouse to answer the bubble must not count as "user pulled the mouse away" (REVIEW H2).
+    try:
+        os_interop.reanchor_automated_cursor()
+    except Exception:  # noqa: BLE001
+        pass
     if win is None or win.process_id == os.getpid():
         return
     try:
@@ -916,6 +1225,11 @@ def _refocus_after_confirmation(win: Optional["os_interop.WindowInfo"]) -> None:
         time.sleep(0.15)
     except Exception as err:  # noqa: BLE001 - best effort; the typing guard still protects us
         log.debug("Could not refocus %s after confirmation: %s", win.title, err)
+
+
+def _pink_has_focus() -> bool:
+    fg = os_interop.get_foreground_window()
+    return fg is not None and fg.process_id == os.getpid()
 
 
 def step_outcome_status(outcome_desc: str) -> str:
@@ -1005,33 +1319,12 @@ class DesktopActionExecutor:
 
     @staticmethod
     def _requires_text_submission(goal_text: str, intent_text: str = "") -> bool:
-        """Return True if the goal explicitly asks to send, reply, post, or type text/commands.
+        """True only if the goal carries an explicit message/command to type (REVIEW M4).
 
-        Excludes read-only queries (e.g. 'what did Mom's message say', 'read messages').
+        Questions ("did Mom reply?") and requests without a payload ("reply to Mom") are not text submissions,
+        so the premature-done guard never pushes the model to type into a chat for a read-only goal.
         """
-        combined = f"{goal_text} {intent_text}".strip().lower()
-
-        # Explicitly exclude read-only question formulations
-        read_only_starters = (
-            "what does", "what did", "what is", "read ", "check what",
-            "show me what", "see what", "look at", "tell me what", "check message",
-        )
-        if any(combined.startswith(ro) for ro in read_only_starters):
-            return False
-
-        # Exclude noun usages of "type" (e.g. "type of file", "what type", "file type")
-        clean_for_type = re.sub(r"\b(?:what\s+type|which\s+type|type\s+of|file\s+type|mime\s+type)\b", "", combined)
-
-        # Match explicit action verbs for text entry using word boundaries
-        send_verbs = r"\b(?:reply|replies|saying|send|sends|type|types|typing|write|writes|dm|post|paste|tell|ask|prompt)\b"
-        if bool(re.search(send_verbs, clean_for_type)):
-            return True
-
-        # Explicit terminal command execution
-        if bool(re.search(r"\b(?:run|execute)\s+(?:command|script|terminal|git)\b", combined)):
-            return True
-
-        return False
+        return bool(extract_message_payload(goal_text) or extract_message_payload(intent_text))
 
     @staticmethod
     def _is_sensitive_action(step: ActionStep, fg_title: str = "", fg_proc: str = "") -> bool:
@@ -1100,7 +1393,7 @@ class DesktopActionExecutor:
         os_interop.reset_panic_abort()
         goal_text = plan.user_request or plan.intent
         goal_lower = f"{plan.user_request} {plan.intent}".strip().lower()
-        needs_text_submission = self._requires_text_submission(plan.user_request, plan.intent)
+        needs_text_submission = bool(plan.message_text) or self._requires_text_submission(plan.user_request, plan.intent)
         is_close_goal = self._is_close_or_save_goal(plan.user_request, plan.intent)
         log.info(
             "Starting Closed-Loop Vision Cursor Agent: goal='%s', intent='%s', app_hint='%s'",
@@ -1138,7 +1431,11 @@ class DesktopActionExecutor:
                         focused_existing_app = True
                         time.sleep(0.45)
 
-                if focused_existing_app and self._is_simple_open_goal(goal_text):
+                if (
+                    focused_existing_app
+                    and self._is_simple_open_goal(goal_text)
+                    and os_interop.window_matches_app(os_interop.get_foreground_window(), plan.target_app)
+                ):
                     plan.is_finished = True
                     plan.success = True
                     plan.summary_message = f"Opened and focused {plan.target_app}."
@@ -1188,12 +1485,14 @@ class DesktopActionExecutor:
                 curr_raw_img = _LAST_RAW_SCREENSHOT
                 if not b64_img:
                     raise RuntimeError("Failed to capture desktop screenshot for vision agent.")
+                observed_at = time.monotonic()
 
                 if self._is_aborted or os_interop.is_panic_key_pressed():
                     raise os_interop.EmergencyAbortError("Plan aborted by user (ESC or mouse pull).")
 
                 # Build Self-Verification Report comparing screenshot BEFORE and AFTER the previous action
                 fg_now = os_interop.get_foreground_window()
+                observed_hwnd = fg_now.hwnd if fg_now else None
                 curr_fg_title = f"{fg_now.title} [{fg_now.process_name}]" if fg_now else ""
                 visual_check_report = ""
                 if step_idx > 0 and prev_raw_img is not None and curr_raw_img is not None:
@@ -1351,6 +1650,17 @@ class DesktopActionExecutor:
                         )
                         continue
 
+                # Stale-step guard (REVIEW H6): the decision was made from a screenshot taken seconds ago. Never act
+                # on it if it took too long, the focused window changed, or the target area moved meanwhile.
+                stale_reason = self._stale_step_reason(step, observed_at, observed_hwnd, curr_raw_img, offset)
+                if stale_reason:
+                    log.warning("Skipping step %d (%s on '%s'): %s", step_idx + 1, step.action_type, step.target, stale_reason)
+                    history_lines.append(
+                        f"Step {step_idx + 1}: [SKIPPED, NOT EXECUTED] {stale_reason}; re-observing the screen before acting."
+                    )
+                    prev_step_was_terminal_candidate = False
+                    continue
+
                 plan.steps.append(step)
                 prev_raw_img = curr_raw_img
                 prev_fg_title = curr_fg_title
@@ -1429,8 +1739,12 @@ class DesktopActionExecutor:
                     + f" -> {outcome_desc}"
                 )
 
-                # Simple open goal ("open whatsapp") is already verified by OS window focus
-                if step.action_type == "focus_window" and self._is_simple_open_goal(goal_text):
+                # Simple open goal ("open whatsapp"): done only if the focused window really is that app (REVIEW H5)
+                if (
+                    step.action_type == "focus_window"
+                    and self._is_simple_open_goal(goal_text)
+                    and os_interop.window_matches_app(os_interop.get_foreground_window(), step.target)
+                ):
                     plan.is_finished = True
                     plan.success = True
                     plan.outcome_state = "success"
@@ -1478,6 +1792,29 @@ class DesktopActionExecutor:
             plan.outcome_state = "failed"
             plan.summary_message = f"Error: {err}"
             return False
+
+    @staticmethod
+    def _stale_step_reason(
+        step: ActionStep,
+        observed_at: float,
+        observed_hwnd: Optional[int],
+        observed_img: Optional[Image.Image],
+        offset: Tuple[int, int],
+    ) -> str:
+        """Why ``step`` must not run on the screen as it is now ("" if it may run) (REVIEW H6)."""
+        if step.action_type not in INPUT_ACTIONS:
+            return ""
+        age = time.monotonic() - observed_at
+        if age > STEP_DECISION_BUDGET_S:
+            return f"the decision took {age:.0f}s, so the screenshot is stale"
+        if observed_hwnd is not None:
+            fg = os_interop.get_foreground_window()
+            if fg is None or fg.hwnd != observed_hwnd:
+                now = f"'{fg.title}' [{fg.process_name}]" if fg else "nothing"
+                return f"the focused window changed to {now} while deciding"
+        if step.coordinates is not None and target_region_shifted(observed_img, offset, step.coordinates):
+            return "the screen around the target changed while deciding"
+        return ""
 
     def _decide_next_step(
         self,
@@ -1531,93 +1868,41 @@ class DesktopActionExecutor:
             "Respond ONLY with the JSON object."
         )
 
-        parsed = _call_gemini_json(
-            system_prompt=VISION_AGENT_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            screenshot_b64=screenshot_b64,
-            api_key=self.api_key,
-            model=DEFAULT_GEMINI_MODEL,
-            max_tokens=500,
-            temperature=0.1,
-        )
-
-        if not parsed:
-            return ActionStep(
-                action_type="fail",
-                target="Vision model did not return a valid action.",
-                thought="Failed to parse response from Gemini.",
+        problem = ""
+        for attempt in range(2):   # one re-ask on a schema violation (REVIEW M3)
+            prompt = user_prompt if not problem else (
+                f"{user_prompt}\n\nYOUR PREVIOUS REPLY WAS INVALID ({problem}). Reply again with ONE valid JSON object.")
+            parsed = _call_gemini_json(
+                system_prompt=VISION_AGENT_SYSTEM_PROMPT,
+                user_prompt=prompt,
+                screenshot_b64=screenshot_b64,
+                api_key=self.api_key,
+                model=DEFAULT_GEMINI_MODEL,
+                max_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+                temperature=0.1,
+                response_schema=DECISION_RESPONSE_SCHEMA,
             )
-
-        self_check = str(parsed.get("self_check") or "").strip()
-        self_check_reason = str(parsed.get("self_check_reason") or "").strip()
-        action_type = str(parsed.get("action") or "").strip().lower()
-        thought = str(parsed.get("thought") or "").strip()
-        target = str(parsed.get("target") or parsed.get("summary") or thought or action_type).strip()
-        text_val = parsed.get("text")
-        if text_val is not None:
-            text_val = str(text_val)
-        press_enter = bool(parsed.get("press_enter", False))
-        select_all_first = bool(parsed.get("select_all_first", False))
-        key_val = str(parsed.get("key")).strip() if parsed.get("key") else None
-
-        keys_raw = parsed.get("keys")
-        keys_val: Optional[List[str]] = None
-        if isinstance(keys_raw, list):
-            keys_val = [str(k).strip().lower() for k in keys_raw if str(k).strip()]
-
-        scroll_clicks = 0
-        try:
-            if parsed.get("scroll_clicks") is not None:
-                scroll_clicks = int(parsed.get("scroll_clicks"))
-        except Exception:
-            scroll_clicks = -5
-
-        grounded: Optional[GroundedBox] = None
-        coords: Optional[Tuple[int, int]] = None
-        box_raw = parsed.get("box_2d")
-        if isinstance(box_raw, list) and len(box_raw) == 4:
-            grounded = _box_to_grounded(
-                box=box_raw,
-                label=target,
-                confidence=0.92,
-                region_orig_size=region_orig_size,
-                region_offset=region_offset,
+            if not parsed:
+                problem = "not a JSON object"
+                continue
+            try:
+                step = step_from_decision(parsed, region_orig_size, region_offset)
+            except DecisionSchemaError as err:
+                problem = str(err)
+                log.warning("Vision step %d decision rejected (attempt %d): %s", step_idx + 1, attempt + 1, err)
+                continue
+            log.info(
+                "Vision Step %d Decision [self_check=%s]: action=%s, target='%s', coords=%s, text=%r, keys=%s "
+                "(reason: %s | thought: %s)",
+                step_idx + 1, step.self_check, step.action_type, step.target, step.coordinates, step.text, step.keys,
+                step.self_check_reason, step.thought,
             )
-            if grounded:
-                coords = (grounded.pixel_x, grounded.pixel_y)
-
-        # Wait time tuning: slightly longer after navigation / Enter / app focus / window close
-        wait_s = 0.65
-        if action_type in ("focus_window", "wait") or press_enter or (key_val and key_val.lower() in ("enter", "return", "win")):
-            wait_s = 1.0
-
-        summary_val = str(parsed.get("summary") or "").strip()
-        if action_type in ("done", "fail") and summary_val:
-            target = summary_val
-
-        done_after_this = bool(parsed.get("done_after_this", False))
-
-        log.info(
-            "Vision Step %d Decision [self_check=%s]: action=%s, target='%s', coords=%s, text=%r, keys=%s (reason: %s | thought: %s)",
-            step_idx + 1, self_check, action_type, target, coords, text_val, keys_val, self_check_reason, thought,
-        )
+            return step
 
         return ActionStep(
-            action_type=action_type,
-            target=target,
-            thought=thought,
-            text=text_val,
-            press_enter=press_enter,
-            select_all_first=select_all_first,
-            key=key_val,
-            keys=keys_val,
-            scroll_clicks=scroll_clicks,
-            coordinates=coords,
-            grounded_box=grounded,
-            wait_s=wait_s,
-            done_after_this=done_after_this,
-            self_check=self_check,
-            self_check_reason=self_check_reason,
+            action_type="fail",
+            target=f"Vision model did not return a valid action ({problem}).",
+            thought="Failed to parse response from Gemini.",
         )
 
     def _execute_step(
@@ -1716,9 +2001,11 @@ class DesktopActionExecutor:
                 time.sleep(0.18)
                 # The click may have focused a different app than the one we judged above (e.g. a terminal pane).
                 # Re-judge against the window that will actually receive the keystrokes (REVIEW C2).
+                # Keystrokes go to whatever has focus AFTER the click; never to Pink's own bubble/chat (REVIEW H2).
                 fg_after = os_interop.get_foreground_window()
-                if fg_after is not None:
-                    curr_fg = fg_after
+                if fg_after is None or fg_after.process_id == os.getpid():
+                    return f"FAILED: '{step.target}' did not take keyboard focus after the click"
+                curr_fg = fg_after
                 if not confirmed and curr_fg is not None and self._is_sensitive_action(
                     step, fg_title=curr_fg.title, fg_proc=curr_fg.process_name
                 ):
@@ -1762,6 +2049,11 @@ class DesktopActionExecutor:
 
             return f"Clicked '{step.target}' at ({cx}, {cy})"
 
+        if a_type in ("type_text", "press_key", "hotkey") and not step.coordinates and _pink_has_focus():
+            keys = {_norm_key(k) for k in (step.keys or ())}
+            if not (a_type == "hotkey" and ("win" in keys or keys == {"alt", "tab"})):
+                return "FAILED: Pink's own window has keyboard focus, so nothing was typed or pressed"
+
         if a_type == "type_text":
             curr_fg = os_interop.get_foreground_window()
             if curr_fg:
@@ -1778,6 +2070,10 @@ class DesktopActionExecutor:
                 os_interop.smooth_move_mouse(cx, cy, duration_s=0.28)
                 os_interop.click_mouse(cx, cy, button="left", clicks=1)
                 time.sleep(0.15)
+                fg_after = os_interop.get_foreground_window()
+                if fg_after is None or fg_after.process_id == os.getpid():
+                    return f"FAILED: '{step.target}' did not take keyboard focus after the click"
+                curr_fg = fg_after
 
             if step.select_all_first and not step.coordinates:
                 # Never send a blind Ctrl+A + Backspace to whatever has focus (REVIEW H8).
@@ -1847,60 +2143,93 @@ class DesktopActionExecutor:
 # ---------------------------------------------------------------------------
 
 def extract_desktop_action_tags(text: str) -> List[Dict[str, str]]:
-    """Parse structured action tags emitted by Pink's dialogue.
+    """Parse structured action tags emitted by Pink's dialogue, in the order they appear in the text.
 
-    Supported formats:
-    - [desktop_action: WhatsApp, reply to Mom saying on my way]
-    - [quick_reply: WhatsApp, Mom, on my way]
-    - [click_ui: send button]
-    - [type_input: hello world]
+    Documented format: ``[desktop_action: <app>, <instruction>]``. The legacy ``[quick_reply: app, contact, msg]``,
+    ``[click_ui: target]`` and ``[type_input: text]`` are still recognised so they get stripped and merged, never
+    shown, but the prompt no longer advertises them (REVIEW M7). Use ``merge_desktop_actions`` to get the ONE action
+    to run.
     """
-    actions: List[Dict[str, str]] = []
+    found: List[Tuple[int, Dict[str, str]]] = []
 
     # [desktop_action: <app>, <instruction>]
     for m in re.finditer(r"\[desktop_action:\s*([^,\]]+)(?:,\s*([^\]]+))?\]", text, re.IGNORECASE):
         app = m.group(1).strip()
         intent = m.group(2).strip() if m.group(2) else ""
-        actions.append({
+        found.append((m.start(), {
             "type": "desktop_action",
             "app": app if intent else "Desktop",
             "intent": intent or app,
-        })
+        }))
 
     # [quick_reply: <app>, <contact>, <message>]
     for m in re.finditer(r"\[quick_reply:\s*([^,\]]+),\s*([^,\]]+),\s*([^\]]+)\]", text, re.IGNORECASE):
         app = m.group(1).strip()
         contact = m.group(2).strip()
         msg = m.group(3).strip()
-        actions.append({
+        found.append((m.start(), {
             "type": "quick_reply",
             "app": app,
             "contact": contact,
             "message": msg,
             "intent": f"Reply to {contact} on {app} saying \"{msg}\"",
-        })
+        }))
 
     # [click_ui: <target>]
     for m in re.finditer(r"\[(?:click_ui|click_target|click):\s*([^\]]+)\]", text, re.IGNORECASE):
         target = m.group(1).strip()
-        actions.append({
+        found.append((m.start(), {
             "type": "click_ui",
             "app": "Active Window",
             "target": target,
             "intent": f"Click '{target}'",
-        })
+        }))
 
     # [type_input: <text>]
     for m in re.finditer(r"\[(?:type_input|type_text):\s*([^\]]+)\]", text, re.IGNORECASE):
         inp_text = m.group(1).strip()
-        actions.append({
+        found.append((m.start(), {
             "type": "type_input",
             "app": "Active Window",
             "text": inp_text,
             "intent": f"Type '{inp_text}'",
-        })
+        }))
 
-    return actions
+    found.sort(key=lambda item: item[0])
+    return [action for _pos, action in found]
+
+
+_GENERIC_APPS = ("", "desktop", "active window", "screen", "window")
+
+
+def merge_desktop_actions(actions: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """Merge every parsed tag into ONE desktop_action covering the whole goal, in text order (REVIEW M7).
+
+    Before, only the first tag ran while Pink claimed she did everything ("open Spotify and reply to Mom").
+    """
+    if not actions:
+        return None
+    if len(actions) == 1:
+        return dict(actions[0])
+    apps = []
+    for a in actions:
+        app = (a.get("app") or "").strip()
+        if app.lower() not in _GENERIC_APPS and app.lower() not in [x.lower() for x in apps]:
+            apps.append(app)
+    parts = []
+    for a in actions:
+        intent = (a.get("intent") or a.get("target") or a.get("text") or "").strip()
+        app = (a.get("app") or "").strip()
+        if len(apps) > 1 and app.lower() not in _GENERIC_APPS and app.lower() not in intent.lower():
+            intent = f"{intent} (in {app})"
+        if intent:
+            parts.append(intent)
+    return {
+        "type": "desktop_action",
+        "app": apps[0] if len(apps) == 1 else "Desktop",
+        "intent": ", then ".join(parts),
+        "merged_from": str(len(actions)),
+    }
 
 
 def strip_desktop_action_tags(text: str) -> str:
