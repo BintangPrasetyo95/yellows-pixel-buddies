@@ -156,6 +156,7 @@ from sound_manager import get_sound_manager, play_sound
 import os_interop
 import action_planner
 import privacy
+import takeover_controller
 import takeover_gate
 import update_security
 import takeover_overlay
@@ -2594,43 +2595,10 @@ def any_mouse_button_down() -> bool:
 def set_window_input_transparent(widget: QWidget, enabled: bool) -> bool:
     """Make the mouse pass straight through `widget` (True) or catch it again (False).
 
-    Toggling WS_EX_TRANSPARENT on a layered window changes only the hit-testing ("treat me as not there"),
-    so the picture and the normal per-frame mask stay exactly as they are.
-
-    Returns True when the request took effect, False if it could not be done.
+    One implementation lives in os_interop (REVIEW L5). Pink's own window keeps its activation behaviour and
+    layering (noactivate/layered off): only the hit-testing changes, the picture and per-frame mask stay as they are.
     """
-    dll = _user32()
-    if dll is None:
-        return False
-    try:
-        import ctypes
-        get_style = getattr(dll, "GetWindowLongPtrW", None) or dll.GetWindowLongW   # 32-bit Python fallback
-        set_style = getattr(dll, "SetWindowLongPtrW", None) or dll.SetWindowLongW
-        get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        get_style.restype = ctypes.c_ssize_t
-        set_style.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
-        set_style.restype = ctypes.c_ssize_t
-
-        hwnd = int(widget.winId())
-        style = get_style(hwnd, GWL_EXSTYLE)
-        if style == 0:                  # a Qt tool window always has style bits: 0 = the call failed
-            return False
-        wanted = (style | WS_EX_TRANSPARENT) if enabled else (style & ~WS_EX_TRANSPARENT)
-        if wanted != style:
-            set_style(hwnd, GWL_EXSTYLE, wanted)
-            # Reassert topmost z-order and notify Windows DWM of the style frame change
-            SWP_FRAMECHANGED = 0x0020
-            SWP_NOMOVE = 0x0002
-            SWP_NOSIZE = 0x0001
-            SWP_NOACTIVATE = 0x0010
-            HWND_TOPMOST = -1
-            dll.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-        return (not enabled) or bool(wanted & WS_EX_LAYERED)
-    except Exception as exc:
-        log.warning("Could not change the window's click-through style (%s)", exc)
-        return False
-
+    return os_interop.set_window_input_transparent(widget, enabled, noactivate=False, layered=False)
 
 def ensure_window_topmost(widget: QWidget | None) -> None:
     """Ensure widget stays at the very top of the window z-order index (HWND_TOPMOST)."""
@@ -11422,6 +11390,9 @@ class YellowsPixelBuddies(QWidget):
         # Qt.WindowDoesNotAcceptFocus -> clicking the pet won't steal focus from your app
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
+        self._takeover = takeover_controller.TakeoverController(
+            self, abort_reaction=SHAKEN_REACTION, stall_timeout_s=TAKEOVER_STALL_TIMEOUT_S)
+        self._takeover_prev_state = takeover_controller.TakeoverState.IDLE
         self.setAttribute(Qt.WA_TranslucentBackground, True)   # per-pixel transparency
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)   # don't grab focus when shown
         self._scale_modifier: float = DEFAULT_SCALE_MODIFIER
@@ -11474,20 +11445,14 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_font_family"):
             self._takeover_banner.set_font_family(self._font_family)
         self._target_reticle = takeover_overlay.TargetReticleOverlay()
-        self._desktop_action_worker: action_planner.DesktopActionWorkerThread | None = None
-        # Takeover state is declared here (not via getattr defaults) so typos fail loudly (REVIEW M8/H4).
+        # The ONE owner of takeover state (REVIEW M8): worker, confirmation, voice HUD, teardown.
         self._takeover_mode: str = takeover_gate.DEFAULT_TAKEOVER_MODE
-        self._is_taking_over_cursor: bool = False
+        self._takeover.state_changed.connect(self._on_takeover_state_changed)
+        self._takeover.pink_action.connect(self._on_takeover_pink_action)
         self._autonomous_vision_enabled: bool = False   # Pink may screenshot on her own (REVIEW H12)
         self._tray_vision_enabled: bool = False         # ...even while hidden in the tray
         self._last_screen_capture: tuple[datetime.datetime, str] | None = None   # shown in the tray tooltip
-        self._confirm_pending: bool = False
-        self._confirm_token: int = 0
-        self._confirm_text_viewer: QDialog | None = None     # "Show all" view of a long confirmation payload
-        self._voice_hud_hidden_for_takeover: bool = False   # Voice HUD hidden while a takeover runs (REVIEW M5)
         self._sequence_area_rect: QRect | None = None   # monitor captured for hide/exit/summon sequences (REVIEW L7)
-        self._takeover_last_progress: float = 0.0
-        self._voice_was_visible_before_takeover: bool = False
         self._voice_manager: voice_service.VoiceManager | None = None
         self._voice_overlay: takeover_overlay.VoiceModeOverlay | None = None
         self._voice_mode_enabled: bool = False
@@ -13336,7 +13301,7 @@ RULES:
         """A question that arrives late must not pop over chat, a choice or a takeover (REVIEW M2)."""
         if token is not None and token != self._question_token:
             return False   # superseded: chat opened or a takeover started after it was requested
-        if self._is_taking_over_cursor or self._is_user_chat_or_choice_active():
+        if self._takeover.is_active or self._is_user_chat_or_choice_active():
             return False
         ov = getattr(self, "_dialogue_overlay", None)
         return not (ov is not None and ov.has_pending_fixed_decision())
@@ -13355,7 +13320,7 @@ RULES:
 
     def _on_ai_question_ready(self, q_item: QuestionItem, source_type: str, token: int | None = None) -> None:
         """Display AI-generated interactive question dialogue with choices."""
-        if token is not None and token != self._question_token or self._is_taking_over_cursor:
+        if token is not None and token != self._question_token or self._takeover.is_active:
             self._abandon_question_loader()
             return
         if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
@@ -13483,7 +13448,7 @@ RULES:
 
     def _apply_dialogue_step(self, anim: str | None = None, is_ghost: bool = False) -> None:
         """Apply visual animation and ghost mode state for the active dialogue step."""
-        if getattr(self, "_is_taking_over_cursor", False):
+        if self._takeover.is_active:
             return
         if is_ghost:
             self._start_ghost_speech()
@@ -14877,145 +14842,35 @@ RULES:
                 "so say you're ready to take over once they confirm rather than claiming it's already done.")
 
     # ------------------------------------------------------------- desktop takeover (Pink Takeover)
-    # Phases in which Pink cannot host a takeover; worker signals arriving then are ignored (REVIEW H9).
-    _NO_TAKEOVER_PHASES = ("EXIT_OUTRO", "HIDE_OUTRO", "HIDE_PEEK")
-
     def execute_desktop_action(self, action_data: dict, user_request: str = "") -> bool:
-        """Execute a closed-loop vision cursor takeover in a background thread with Pink animations and visual HUD.
+        """Start a desktop takeover. The TakeoverController owns the whole session (REVIEW M8)."""
+        return self._takeover.start(action_data, user_request)
 
-        Returns True only if a takeover actually started, so callers announce it only then (REVIEW L3).
-        """
-        if self._takeover_mode == takeover_gate.TAKEOVER_MODE_OFF:
-            log.info("Desktop takeover refused: Desktop Cursor Control is turned off.")
-            return False
-        if self._desktop_action_worker is not None and self._desktop_action_worker.isRunning():
-            log.warning("Another desktop action plan is already running.")
-            return False
-        if self._phase.name in self._NO_TAKEOVER_PHASES:
-            log.warning("Desktop takeover refused during %s.", self._phase.name)
-            return False
+    def _on_takeover_state_changed(self, state: "takeover_controller.TakeoverState") -> None:
+        """Pink's body follows the takeover: latch onto the cursor when it starts, let go when it ends (plan 5.1)."""
+        prev, self._takeover_prev_state = self._takeover_prev_state, state
+        TS = takeover_controller.TakeoverState
+        if state is TS.RUNNING and prev is TS.IDLE:
+            self._brain_timer.stop()
+            self._begin_hang(time.perf_counter())
+        elif state is TS.IDLE and prev is not TS.IDLE:
+            reaction = self._takeover.last_reaction
+            if reaction and self._phase is Phase.HANG:
+                self._fall_after_jump(reaction)
 
-        api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
-        intent = (
-            action_data.get("intent")
-            or action_data.get("target")
-            or action_data.get("text")
-            or action_data.get("app")
-            or user_request
-            or ""
-        )
-        target_app = action_data.get("app") or ""
-        if not intent and not user_request:
-            return False
-
-        # Build recent conversation context so references like 'say the same thing I said to Arqan' work seamlessly
-        recent_ctx = ""
-        if hasattr(self, "_memory") and hasattr(self._memory, "history"):
-            try:
-                recent_turns = list(self._memory.history)[-5:]
-                ctx_lines = [
-                    f"- User: {t.get('user', '')[:140]} | Pink: {t.get('pink', '')[:140]}"
-                    for t in recent_turns
-                    if isinstance(t, dict) and t.get("user")
-                ]
-                recent_ctx = "\n".join(ctx_lines)
-            except Exception:
-                recent_ctx = ""
-
-        plan = action_planner.create_desktop_plan(
-            intent=intent,
-            api_key=api_key,
-            target_app=target_app,
-            user_request=user_request or intent,
-            context_notes=recent_ctx,
-        )
-        max_steps = plan.max_steps
-        os_interop.reset_panic_abort()
-        worker = action_planner.DesktopActionWorkerThread(plan, api_key=api_key, parent=self)
-        self._desktop_action_worker = worker
-
-        # Exclude Pink and her speech bubble from screenshots so she never blocks Gemini's vision
-        os_interop.set_window_exclude_from_capture(self, True)
-        if hasattr(self, "_dialogue_overlay"):
-            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, True)
-        if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
-            os_interop.set_window_exclude_from_capture(self._voice_overlay, True)
-
-        # The Voice HUD sits over browser tab strips and address bars: hide it (voice mode stays on) so Gemini's
-        # clicks can't land on it. It comes back for confirmations (voice yes/no) and when the takeover ends (REVIEW M5).
-        vo = getattr(self, "_voice_overlay", None)
-        self._voice_hud_hidden_for_takeover = bool(vo is not None and vo.isVisible())
-        if self._voice_hud_hidden_for_takeover:
-            vo.hide()
-        self._question_token += 1   # no question may pop up mid-takeover (REVIEW M2)
-
-        # Latch Pink onto the mouse cursor so she physically rides and steers it across the screen!
-        self._is_taking_over_cursor = True
-        self._confirm_pending = False
-        self._confirm_token = 0
-        self._takeover_last_progress = time.perf_counter()
-        self._brain_timer.stop()
-        self._begin_hang(time.perf_counter())
-
-        # Display Takeover HUD banner
-        if hasattr(self, "_takeover_banner"):
-            target_display = plan.target_app.upper() if plan.target_app else "DESKTOP"
-            self._takeover_banner.show_banner(
-                title=f"⚔️ PINK IN CONTROL — {target_display} (ESC OR SHAKE MOUSE TO ABORT)",
-                subtitle=f"Inspecting screen for: {(user_request or intent)[:55]}...",
-            )
-
-        def _on_step_start(idx: int, a_type: str, target: str) -> None:
-            if not self._is_taking_over_cursor:
-                return
-            self._takeover_last_progress = time.perf_counter()
-            log.info("Desktop Action Step %d/%d: %s on '%s'", idx + 1, max_steps, a_type, target)
-            if hasattr(self, "_takeover_banner"):
-                self._takeover_banner.update_step(idx, max_steps, a_type, target)
-
-        def _on_pink_act(anim: str, cx: int, cy: int) -> None:
-            if not self._is_taking_over_cursor or self._phase.name in self._NO_TAKEOVER_PHASES:
-                return
-            self._takeover_last_progress = time.perf_counter()
-            if anim in ("move_to", "jump_to") and cx > 0 and cy > 0:
-                # Flash retro target reticle at coordinates right before cursor moves/clicks
-                if hasattr(self, "_target_reticle"):
-                    self._target_reticle.flash_at(cx, cy, duration_ms=420)
-                cur_x = QCursor.pos().x()
-                if abs(cx - cur_x) > 10:
-                    self._facing = "right" if cx > cur_x else "left"
-                if self._phase is not Phase.HANG:
-                    self._begin_hang(time.perf_counter())
-                else:
-                    self._play(HANGING_STATE, mirrored=self._hang_mirrored())
-            elif anim == "typing":
-                if self._phase is not Phase.HANG and self._can_play("attack"):
-                    self._play("attack")
-
-        def _on_plan_finish(success: bool, msg: str) -> None:
-            if not self._is_taking_over_cursor:
-                return
-            log.info("Desktop Action Plan Finished: success=%s, msg='%s'", success, msg)
-            self._end_takeover_ui("peace_sign" if success else "angry")
-
-            if success:
-                play_sound("coin")
-                clean_msg = msg.strip() if msg else "Task finished"
-                if getattr(self, "_language", "en") == "id":
-                    self._say(f"* Beres semua, babu! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
-                else:
-                    self._say(f"* All done, minion! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
+    def _on_takeover_pink_action(self, anim: str, cx: int, cy: int) -> None:
+        """The worker moved / typed: face the target and keep hanging from the cursor."""
+        if anim in ("move_to", "jump_to") and cx > 0 and cy > 0:
+            cur_x = QCursor.pos().x()
+            if abs(cx - cur_x) > 10:
+                self._facing = "right" if cx > cur_x else "left"
+            if self._phase is not Phase.HANG:
+                self._begin_hang(time.perf_counter())
             else:
-                clean_msg = msg.strip() if msg else "Something interrupted me"
-                self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
-
-        worker.sig_step_started.connect(_on_step_start)
-        worker.sig_pink_action.connect(_on_pink_act)
-        worker.sig_confirm_action.connect(self._show_takeover_confirmation)
-        worker.sig_confirm_expired.connect(self._on_takeover_confirm_expired)
-        worker.sig_plan_finished.connect(_on_plan_finish)
-        worker.start()
-        return True
+                self._play(HANGING_STATE, mirrored=self._hang_mirrored())
+        elif anim == "typing":
+            if self._phase is not Phase.HANG and self._can_play("attack"):
+                self._play("attack")
 
     def _decision_box_pos(self) -> tuple[int, int]:
         """Top-centre of the screen under the cursor, just below the takeover banner."""
@@ -15025,164 +14880,11 @@ RULES:
             return int(geom.x() + (geom.width() - 380) // 2), int(geom.y() + 105)
         return int(self._x), int(self._y)
 
-    def _show_takeover_confirmation(self, token: int, a_type: str, target: str, text: str, win_title: str, proc_name: str) -> None:
-        """Ask the user to approve one sensitive takeover step (worker signal sig_confirm_action).
-
-        The prompt shows the FULL text that will be typed (newlines as ⏎, plus its length), defaults to Cancel,
-        ignores input until it has typed out, and answers with the request's token so a late click can never
-        approve a different step (REVIEW M1, C2).
-        """
-        worker = self._desktop_action_worker
-        if not self._is_taking_over_cursor:
-            if worker is not None:
-                worker.deliver_confirmation(token, False)
-            return
-        self._confirm_pending = True
-        self._confirm_token = token
-        self._takeover_last_progress = time.perf_counter()
-        log.info("Desktop Takeover confirmation #%d requested for '%s' on '%s' (text=%r, window='%s' [%s])",
-                 token, a_type, target, text, win_title, proc_name)
-
-        is_id = getattr(self, "_language", "en") == "id"
-        long_text = bool(text) and len(text) > 280
-        if text:
-            shown = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ⏎ ")
-            if len(shown) > 280:
-                more = len(shown) - 280
-                shown = shown[:280] + (f" …(+{more} karakter lagi!)" if is_id else f" …(+{more} more chars!)")
-            unit = "karakter" if is_id else "chars"
-            detail = f"\"{shown}\" ({len(text)} {unit})"
-        else:
-            detail = target or a_type
-        app_display = proc_name or win_title or ("jendela ini" if is_id else "this window")
-        action_clean = a_type.replace("_", " ")
-
-        if is_id:
-            question_text = f"* Babu! Aku bakal {action_clean}:\n* {detail}\n* di {app_display}. Lanjutkan?"
-            choices = [
-                ("Lanjut", "* Siap laksanakan, babu! [anim: peace_sign]", "peace_sign"),
-                ("Batal", "* Hmph! Dibatalkan! [anim: angry]", "angry"),
-            ]
-            banner_title = "⚠️ BUTUH KONFIRMASI — [Y: Lanjut]  [ENTER/ESC/N: Batal]"
-            banner_sub = f"Konfirmasi {action_clean} di {app_display} (atau klik opsi di bawah)..."
-        else:
-            question_text = f"* Minion! I'm about to {action_clean}:\n* {detail}\n* in {app_display}. Proceed?"
-            choices = [
-                ("Proceed", "* Right away, minion! [anim: peace_sign]", "peace_sign"),
-                ("Cancel", "* Hmph! Canceled! [anim: angry]", "angry"),
-            ]
-            banner_title = "⚠️ CONFIRMATION REQUIRED — [Y: Proceed]  [ENTER/ESC/N: Cancel]"
-            banner_sub = f"Confirm {a_type} in {app_display} (or click option below)..."
-        show_all_label = "Lihat semua" if is_id else "Show all"
-        if long_text:
-            # The bubble can only show 280 chars: offer the whole payload in a scrollable view (REVIEW M1).
-            choices.append((show_all_label, "", None))
-
-        if hasattr(self, "_takeover_banner"):
-            self._takeover_banner.show_banner(title=banner_title, subtitle=banner_sub, is_confirmation=True)
-
-        def _finish(approved: bool) -> None:
-            self._confirm_pending = False
-            self._confirm_token = 0
-            self._close_confirm_text_viewer()
-            self._hide_voice_hud_for_takeover()
-            if hasattr(self, "_takeover_banner"):
-                self._takeover_banner.restore_base_title()
-            self._takeover_last_progress = time.perf_counter()
-            w = self._desktop_action_worker
-            if w is not None:
-                w.deliver_confirmation(token, approved)
-
-        def _on_chosen(choice_label: str, _reaction_text: str, _reaction_anim: str) -> None:
-            if self._confirm_token != token:
-                return  # superseded or expired prompt
-            if choice_label == show_all_label:
-                self._show_confirm_text_viewer(text, app_display, is_id)
-                self._show_takeover_confirmation(token, a_type, target, text, win_title, proc_name)   # ask again
-                return
-            # Close the bubble before the worker resumes, so it doesn't keep focus or sit over the target (REVIEW H2).
-            self._dialogue_overlay.dismiss(clear_queue=True)
-            _finish(choice_label in ("Proceed", "Lanjut"))
-
-        def _on_cancel() -> None:
-            # The prompt was closed without an answer (e.g. something else dismissed it): that's a NO, said now
-            # instead of after the worker's timeout (REVIEW M2).
-            if self._confirm_token == token:
-                log.info("Takeover confirmation #%d closed without an answer: denying.", token)
-                _finish(False)
-
-        fixed_x, fixed_y = self._decision_box_pos()
-        self._dialogue_overlay.ask(
-            question_text,
-            choices,
-            fixed_x,
-            fixed_y,
-            on_chosen=_on_chosen,
-            track_ignore=False,
-            fixed=True,
-            fixed_pos=(fixed_x, fixed_y),
-            default_idx=1,          # Cancel is the default (REVIEW M1)
-            arm_delay_s=0.6,
-            on_cancel=_on_cancel,
-        )
-        # Voice mode: bring the HUD back only while the decision is pending, so the user can say yes/no (REVIEW M5).
-        vo = getattr(self, "_voice_overlay", None)
-        if self._voice_hud_hidden_for_takeover and self._voice_mode_enabled and vo is not None:
-            vo.show_overlay()
-
-    def _show_confirm_text_viewer(self, text: str, app_display: str, is_id: bool) -> None:
-        """Read-only, scrollable view of the full text Pink is asking to type (REVIEW M1)."""
-        self._close_confirm_text_viewer()
-        dlg = QDialog(None, Qt.Window | Qt.WindowStaysOnTopHint)
-        dlg.setWindowTitle(f"Teks lengkap untuk {app_display}" if is_id else f"Full text Pink will type into {app_display}")
-        lay = QVBoxLayout(dlg)
-        box = QPlainTextEdit(dlg)
-        box.setReadOnly(True)
-        box.setPlainText(text)
-        lay.addWidget(QLabel((f"{len(text)} karakter. Tutup ini, lalu pilih Lanjut atau Batal." if is_id
-                              else f"{len(text)} characters. Close this, then choose Proceed or Cancel."), dlg))
-        lay.addWidget(box)
-        close_btn = QPushButton("Tutup" if is_id else "Close", dlg)
-        close_btn.clicked.connect(dlg.close)
-        lay.addWidget(close_btn)
-        dlg.resize(560, 360)
-        dlg.show()
-        self._confirm_text_viewer = dlg
-
-    def _close_confirm_text_viewer(self) -> None:
-        dlg = getattr(self, "_confirm_text_viewer", None)
-        self._confirm_text_viewer = None
-        if dlg is not None:
-            try:
-                dlg.close()
-                dlg.deleteLater()
-            except RuntimeError:
-                pass
-
-    def _hide_voice_hud_for_takeover(self) -> None:
-        vo = getattr(self, "_voice_overlay", None)
-        if self._voice_hud_hidden_for_takeover and vo is not None and vo.isVisible():
-            vo.hide()
-
-    def _on_takeover_confirm_expired(self, token: int) -> None:
-        """The worker stopped waiting for confirmation ``token``: drop the stale prompt (REVIEW M1)."""
-        if token != self._confirm_token:
-            return
-        log.info("Takeover confirmation #%d expired without an answer.", token)
-        self._confirm_pending = False
-        self._confirm_token = 0
-        self._close_confirm_text_viewer()
-        self._hide_voice_hud_for_takeover()
-        if self._dialogue_overlay.has_pending_fixed_decision():
-            self._dialogue_overlay.dismiss(clear_queue=True)
-        if hasattr(self, "_takeover_banner"):
-            self._takeover_banner.restore_base_title()
-
     def _confirm_takeover_start(self, action: dict, user_text: str) -> None:
         """Assisted mode: Gemini proposed a takeover; ask before starting one (default Cancel) (REVIEW C1)."""
         if self._takeover_mode != takeover_gate.TAKEOVER_MODE_ASSISTED:
             return
-        if self._is_taking_over_cursor:
+        if self._takeover.is_active:
             log.info("Ignoring proposed takeover while one is already running.")
             return
         is_id = getattr(self, "_language", "en") == "id"
@@ -15216,56 +14918,6 @@ RULES:
             q, choices, fixed_x, fixed_y, on_chosen=_on_chosen, track_ignore=False,
             fixed=True, fixed_pos=(fixed_x, fixed_y), default_idx=1, arm_delay_s=0.6,
         )
-
-    def _end_takeover_ui(self, reaction: str | None) -> None:
-        """Single, idempotent UI cleanup for every way a takeover ends (finish, abort, watchdog, exit, hide, quit)."""
-        self._is_taking_over_cursor = False
-        if self._confirm_pending and self._dialogue_overlay.has_pending_fixed_decision():
-            self._dialogue_overlay.dismiss(clear_queue=True)
-        self._confirm_pending = False
-        self._confirm_token = 0
-        self._close_confirm_text_viewer()
-        if self._voice_hud_hidden_for_takeover:
-            self._voice_hud_hidden_for_takeover = False
-            vo = getattr(self, "_voice_overlay", None)
-            if vo is not None and self._voice_mode_enabled:
-                vo.show_overlay()
-        os_interop.set_window_exclude_from_capture(self, False)
-        if hasattr(self, "_dialogue_overlay"):
-            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
-        if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
-            os_interop.set_window_exclude_from_capture(self._voice_overlay, False)
-        if hasattr(self, "_takeover_banner"):
-            self._takeover_banner.dismiss()
-        if hasattr(self, "_target_reticle"):
-            self._target_reticle.dismiss()
-        if reaction and self._phase is Phase.HANG:
-            self._fall_after_jump(reaction)
-
-    def _abort_desktop_takeover(self, reason: str = "Aborted by user", announce: bool = True) -> None:
-        """Immediately abort an active cursor takeover on the UI thread and detach Pink from the cursor.
-
-        Every path that ends a takeover early (Esc/shake, watchdog, exit, hide, quit, update) calls this, so the
-        worker is always stopped and the UI always cleaned up the same way (REVIEW H4, H9).
-        """
-        worker = self._desktop_action_worker
-        if not self._is_taking_over_cursor and not (worker is not None and worker.isRunning()):
-            return
-        log.warning("Immediate UI-thread abort of desktop cursor takeover: %s", reason)
-        os_interop.trigger_panic_abort()
-
-        if worker is not None:
-            for sig in (worker.sig_step_started, worker.sig_pink_action, worker.sig_plan_finished,
-                        worker.sig_confirm_action, worker.sig_confirm_expired):
-                try:
-                    sig.disconnect()
-                except Exception:
-                    pass
-            worker.abort()
-
-        self._end_takeover_ui(SHAKEN_REACTION if announce else None)
-        if announce:
-            self._say("* W-wah?! Okay, okay! I let go of your mouse, minion! [anim: shocked]", force=True, auto_dismiss=True)
 
     def _init_voice_system(self) -> None:
         """Lazily initialize the background VoiceManager and VoiceModeOverlay."""
@@ -15914,7 +15566,7 @@ RULES:
             self._say(f"* Downloading update: {percent}%... mew!", force=True, record_memory=False)
 
     def _on_update_downloaded(self, file_path: str, sha256: str) -> None:
-        if self._is_taking_over_cursor:
+        if self._takeover.is_active:
             # Applying the update ends the process with os._exit; never do that mid-step (REVIEW H13/H9).
             log.info("Update downloaded during a desktop takeover; deferring apply until it ends.")
             QTimer.singleShot(5000, lambda fp=file_path, h=sha256: self._on_update_downloaded(fp, h))
@@ -16605,7 +16257,7 @@ RULES:
             reach = DEBUG_CROSSHAIR_PX + 2
             return mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
                                        2 * reach + 1, 2 * reach + 1))
-        if getattr(self, "_is_taking_over_cursor", False):
+        if self._takeover.is_active:
             hand_x, hand_y = self._hand_offset()
             hole_r = 16
             # Exclude pixels around the cursor hotspot during desktop takeover so automated clicks NEVER hit Pink's own window
@@ -17215,15 +16867,9 @@ RULES:
             return
 
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
-            if self._is_taking_over_cursor:
-                # Never just drop Pink while the worker keeps clicking (REVIEW H4): end the takeover through the
-                # full abort path, and only when the worker is gone or has made no progress for a long time.
-                worker = self._desktop_action_worker
-                worker_alive = worker is not None and worker.isRunning()
-                stalled = (now - self._takeover_last_progress) > TAKEOVER_STALL_TIMEOUT_S and not self._confirm_pending
-                if not worker_alive or stalled:
-                    log.warning("Phase.HANG watchdog: takeover %s. Aborting it.", "stalled" if worker_alive else "worker gone")
-                    self._abort_desktop_takeover("Takeover watchdog", announce=worker_alive)
+            if self._takeover.is_active:
+                # Never just drop Pink while the worker keeps clicking (REVIEW H4): the controller decides.
+                if self._takeover.check_watchdog(now):
                     return
             elif now - getattr(self, "_hang_started_at", now) > 15.0:
                 log.warning("Phase.HANG watchdog: hang timed out (>15.0s). Forcing release.")
@@ -17526,7 +17172,7 @@ RULES:
             self._stop_overlay()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
-        self._abort_desktop_takeover("Hidden to tray", announce=False)  # REVIEW H9
+        self._takeover.abort("Hidden to tray", announce=False)  # REVIEW H9
         if hasattr(self, "_window_timer"):
             self._window_timer.stop()
         if hasattr(self, "_screen_comment_timer"):
@@ -18028,7 +17674,7 @@ RULES:
     # ---------------------------------------------------- exit sequence (outro)
     def _start_exit_outro(self) -> None:
         """User chose 'Exit': Pink runs to the furthest screen edge offscreen, then the application quits."""
-        self._abort_desktop_takeover("Exit requested", announce=False)  # REVIEW H9: stop the worker first
+        self._takeover.abort("Exit requested", announce=False)  # REVIEW H9: stop the worker first
         if self._phase is Phase.EXIT_OUTRO:
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
@@ -18392,14 +18038,14 @@ RULES:
         while self._shake_trail and now - self._shake_trail[0][0] > SHAKE_WINDOW_S:
             self._shake_trail.popleft()
 
-        if getattr(self, "_is_taking_over_cursor", False):
+        if self._takeover.is_active:
             # Poll global ESC / mouse pull OR violent mouse shake at 60 FPS for instant abort!
             is_shaking_aborted = (now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking())
-            if getattr(self, "_confirm_pending", False):
+            if self._takeover.awaiting_confirm:
                 is_shaking_aborted = False  # Suppress shake abort during decision prompt so user can move mouse
 
             if os_interop.is_panic_key_pressed() or is_shaking_aborted:
-                self._abort_desktop_takeover("User pressed ESC or shook the mouse")
+                self._takeover.abort("User pressed ESC or shook the mouse")
                 return
         else:
             if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
@@ -18426,7 +18072,7 @@ RULES:
 
         min_x, max_x, min_y, ground_y = bounds
         hand_x, hand_y = self._hand_offset()
-        is_takeover = getattr(self, "_is_taking_over_cursor", False)
+        is_takeover = self._takeover.is_active
         y_clearance = 8.0 if is_takeover else 0.0
         goal_x = min(max(cursor.x() - hand_x, min_x), max_x)
         goal_y = min(max(cursor.y() - hand_y + y_clearance, min_y), ground_y)
@@ -20275,8 +19921,8 @@ RULES:
             act.blockSignals(True)
             act.setChecked(key == mode)
             act.blockSignals(False)
-        if mode == takeover_gate.TAKEOVER_MODE_OFF and self._is_taking_over_cursor:
-            self._abort_desktop_takeover("Desktop Cursor Control switched off")
+        if mode == takeover_gate.TAKEOVER_MODE_OFF and self._takeover.is_active:
+            self._takeover.abort("Desktop Cursor Control switched off")
         self._save_live_settings()
         log.info("Desktop Cursor Control mode: %s", mode)
 
@@ -20322,7 +19968,7 @@ RULES:
         """
         widgets = [w for w in (self, getattr(self, "_dialogue_overlay", None), getattr(self, "_chat_input", None))
                    if w is not None and w.isVisible()]
-        keep_excluded = self._is_taking_over_cursor       # a takeover already excludes them; leave that alone
+        keep_excluded = self._takeover.is_active       # a takeover already excludes them; leave that alone
         results = [os_interop.set_window_exclude_from_capture(w, True) for w in widgets]
         hidden: list = []
         if not all(results):
@@ -20533,7 +20179,7 @@ RULES:
 
     def _reset_to_taskbar(self) -> None:
         """Emergency reset or manual summon: place the pet safely back on the primary taskbar."""
-        self._abort_desktop_takeover("Reset to taskbar", announce=False)  # REVIEW H9: stop the worker first
+        self._takeover.abort("Reset to taskbar", announce=False)  # REVIEW H9: stop the worker first
         if getattr(self, "_hidden_in_tray", False):
             self._restore_from_tray()
             return
@@ -20553,7 +20199,7 @@ RULES:
 
     def handle_instance_activation(self) -> None:
         """Handle activation signal when user tries to launch a second instance."""
-        if self._is_taking_over_cursor:
+        if self._takeover.is_active:
             # show()/raise_()/activateWindow() mid-plan would steal the foreground from the target (REVIEW L4).
             log.info("Ignoring duplicate launch request while a desktop takeover is running.")
             return
@@ -20605,7 +20251,7 @@ RULES:
 
     def _quit(self) -> None:
         """Stop everything and leave the application (or run offscreen first)."""
-        self._abort_desktop_takeover("Exit requested", announce=False)  # REVIEW H9: stop the worker first
+        self._takeover.abort("Exit requested", announce=False)  # REVIEW H9: stop the worker first
         if self._phase is Phase.EXIT_OUTRO:
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
@@ -20651,9 +20297,9 @@ RULES:
         if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
             self._voice_overlay.dismiss()
             self._voice_overlay.close()
-        self._abort_desktop_takeover("Quitting", announce=False)
-        if self._desktop_action_worker is not None and self._desktop_action_worker.isRunning():
-            if not self._desktop_action_worker.wait(4000):   # don't destroy a running QThread (REVIEW H13)
+        self._takeover.abort("Quitting", announce=False)
+        if self._takeover.worker is not None and self._takeover.worker.isRunning():
+            if not self._takeover.worker.wait(4000):   # don't destroy a running QThread (REVIEW H13)
                 log.error("Desktop takeover worker did not stop within 4 s of quit.")
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.mark_user_interacted()

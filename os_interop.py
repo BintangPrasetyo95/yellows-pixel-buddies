@@ -22,7 +22,7 @@ import time
 from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generator, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, NamedTuple, Optional, Protocol, Tuple
 
 log = logging.getLogger("yellows_pixel_buddies.os_interop")
 
@@ -495,9 +495,12 @@ def get_screen_metrics() -> ScreenMetrics:
     )
 
 
-def coords_to_normalized_virtual(x: int, y: int) -> Tuple[int, int]:
-    """Convert desktop pixel coordinates into normalized (0..65535) coordinates for SendInput."""
-    metrics = get_screen_metrics()
+def coords_to_normalized_virtual(x: int, y: int, metrics: Optional["ScreenMetrics"] = None) -> Tuple[int, int]:
+    """Convert desktop pixel coordinates into normalized (0..65535) coordinates for SendInput.
+
+    Pure when ``metrics`` is given (tests, replays); otherwise reads the live virtual-screen metrics.
+    """
+    metrics = metrics or get_screen_metrics()
     # Aim at the pixel CENTRE: flooring the left edge made Windows map many points 1 px up/left (REVIEW L2).
     norm_x = int(((x - metrics.virtual_left) + 0.5) * 65536 / max(1, metrics.virtual_width))
     norm_y = int(((y - metrics.virtual_top) + 0.5) * 65536 / max(1, metrics.virtual_height))
@@ -910,8 +913,17 @@ def focus_window(hwnd: int) -> bool:
                 user32.AttachThreadInput(cur_thread, fg_thread, False)
 
 
-def set_window_input_transparent(target: Any, enabled: bool = True) -> bool:
-    """Toggle WS_EX_TRANSPARENT | WS_EX_LAYERED so mouse clicks pass straight through the window."""
+def set_window_input_transparent(target: Any, enabled: bool = True, *, noactivate: bool = True,
+                                 layered: bool = True) -> bool:
+    """Make the mouse pass straight through a window (True) or catch it again (False). The ONE implementation
+    (REVIEW L5): the main file's copy now calls this.
+
+    Enabling adds WS_EX_TRANSPARENT, plus WS_EX_LAYERED (``layered``) and WS_EX_NOACTIVATE (``noactivate``).
+    Disabling is symmetric: it removes TRANSPARENT and, if ``noactivate``, NOACTIVATE (LAYERED stays: Qt's
+    translucent windows need it). A style of 0 means GetWindowLong failed, so nothing is changed.
+
+    Returns True when the request took effect (click-through only works on a layered window).
+    """
     if not IS_WINDOWS or not user32:
         return False
     try:
@@ -928,10 +940,9 @@ def set_window_input_transparent(target: Any, enabled: bool = True) -> bool:
         set_style.restype = ctypes.c_ssize_t
 
         old_style = get_style(hwnd, GWL_EXSTYLE)
-        if enabled:
-            new_style = old_style | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE
-        else:
-            new_style = old_style & ~WS_EX_TRANSPARENT
+        if old_style == 0:              # a Qt window always has style bits: 0 = the call failed
+            return False
+        new_style = input_transparent_style(old_style, enabled, noactivate=noactivate, layered=layered)
         if new_style != old_style:
             set_style(hwnd, GWL_EXSTYLE, new_style)
             SWP_FRAMECHANGED = 0x0020
@@ -940,15 +951,29 @@ def set_window_input_transparent(target: Any, enabled: bool = True) -> bool:
             SWP_NOACTIVATE = 0x0010
             HWND_TOPMOST = -1
             user32.SetWindowPos(
-                ctypes.c_void_p(hwnd),
-                ctypes.c_void_p(HWND_TOPMOST),
-                0, 0, 0, 0,
+                ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), 0, 0, 0, 0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             )
-        return True
+        return (not enabled) or bool(new_style & WS_EX_LAYERED)
     except Exception as e:
-        log.warning("Failed to set window input transparency: %s", e)
+        log.debug("Could not change input transparency: %s", e)
         return False
+
+
+def input_transparent_style(style: int, enabled: bool, *, noactivate: bool = True, layered: bool = True) -> int:
+    """Pure style-bit math behind set_window_input_transparent (tested)."""
+    WS_EX_TRANSPARENT, WS_EX_LAYERED, WS_EX_NOACTIVATE = 0x00000020, 0x00080000, 0x08000000
+    if enabled:
+        style |= WS_EX_TRANSPARENT
+        if layered:
+            style |= WS_EX_LAYERED
+        if noactivate:
+            style |= WS_EX_NOACTIVATE
+    else:
+        style &= ~WS_EX_TRANSPARENT
+        if noactivate:
+            style &= ~WS_EX_NOACTIVATE
+    return style
 
 
 def dwm_flush() -> None:
@@ -1095,65 +1120,104 @@ def launch_or_focus(query: str, uri_fallback: Optional[str] = None, use_start_me
 # Safety & Panic Abort Killswitch
 # ---------------------------------------------------------------------------
 
-_PANIC_ABORT_TRIGGERED: bool = False
-# While Pink injects an Escape key herself, the physical-Esc panic check must ignore it: GetAsyncKeyState
-# cannot tell injected from physical input, and the UI thread polls it ~45x/s (REVIEW H3).
-_SELF_ESC_UNTIL: float = 0.0
-_SELF_ESC_GRACE_S: float = 0.25
-_LAST_AUTOMATED_CURSOR_POS: Optional[Tuple[int, int]] = None
-_IS_AUTOMATED_MOVE_IN_PROGRESS: bool = False
-_ABORT_SHAKE_THRESHOLD_PX: int = 280
+class PanicLatch:
+    """Per-session emergency-abort state (REVIEW M8 / plan 5.4).
+
+    Replaces the old module-level panic globals (abort flag, cursor anchor, the self-injected-Esc window...).
+    Each takeover session gets a fresh latch from ``reset_panic_abort()``, so nothing from an earlier
+    session (a late "pulled away" anchor, a stale abort) can leak into the next one. The module functions below
+    operate on the *current* latch.
+    """
+    SELF_ESC_GRACE_S = 0.25
+    PULL_AWAY_PX = 280
+
+    def __init__(self) -> None:
+        self.triggered = False
+        self.self_esc_until = 0.0                                      # Pink's own Esc press window (REVIEW H3)
+        self.cursor_anchor: Optional[Tuple[int, int]] = None           # where Pink last put the cursor
+        self.automated_move_in_progress = False
+        self._lock = threading.Lock()
+
+    def trigger(self) -> None:
+        self.triggered = True
+
+    def mark_self_injected_esc(self, hold_s: float) -> None:
+        """Open (or extend) the window in which an Escape press is known to be Pink's own."""
+        with self._lock:
+            self.self_esc_until = max(self.self_esc_until, time.monotonic() + max(0.0, hold_s) + self.SELF_ESC_GRACE_S)
+
+    def self_injected_esc_active(self) -> bool:
+        return time.monotonic() < self.self_esc_until
+
+    def set_anchor(self, x: int, y: int) -> None:
+        self.cursor_anchor = (int(x), int(y))
+
+    def pulled_away(self, cursor: Tuple[int, int]) -> bool:
+        """True (and latched) if the user dragged the mouse far from where Pink put it."""
+        if self.automated_move_in_progress or self.cursor_anchor is None:
+            return False
+        dist = math.hypot(cursor[0] - self.cursor_anchor[0], cursor[1] - self.cursor_anchor[1])
+        if dist > self.PULL_AWAY_PX:
+            log.info("User pulled mouse %dpx away from automated cursor position %s -> triggering abort.",
+                     int(dist), self.cursor_anchor)
+            self.triggered = True
+            return True
+        return False
+
+
+_CURRENT_LATCH = PanicLatch()
+
+
+def current_panic_latch() -> PanicLatch:
+    return _CURRENT_LATCH
 
 
 def _mark_self_injected_esc(hold_s: float) -> None:
-    """Open (or extend) the window in which an Escape press is known to be Pink's own."""
-    global _SELF_ESC_UNTIL
-    _SELF_ESC_UNTIL = max(_SELF_ESC_UNTIL, time.monotonic() + max(0.0, hold_s) + _SELF_ESC_GRACE_S)
+    _CURRENT_LATCH.mark_self_injected_esc(hold_s)
 
 
 def _self_injected_esc_active() -> bool:
-    return time.monotonic() < _SELF_ESC_UNTIL
+    return _CURRENT_LATCH.self_injected_esc_active()
 
 
-def reset_panic_abort() -> None:
-    """Reset the emergency abort latch at the start of a new automation session."""
-    global _PANIC_ABORT_TRIGGERED, _LAST_AUTOMATED_CURSOR_POS, _IS_AUTOMATED_MOVE_IN_PROGRESS
-    _PANIC_ABORT_TRIGGERED = False
-    _IS_AUTOMATED_MOVE_IN_PROGRESS = False
+def reset_panic_abort() -> PanicLatch:
+    """Start a new automation session with a FRESH panic latch and return it."""
+    global _CURRENT_LATCH
+    _CURRENT_LATCH = PanicLatch()
     if IS_WINDOWS and user32:
         # Clear any stale 0x0001 transition bit on VK_ESCAPE from before this session started
         user32.GetAsyncKeyState(VK_ESCAPE)
-    _LAST_AUTOMATED_CURSOR_POS = None
+    return _CURRENT_LATCH
+
+
+def install_panic_latch(latch: PanicLatch) -> PanicLatch:
+    """Make ``latch`` the current session's latch (the takeover controller owns it)."""
+    global _CURRENT_LATCH
+    _CURRENT_LATCH = latch
+    return latch
 
 
 def trigger_panic_abort() -> None:
-    """Explicitly latch the global emergency abort state."""
-    global _PANIC_ABORT_TRIGGERED
-    _PANIC_ABORT_TRIGGERED = True
+    """Latch the emergency abort for the current session."""
+    _CURRENT_LATCH.trigger()
 
 
 def is_panic_key_pressed(check_mouse_pull: bool = False) -> bool:
     """Check if the user pressed Escape (even briefly) or yanked the physical mouse away."""
-    global _PANIC_ABORT_TRIGGERED
-    if _PANIC_ABORT_TRIGGERED:
+    latch = _CURRENT_LATCH
+    if latch.triggered:
         return True
     if not IS_WINDOWS or not user32:
         return False
 
     # 0x8000 = currently held down; 0x0001 = pressed since last GetAsyncKeyState call
     esc_state = user32.GetAsyncKeyState(VK_ESCAPE)   # always read: also consumes our own injected press
-    if bool(esc_state & 0x8001) and not _self_injected_esc_active():
-        _PANIC_ABORT_TRIGGERED = True
+    if bool(esc_state & 0x8001) and not latch.self_injected_esc_active():
+        latch.trigger()
         return True
 
-    if check_mouse_pull and not _IS_AUTOMATED_MOVE_IN_PROGRESS and _LAST_AUTOMATED_CURSOR_POS is not None:
-        cur_x, cur_y = get_cursor_pos()
-        dist = math.hypot(cur_x - _LAST_AUTOMATED_CURSOR_POS[0], cur_y - _LAST_AUTOMATED_CURSOR_POS[1])
-        if dist > _ABORT_SHAKE_THRESHOLD_PX:
-            log.info("User pulled mouse %dpx away from automated cursor position %s -> triggering abort.", int(dist), _LAST_AUTOMATED_CURSOR_POS)
-            _PANIC_ABORT_TRIGGERED = True
-            return True
-
+    if check_mouse_pull and latch.pulled_away(get_cursor_pos()):
+        return True
     return False
 
 
@@ -1166,7 +1230,6 @@ def check_emergency_abort(
     Raises:
         EmergencyAbortError: If abort condition is triggered.
     """
-    global _PANIC_ABORT_TRIGGERED
     if is_panic_key_pressed(check_mouse_pull=(expected_cursor_pos is None)):
         raise EmergencyAbortError("Emergency abort triggered by user (ESC or mouse pull).")
 
@@ -1176,10 +1239,100 @@ def check_emergency_abort(
         dy = current_pos[1] - expected_cursor_pos[1]
         dist = math.hypot(dx, dy)
         if dist > shake_threshold_px:
-            _PANIC_ABORT_TRIGGERED = True
+            _CURRENT_LATCH.trigger()
             raise EmergencyAbortError(
                 f"Emergency abort triggered: Mouse moved {int(dist)}px away from target."
             )
+
+
+class InputBackend(Protocol):
+    """Everything the takeover executor may do to the user's mouse and keyboard (plan 5.2 / REVIEW T3).
+
+    The executor talks only to this, so tests and replays plug in a recorder instead of real SendInput.
+    """
+    def move(self, x: int, y: int, duration_s: float = 0.28, steps: int = 25) -> Any: ...
+    def click(self, x: int, y: int, button: str = "left", clicks: int = 1, interval_s: float = 0.08) -> Any: ...
+    def type_text(self, text: str, **kwargs: Any) -> Any: ...
+    def press_key(self, key: str) -> Any: ...
+    def hotkey(self, *keys: str) -> Any: ...
+    def scroll(self, clicks: int) -> Any: ...
+    def foreground_window(self) -> Optional["WindowInfo"]: ...
+
+
+class RealInput:
+    """InputBackend over this module's real functions (or any object with the same functions, e.g. a test fake)."""
+
+    def __init__(self, ops: Any = None) -> None:
+        self._ops = ops if ops is not None else sys.modules[__name__]
+
+    def move(self, x: int, y: int, duration_s: float = 0.28, steps: int = 25) -> Any:
+        return self._ops.smooth_move_mouse(x, y, duration_s=duration_s, steps=steps)
+
+    def click(self, x: int, y: int, button: str = "left", clicks: int = 1, interval_s: float = 0.08) -> Any:
+        if clicks == 1 and interval_s == 0.08:
+            return self._ops.click_mouse(x, y, button=button, clicks=clicks)
+        return self._ops.click_mouse(x, y, button=button, clicks=clicks, interval_s=interval_s)
+
+    def type_text(self, text: str, **kwargs: Any) -> Any:
+        return self._ops.type_text(text, **kwargs)
+
+    def press_key(self, key: str) -> Any:
+        return self._ops.press_key(key)
+
+    def hotkey(self, *keys: str) -> Any:
+        return self._ops.hotkey(*keys)
+
+    def scroll(self, clicks: int) -> Any:
+        return self._ops.scroll_mouse(clicks)
+
+    def foreground_window(self) -> Optional["WindowInfo"]:
+        return self._ops.get_foreground_window()
+
+
+class RecordingInput:
+    """InputBackend that records every call as ``[name, args, kwargs]`` (timing arguments left out).
+
+    Without ``inner`` it is a pure fake for tests and replays: nothing reaches the real mouse or keyboard.
+    With ``inner`` (e.g. ``RealInput()``) it also performs each call: that's how the takeover recorder captures the
+    exact input of a real run for a golden replay file (plan 5.2).
+    """
+
+    def __init__(self, inner: Any = None, foreground: Optional[Callable[[], Optional["WindowInfo"]]] = None) -> None:
+        self.inner = inner
+        self.calls: List[list] = []
+        self._foreground = foreground
+        self.on_call: Optional[Callable[[str, tuple, dict], None]] = None   # test hook: simulate effects
+
+    def _rec(self, name: str, args: tuple, kwargs: dict, real: Callable[[], Any]) -> Any:
+        self.calls.append([name, list(args), dict(kwargs)])
+        if self.on_call is not None:
+            self.on_call(name, args, kwargs)
+        return real() if self.inner is not None else True
+
+    def move(self, x: int, y: int, duration_s: float = 0.28, steps: int = 25) -> Any:
+        return self._rec("move", (x, y), {}, lambda: self.inner.move(x, y, duration_s=duration_s, steps=steps))
+
+    def click(self, x: int, y: int, button: str = "left", clicks: int = 1, interval_s: float = 0.08) -> Any:
+        return self._rec("click", (x, y), {"button": button, "clicks": clicks},
+                         lambda: self.inner.click(x, y, button=button, clicks=clicks, interval_s=interval_s))
+
+    def type_text(self, text: str, **kwargs: Any) -> Any:
+        meaningful = {k: v for k, v in kwargs.items() if k in ("expected_hwnd", "use_shift_enter", "enter_on_newline")}
+        return self._rec("type_text", (text,), meaningful, lambda: self.inner.type_text(text, **kwargs))
+
+    def press_key(self, key: str) -> Any:
+        return self._rec("press_key", (key,), {}, lambda: self.inner.press_key(key))
+
+    def hotkey(self, *keys: str) -> Any:
+        return self._rec("hotkey", keys, {}, lambda: self.inner.hotkey(*keys))
+
+    def scroll(self, clicks: int) -> Any:
+        return self._rec("scroll", (clicks,), {}, lambda: self.inner.scroll(clicks))
+
+    def foreground_window(self) -> Optional["WindowInfo"]:
+        if self.inner is not None:
+            return self.inner.foreground_window()
+        return self._foreground() if self._foreground is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -1201,24 +1354,23 @@ def reanchor_automated_cursor() -> None:
 
     Call after the user answers a confirmation with the mouse: moving to the bubble isn't a pull-away (REVIEW H2).
     """
-    global _LAST_AUTOMATED_CURSOR_POS
-    if _LAST_AUTOMATED_CURSOR_POS is None:
+    latch = _CURRENT_LATCH
+    if latch.cursor_anchor is None:
         return
     try:
-        _LAST_AUTOMATED_CURSOR_POS = tuple(int(v) for v in get_cursor_pos())  # type: ignore[assignment]
+        latch.set_anchor(*get_cursor_pos())
     except Exception:
         pass
 
 
 def set_cursor_pos(x: int, y: int) -> bool:
     """Instantly teleport cursor to (x, y)."""
-    global _LAST_AUTOMATED_CURSOR_POS
     if not IS_WINDOWS or not user32:
         return False
     with ensure_input_desktop():
         ok = bool(user32.SetCursorPos(int(x), int(y)))
         if ok:
-            _LAST_AUTOMATED_CURSOR_POS = (int(x), int(y))
+            _CURRENT_LATCH.set_anchor(x, y)
         return ok
 
 
@@ -1243,10 +1395,9 @@ def _send_mouse_input(dw_flags: int, dx: int = 0, dy: int = 0, data: int = 0) ->
 
 def move_mouse(x: int, y: int) -> bool:
     """Move cursor to (x, y) absolute desktop coordinates using SendInput."""
-    global _LAST_AUTOMATED_CURSOR_POS
     norm_x, norm_y = coords_to_normalized_virtual(x, y)
     flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
-    _LAST_AUTOMATED_CURSOR_POS = (int(x), int(y))
+    _CURRENT_LATCH.set_anchor(x, y)
     ok = _send_mouse_input(flags, dx=norm_x, dy=norm_y)
     return ok
 
@@ -1259,7 +1410,7 @@ def smooth_move_mouse(
     abort_on_shake: bool = True,
 ) -> bool:
     """Smoothly glide mouse cursor to (target_x, target_y) with cubic ease-out."""
-    global _IS_AUTOMATED_MOVE_IN_PROGRESS
+    latch = _CURRENT_LATCH
     start_x, start_y = get_cursor_pos()
     if start_x == target_x and start_y == target_y:
         return True
@@ -1268,7 +1419,7 @@ def smooth_move_mouse(
     interval = duration_s / steps
     expected_pos = (start_x, start_y)
 
-    _IS_AUTOMATED_MOVE_IN_PROGRESS = True
+    latch.automated_move_in_progress = True
     try:
         for step in range(1, steps + 1):
             if abort_on_shake:
@@ -1289,7 +1440,7 @@ def smooth_move_mouse(
         move_mouse(target_x, target_y)
         return True
     finally:
-        _IS_AUTOMATED_MOVE_IN_PROGRESS = False
+        latch.automated_move_in_progress = False
 
 
 def mouse_down(button: str = "left") -> bool:

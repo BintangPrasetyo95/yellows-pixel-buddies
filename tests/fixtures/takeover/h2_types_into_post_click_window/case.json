@@ -1,0 +1,96 @@
+{
+  "note": "REVIEW H2: the click focused WhatsApp, so the text must go to WhatsApp's window (hwnd 77), not the window in front before the click.",
+  "goal": "type hello in the chat",
+  "target_app": "Desktop",
+  "windows": [
+    {
+      "hwnd": 1001,
+      "title": "Untitled - Notepad",
+      "process_id": 4242,
+      "process_name": "notepad.exe"
+    },
+    {
+      "hwnd": 77,
+      "title": "Mom - WhatsApp",
+      "process_id": 7700,
+      "process_name": "WhatsApp.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 1001,
+    "title": "Untitled - Notepad",
+    "process_id": 4242,
+    "process_name": "notepad.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "click_and_type",
+        "target": "Message box",
+        "box_2d": [
+          900,
+          400,
+          960,
+          880
+        ],
+        "text": "hello",
+        "press_enter": false
+      },
+      "foreground_after_click": {
+        "hwnd": 77,
+        "title": "Mom - WhatsApp",
+        "process_id": 7700,
+        "process_name": "WhatsApp.exe"
+      }
+    },
+    {
+      "decision": {
+        "self_check": "goal_confirmed_complete",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "done",
+        "target": "Typed hello",
+        "summary": "Typed hello"
+      }
+    }
+  ],
+  "expected": {
+    "calls": [
+      [
+        "move",
+        [
+          1229,
+          1004
+        ],
+        {}
+      ],
+      [
+        "click",
+        [
+          1229,
+          1004
+        ],
+        {
+          "button": "left",
+          "clicks": 1
+        }
+      ],
+      [
+        "type_text",
+        [
+          "hello"
+        ],
+        {
+          "use_shift_enter": true,
+          "expected_hwnd": 77,
+          "enter_on_newline": false
+        }
+      ]
+    ],
+    "outcome_state": "success",
+    "success": true
+  }
+}

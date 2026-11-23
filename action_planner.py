@@ -1227,8 +1227,8 @@ def _refocus_after_confirmation(win: Optional["os_interop.WindowInfo"]) -> None:
         log.debug("Could not refocus %s after confirmation: %s", win.title, err)
 
 
-def _pink_has_focus() -> bool:
-    fg = os_interop.get_foreground_window()
+def _pink_has_focus(inp: Optional["os_interop.InputBackend"] = None) -> bool:
+    fg = inp.foreground_window() if inp is not None else os_interop.get_foreground_window()
     return fg is not None and fg.process_id == os.getpid()
 
 
@@ -1244,16 +1244,193 @@ def step_outcome_status(outcome_desc: str) -> str:
     return "executed"
 
 
-class DesktopActionExecutor:
-    """Executes a DesktopPlan via a live Observe -> Think -> Act Vision Cursor loop."""
+# ---------------------------------------------------------------------------
+# Observe -> decide -> act building blocks (plan 5.3): Observation, Observer, PlanProgress, StepPolicy
+# ---------------------------------------------------------------------------
 
-    def __init__(self, api_key: str = ""):
+@dataclass
+class Observation:
+    """One look at the screen: everything a decision is based on, captured together."""
+    b64: str
+    image: Optional[Image.Image]          # raw full-resolution capture (for diffs / stale-target checks)
+    size: Tuple[int, int]
+    offset: Tuple[int, int]
+    fg_hwnd: Optional[int]
+    fg_desc: str                          # "<title> [<process>]" or ""
+    captured_at: float                    # time.monotonic()
+
+
+class Observer:
+    """Captures the monitor the task is on. The only reader of the last raw screenshot (plan 5.3)."""
+
+    def observe(self, target_hwnd: Optional[int]) -> Observation:
+        if target_hwnd:
+            monitor_bbox = os_interop.get_monitor_rect_for_window(target_hwnd)
+        else:
+            monitor_bbox = os_interop.get_monitor_rect_for_cursor()
+        b64_img, orig_w, orig_h, offset = capture_screen_region(bounds=monitor_bbox, draw_cursor=True, draw_grid=True)
+        if not b64_img:
+            raise RuntimeError("Failed to capture desktop screenshot for vision agent.")
+        captured_at = time.monotonic()
+        fg = os_interop.get_foreground_window()
+        return Observation(
+            b64=b64_img, image=_LAST_RAW_SCREENSHOT, size=(orig_w, orig_h), offset=offset,
+            fg_hwnd=fg.hwnd if fg else None,
+            fg_desc=f"{fg.title} [{fg.process_name}]" if fg else "",
+            captured_at=captured_at,
+        )
+
+
+@dataclass
+class PlanProgress:
+    """Mutable bookkeeping of one plan run, read and updated only by StepPolicy."""
+    goal_lower: str
+    needs_text_submission: bool
+    is_close_goal: bool
+    last_click_coords: Optional[Tuple[int, int]] = None
+    last_typed_text: Optional[str] = None
+    has_searched_or_typed: bool = False
+    has_typed_final_text: bool = False
+    duplicate_click_count: int = 0
+    last_global_diff: float = 100.0
+    last_local_diff: float = 100.0
+    prev_step_was_terminal_candidate: bool = False
+
+    @property
+    def screen_did_change(self) -> bool:
+        return self.last_global_diff >= 0.15 or self.last_local_diff >= 0.35
+
+
+@dataclass
+class PolicyVerdict:
+    """What to do with a decided step: "run" it, "skip" it (with a note for the model), or "finish" the plan."""
+    kind: str
+    note: str = ""
+    outcome_state: str = ""
+    summary: str = ""
+
+
+class StepPolicy:
+    """All the deterministic guards between "the model decided" and "the step runs" (plan 5.3).
+
+    Pure: no input, no window calls. Everything it needs comes in as arguments, so it is table-testable.
+    """
+
+    @staticmethod
+    def is_search_target(step: ActionStep) -> bool:
+        return any(k in (step.target or "").lower() for k in ("search", "find", "filter", "lookup"))
+
+    def review_done(self, progress: PlanProgress, step: ActionStep, step_no: int) -> PolicyVerdict:
+        """A 'done' is rejected while a required message hasn't been typed yet."""
+        if progress.needs_text_submission and not progress.has_typed_final_text:
+            return PolicyVerdict("skip", note=(
+                f"Step {step_no}: [REJECTED PREMATURE DONE] The user requested to send/type a message or command, but "
+                "text has not been submitted yet! If text entry is required, please execute the typing step before "
+                "marking as done."))
+        return PolicyVerdict("finish")
+
+    def before_run(self, progress: PlanProgress, step: ActionStep, step_no: int, prevent_search_enter: bool) -> PolicyVerdict:
+        """Search guard (mutates ``step``), duplicate-typing and duplicate-click guards."""
+        is_search = self.is_search_target(step)
+        user_explicitly_submits = any(k in progress.goal_lower for k in ("submit", "press enter", "hit enter"))
+
+        # Never press Enter into live search / filter fields unless the user explicitly asked to submit.
+        if step.action_type in ("click_and_type", "type_text") and is_search:
+            if prevent_search_enter and not user_explicitly_submits and step.press_enter:
+                log.info("Generic search guard: forcing press_enter=False on search/filter field '%s'.", step.target)
+                step.press_enter = False
+            # Select-all + Backspace only right after clicking the field. On a bare type_text it would wipe
+            # whatever control happens to have focus (e.g. the whole document if the find box didn't open) (REVIEW H8).
+            if step.action_type == "click_and_type":
+                step.select_all_first = True
+            step.done_after_this = False
+
+        # Never type the exact same text twice if the previous typing already changed the screen
+        if step.action_type in ("click_and_type", "type_text") and step.text:
+            norm_text = step.text.strip().lower()
+            if progress.last_typed_text is not None and norm_text == progress.last_typed_text and progress.screen_did_change:
+                log.info("Prevented duplicate text entry %r at step %d (screen already updated).", step.text, step_no)
+                if progress.has_typed_final_text and progress.prev_step_was_terminal_candidate:
+                    return PolicyVerdict("finish", outcome_state="unverified",
+                                         summary=f"Completed action with text entry '{step.text}' (unverified).")
+                return PolicyVerdict("skip", note=(
+                    f"Step {step_no}: [BLOCKED DUPLICATE TYPE] Already typed '{step.text}' in previous step and screen "
+                    "updated! Do NOT type into the search box again — click the matching contact/result on screen now!"))
+
+        # Never click the same spot again if the previous click already changed the screen
+        if (step.action_type in ("click", "double_click", "right_click", "click_and_type")
+                and step.coordinates is not None and progress.last_click_coords is not None):
+            dist = math.hypot(step.coordinates[0] - progress.last_click_coords[0],
+                              step.coordinates[1] - progress.last_click_coords[1])
+            if dist <= 35.0 and not step.text and progress.screen_did_change:
+                progress.duplicate_click_count += 1
+                log.warning("Blocked duplicate click at %s (%.1fpx from previous click %s, screen already changed).",
+                            step.coordinates, dist, progress.last_click_coords)
+                if (progress.duplicate_click_count >= 1 and progress.prev_step_was_terminal_candidate
+                        and (not progress.needs_text_submission or progress.has_typed_final_text)
+                        and not progress.is_close_goal):
+                    return PolicyVerdict("finish", outcome_state="unverified",
+                                         summary=f"Completed action on {step.target} (unverified).")
+                return PolicyVerdict("skip", note=(
+                    f"Step {step_no}: [BLOCKED DUPLICATE CLICK] You already clicked {step.coordinates} ('{step.target}') "
+                    "and the screen updated! Do NOT click the same spot again. Move to the next step (e.g. click the "
+                    "message input box at the bottom or 'Don't Save' button), or return action='done' if complete!"))
+        return PolicyVerdict("run")
+
+    def record_failed(self, progress: PlanProgress) -> None:
+        """Nothing happened on screen, so no click/typing progress may be recorded (REVIEW C3)."""
+        progress.prev_step_was_terminal_candidate = False
+
+    def record_executed(self, progress: PlanProgress, step: ActionStep) -> None:
+        is_search = self.is_search_target(step)
+        target_lower = (step.target or "").lower()
+        goal = progress.goal_lower
+        if step.coordinates is not None:
+            progress.last_click_coords = step.coordinates
+        is_url = bool(step.text) and step.text.strip().startswith(("http://", "https://", "www."))
+        if step.action_type in ("click_and_type", "type_text") and step.text:
+            progress.last_typed_text = step.text.strip().lower()
+            progress.has_searched_or_typed = True
+            if not is_search and not is_url:
+                progress.has_typed_final_text = True
+        is_terminal_text_submit = (
+            step.action_type in ("click_and_type", "type_text") and step.press_enter and bool(step.text)
+            and not is_search and not is_url
+            and not ("play " in goal and not any(k in goal for k in ("reply", "say ", "send ", "message", "terminal", "cmd", "git")))
+        )
+        is_media_play_click = (
+            "play " in goal and progress.has_searched_or_typed and step.action_type in ("click", "double_click")
+            and not any(k in target_lower for k in ("search", "address", "url", "tab", "input", "bar", "clear"))
+        )
+        progress.prev_step_was_terminal_candidate = bool(step.done_after_this or is_terminal_text_submit or is_media_play_click)
+
+
+class DesktopActionExecutor:
+    """Executes a DesktopPlan via a live Observe -> Think -> Act Vision Cursor loop.
+
+    ``input_backend`` (os_interop.InputBackend) receives every mouse/keyboard action, so tests and replays can
+    record instead of sending real input (plan 5.2). ``latch`` is the session's PanicLatch, owned by the
+    TakeoverController (plan 5.4). ``on_decision(step_idx, decision_json, screenshot_b64)`` sees each validated
+    model decision (used by the replay recorder).
+    """
+
+    def __init__(self, api_key: str = "", input_backend: Optional["os_interop.InputBackend"] = None,
+                 latch: Optional["os_interop.PanicLatch"] = None,
+                 on_decision: Optional[Callable[[int, dict, str], None]] = None,
+                 observer: Optional[Observer] = None):
         self.api_key = api_key
         self._is_aborted = False
+        self.input = input_backend if input_backend is not None else os_interop.RealInput(os_interop)
+        self.latch = latch
+        self.on_decision = on_decision
+        self.observer = observer or Observer()
+        self.policy = StepPolicy()
 
     def abort(self) -> None:
         """Signal executor to immediately stop."""
         self._is_aborted = True
+        if self.latch is not None:
+            self.latch.trigger()
         os_interop.trigger_panic_abort()
 
     @staticmethod
@@ -1383,35 +1560,47 @@ class DesktopActionExecutor:
         on_step_complete: Optional[Callable[[int, ActionStep], None]] = None,
         on_confirm_action: Optional[Callable[[ActionStep, str, str], bool]] = None,
     ) -> bool:
-        """Run the closed-loop Vision Cursor Agent until task completion, max_steps, or abort."""
+        """Run the closed-loop Vision Cursor Agent until task completion, max_steps, or abort.
+
+        Each iteration: Observer.observe() -> _decide_next_step() -> StepPolicy guards -> stale-step check ->
+        _execute_step() -> StepPolicy bookkeeping (plan 5.3).
+        """
         if self._is_aborted:
             plan.is_finished = True
             plan.success = False
             return False
 
         self._is_aborted = False
-        os_interop.reset_panic_abort()
+        if self.latch is None:
+            self.latch = os_interop.reset_panic_abort()
+        else:
+            os_interop.install_panic_latch(self.latch)   # the controller's latch: an early Esc is never lost
         goal_text = plan.user_request or plan.intent
-        goal_lower = f"{plan.user_request} {plan.intent}".strip().lower()
-        needs_text_submission = bool(plan.message_text) or self._requires_text_submission(plan.user_request, plan.intent)
-        is_close_goal = self._is_close_or_save_goal(plan.user_request, plan.intent)
+        progress = PlanProgress(
+            goal_lower=f"{plan.user_request} {plan.intent}".strip().lower(),
+            needs_text_submission=bool(plan.message_text) or self._requires_text_submission(plan.user_request, plan.intent),
+            is_close_goal=self._is_close_or_save_goal(plan.user_request, plan.intent),
+        )
         log.info(
             "Starting Closed-Loop Vision Cursor Agent: goal='%s', intent='%s', app_hint='%s'",
             goal_text, plan.intent, plan.target_app,
         )
+
+        def _finish(success: bool, state: str, summary: str) -> bool:
+            plan.is_finished = True
+            plan.success = success
+            plan.outcome_state = state
+            plan.summary_message = summary
+            return success
 
         try:
             # Pre-Step: If a specific target_app was requested and is open in the background, bring it forward first
             focused_existing_app = False
             if plan.target_app and plan.target_app.lower() not in ("desktop", "screen", "active window", "window"):
                 os_interop.check_emergency_abort()
-                fg = os_interop.get_foreground_window()
-                fg_match = (
-                    fg is not None
-                    and (
-                        plan.target_app.lower() in fg.title.lower()
-                        or plan.target_app.lower() in fg.process_name.lower()
-                    )
+                fg = self.input.foreground_window()
+                fg_match = fg is not None and (
+                    plan.target_app.lower() in fg.title.lower() or plan.target_app.lower() in fg.process_name.lower()
                 )
                 if fg_match:
                     focused_existing_app = True
@@ -1421,11 +1610,7 @@ class DesktopActionExecutor:
                         is_elev, reason = os_interop.is_window_elevated(win.hwnd)
                         if is_elev:
                             log.warning("Target window '%s' [%s] is elevated: %s", win.title, win.process_name, reason)
-                            plan.is_finished = True
-                            plan.success = False
-                            plan.outcome_state = "failed"
-                            plan.summary_message = f"Cannot control '{win.title}' (Administrator / elevated window)."
-                            return False
+                            return _finish(False, "failed", f"Cannot control '{win.title}' (Administrator / elevated window).")
                         log.info("Pre-focusing existing window for '%s': '%s' [%s]", plan.target_app, win.title, win.process_name)
                         os_interop.focus_window(win.hwnd)
                         focused_existing_app = True
@@ -1434,247 +1619,113 @@ class DesktopActionExecutor:
                 if (
                     focused_existing_app
                     and self._is_simple_open_goal(goal_text)
-                    and os_interop.window_matches_app(os_interop.get_foreground_window(), plan.target_app)
+                    and os_interop.window_matches_app(self.input.foreground_window(), plan.target_app)
                 ):
+                    log.info("Simple open goal satisfied by focusing '%s' — finishing immediately.", plan.target_app)
                     plan.is_finished = True
                     plan.success = True
                     plan.summary_message = f"Opened and focused {plan.target_app}."
-                    log.info("Simple open goal satisfied by focusing '%s' — finishing immediately.", plan.target_app)
                     return True
 
             history_lines: List[str] = []
             max_steps = max(2, min(12, plan.max_steps or MAX_VISION_STEPS))
-            last_click_coords: Optional[Tuple[int, int]] = None
-            last_typed_text: Optional[str] = None
-            has_searched_or_typed: bool = False
-            has_typed_final_text: bool = False
-            duplicate_click_count: int = 0
-            prev_raw_img: Optional[Image.Image] = None
-            prev_fg_title: str = ""
-            last_global_diff: float = 100.0
-            last_local_diff: float = 100.0
-            prev_step_was_terminal_candidate: bool = False
+            prev_obs: Optional[Observation] = None
 
             for step_idx in range(max_steps):
                 if self._is_aborted or os_interop.is_panic_key_pressed():
                     raise os_interop.EmergencyAbortError("Plan aborted by user (ESC or mouse pull).")
-
                 plan.current_step_index = step_idx
+                step_no = step_idx + 1
 
-                # 1. OBSERVE: Capture full monitor holding target window (or cursor monitor)
+                # 1. OBSERVE: the monitor holding the target window (or the cursor's monitor)
                 target_hwnd = None
                 if focused_existing_app:
-                    fg = os_interop.get_foreground_window()
+                    fg = self.input.foreground_window()
                     if fg:
                         target_hwnd = fg.hwnd
                 if not target_hwnd and plan.target_app:
                     win = os_interop.find_window(plan.target_app)
                     if win:
                         target_hwnd = win.hwnd
-
-                if target_hwnd:
-                    monitor_bbox = os_interop.get_monitor_rect_for_window(target_hwnd)
-                else:
-                    monitor_bbox = os_interop.get_monitor_rect_for_cursor()
-
-                b64_img, orig_w, orig_h, offset = capture_screen_region(
-                    bounds=monitor_bbox,
-                    draw_cursor=True,
-                    draw_grid=True,
-                )
-                curr_raw_img = _LAST_RAW_SCREENSHOT
-                if not b64_img:
-                    raise RuntimeError("Failed to capture desktop screenshot for vision agent.")
-                observed_at = time.monotonic()
+                obs = self.observer.observe(target_hwnd)
 
                 if self._is_aborted or os_interop.is_panic_key_pressed():
                     raise os_interop.EmergencyAbortError("Plan aborted by user (ESC or mouse pull).")
 
-                # Build Self-Verification Report comparing screenshot BEFORE and AFTER the previous action
-                fg_now = os_interop.get_foreground_window()
-                observed_hwnd = fg_now.hwnd if fg_now else None
-                curr_fg_title = f"{fg_now.title} [{fg_now.process_name}]" if fg_now else ""
                 visual_check_report = ""
-                if step_idx > 0 and prev_raw_img is not None and curr_raw_img is not None:
-                    last_global_diff, last_local_diff = compute_visual_diff(
-                        prev_raw_img, curr_raw_img, focus_coords=last_click_coords, offset=offset
-                    )
-                    fg_changed = (curr_fg_title != prev_fg_title)
-                    prev_step = plan.steps[-1] if plan.steps else None
-                    prev_desc = f"{prev_step.action_type} on '{prev_step.target}'" if prev_step else "previous step"
-                    if last_global_diff < 0.15 and last_local_diff < 0.35 and not fg_changed:
-                        visual_check_report = (
-                            f"⚠️ VISUAL SELF-CHECK WARNING FOR STEP {step_idx} ({prev_desc}):\n"
-                            f"- Screen pixel change after your action was ALMOST ZERO (global={last_global_diff:.2f}%, local={last_local_diff:.2f}%).\n"
-                            "- Your click or key press likely MISSED the interactive element or failed to focus the input field!\n"
-                            "- Inspect the coordinate grid lines carefully and adjust your [ymin, xmin, ymax, xmax] coordinates (or use a hotkey)!"
-                        )
-                    else:
-                        visual_check_report = (
-                            f"🔍 VISUAL SELF-CHECK FOR STEP {step_idx} ({prev_desc}):\n"
-                            f"- Screen changed after your action (global diff={last_global_diff:.2f}%, target region diff={last_local_diff:.2f}%, window_changed={fg_changed}).\n"
-                            "- Look at the attached screenshot to CONFIRM FOR YOURSELF:\n"
-                            "  1. Did your last action achieve what you intended (or did it type into the wrong field / open a confirmation dialog like 'Don't Save')?\n"
-                            "  2. If the user's entire request is now VISIBLY COMPLETE on screen, return action='done' with self_check='goal_confirmed_complete'!\n"
-                            "  3. If another step is needed (e.g. clicking the message input box after opening a contact, or clicking 'Don't Save' on a popup), execute that next step now!"
-                        )
+                if step_idx > 0 and prev_obs is not None:
+                    visual_check_report = self._visual_check_report(plan, step_idx, prev_obs, obs, progress)
 
-                # 2. THINK & SELF-CONFIRM: Ask Gemini to verify the previous step and choose the next physical action
+                # 2. THINK & SELF-CONFIRM
                 step = self._decide_next_step(
                     plan=plan,
                     step_idx=step_idx,
                     max_steps=max_steps,
                     history_lines=history_lines,
-                    screenshot_b64=b64_img,
-                    region_orig_size=(orig_w, orig_h),
-                    region_offset=offset,
+                    screenshot_b64=obs.b64,
+                    region_orig_size=obs.size,
+                    region_offset=obs.offset,
                     visual_check_report=visual_check_report,
                 )
-
-                # Re-check abort immediately after network call before moving cursor!
                 if self._is_aborted or os_interop.is_panic_key_pressed():
                     raise os_interop.EmergencyAbortError("Plan aborted by user during vision analysis.")
-
-                # Record the model's self-confirmation observation in history log
                 if step_idx > 0 and step.self_check_reason:
                     log.info("Pink Self-Check [Step %d -> %s]: %s", step_idx, step.self_check, step.self_check_reason)
 
-                # Check if Gemini declared the task finished after visual confirmation
                 if step.action_type == "done":
-                    if needs_text_submission and not has_typed_final_text:
-                        log.warning(
-                            "Rejected premature action='done' at step %d because required message/text has not been typed yet!",
-                            step_idx + 1,
-                        )
-                        history_lines.append(
-                            f"Step {step_idx + 1}: [REJECTED PREMATURE DONE] The user requested to send/type a message or command, but text has not been submitted yet! "
-                            "If text entry is required, please execute the typing step before marking as done."
-                        )
+                    verdict = self.policy.review_done(progress, step, step_no)
+                    if verdict.kind == "skip":
+                        log.warning("Rejected premature action='done' at step %d: required text not typed yet.", step_no)
+                        history_lines.append(verdict.note)
                         continue
                     plan.steps.append(step)
                     step.status = "completed"
-                    plan.is_finished = True
-                    plan.success = True
-                    plan.outcome_state = "success"
-                    plan.summary_message = step.target or step.self_check_reason or step.thought or f"Completed: {goal_text}"
-                    log.info("Vision Agent confirmed completion at step %d: %s", step_idx + 1, plan.summary_message)
-                    return True
+                    log.info("Vision Agent confirmed completion at step %d.", step_no)
+                    return _finish(True, "success",
+                                   step.target or step.self_check_reason or step.thought or f"Completed: {goal_text}")
 
                 if step.action_type == "fail":
                     plan.steps.append(step)
                     step.status = "failed"
-                    plan.is_finished = True
-                    plan.success = False
-                    plan.outcome_state = "failed"
-                    plan.summary_message = step.target or step.self_check_reason or step.thought or "Could not complete the requested action."
-                    log.warning("Vision Agent reported failure at step %d: %s", step_idx + 1, plan.summary_message)
-                    return False
-
-                # Generic Search & Filter Input Guard:
-                # Never press Enter into live search, filter, or lookup fields unless the user explicitly requested submitting.
-                target_lower = (step.target or "").lower()
-                is_search_box_target = any(k in target_lower for k in ("search", "find", "filter", "lookup"))
-                user_explicitly_submits = any(k in goal_lower for k in ("submit", "press enter", "hit enter"))
+                    summary = step.target or step.self_check_reason or step.thought or "Could not complete the requested action."
+                    log.warning("Vision Agent reported failure at step %d: %s", step_no, summary)
+                    return _finish(False, "failed", summary)
 
                 prof = get_app_profile(plan.target_app or "")
                 if not prof:
-                    fg_check = os_interop.get_foreground_window()
+                    fg_check = self.input.foreground_window()
                     if fg_check:
                         prof = get_app_profile(fg_check.process_name)
-
                 prevent_enter = prof.get("prevent_search_enter", True) if prof else True
 
-                if step.action_type in ("click_and_type", "type_text") and is_search_box_target:
-                    if prevent_enter and not user_explicitly_submits and step.press_enter:
-                        log.info("Generic search guard: forcing press_enter=False on search/filter field '%s'.", step.target)
-                        step.press_enter = False
-                    # Select-all + Backspace only right after clicking the field. On a bare type_text it would wipe
-                    # whatever control happens to have focus (e.g. the whole document if the find box didn't open) (REVIEW H8).
-                    if step.action_type == "click_and_type":
-                        step.select_all_first = True
-                    step.done_after_this = False
+                verdict = self.policy.before_run(progress, step, step_no, prevent_search_enter=prevent_enter)
+                if verdict.kind == "finish":
+                    return _finish(True, verdict.outcome_state, verdict.summary)
+                if verdict.kind == "skip":
+                    history_lines.append(verdict.note)
+                    continue
 
-                # Anti-Repeat Guard 1: Never type the exact same text twice if the previous typing step already changed the screen
-                if step.action_type in ("click_and_type", "type_text") and step.text:
-                    norm_text = step.text.strip().lower()
-                    screen_did_change = (last_global_diff >= 0.15 or last_local_diff >= 0.35)
-                    if last_typed_text is not None and norm_text == last_typed_text and screen_did_change:
-                        log.info(
-                            "Prevented duplicate text entry %r at step %d (screen already updated) — finishing or advancing.",
-                            step.text, step_idx + 1,
-                        )
-                        if has_typed_final_text and prev_step_was_terminal_candidate:
-                            plan.is_finished = True
-                            plan.success = True
-                            plan.outcome_state = "unverified"
-                            plan.summary_message = f"Completed action with text entry '{step.text}' (unverified)."
-                            return True
-                        history_lines.append(
-                            f"Step {step_idx + 1}: [BLOCKED DUPLICATE TYPE] Already typed '{step.text}' in previous step and screen updated! "
-                            "Do NOT type into the search box again — click the matching contact/result on screen now!"
-                        )
-                        continue
-
-                # Anti-Repeat Guard 2: Never click the exact same pixel spot multiple times if the previous click already changed the screen
-                if (
-                    step.action_type in ("click", "double_click", "right_click", "click_and_type")
-                    and step.coordinates is not None
-                    and last_click_coords is not None
-                ):
-                    dist = math.hypot(
-                        step.coordinates[0] - last_click_coords[0],
-                        step.coordinates[1] - last_click_coords[1],
-                    )
-                    screen_did_change = (last_global_diff >= 0.15 or last_local_diff >= 0.35)
-                    if dist <= 35.0 and not step.text and screen_did_change:
-                        duplicate_click_count += 1
-                        log.warning(
-                            "Blocked duplicate click at %s (%.1fpx from previous click %s, screen already changed).",
-                            step.coordinates, dist, last_click_coords,
-                        )
-                        if (
-                            duplicate_click_count >= 1
-                            and prev_step_was_terminal_candidate
-                            and (not needs_text_submission or has_typed_final_text)
-                            and not is_close_goal
-                        ):
-                            plan.is_finished = True
-                            plan.success = True
-                            plan.outcome_state = "unverified"
-                            plan.summary_message = f"Completed action on {step.target} (unverified)."
-                            log.info("Stopping after confirming previous terminal click already updated the screen.")
-                            return True
-                        history_lines.append(
-                            f"Step {step_idx + 1}: [BLOCKED DUPLICATE CLICK] You already clicked {step.coordinates} ('{step.target}') and the screen updated! "
-                            "Do NOT click the same spot again. Move to the next step (e.g. click the message input box at the bottom or 'Don't Save' button), or return action='done' if complete!"
-                        )
-                        continue
-
-                # Stale-step guard (REVIEW H6): the decision was made from a screenshot taken seconds ago. Never act
-                # on it if it took too long, the focused window changed, or the target area moved meanwhile.
-                stale_reason = self._stale_step_reason(step, observed_at, observed_hwnd, curr_raw_img, offset)
+                # Stale-step guard (REVIEW H6): never act on a screenshot that is too old, a window that lost focus,
+                # or a target area that moved while the model was deciding.
+                stale_reason = self._stale_step_reason(step, obs.captured_at, obs.fg_hwnd, obs.image, obs.offset)
                 if stale_reason:
-                    log.warning("Skipping step %d (%s on '%s'): %s", step_idx + 1, step.action_type, step.target, stale_reason)
-                    history_lines.append(
-                        f"Step {step_idx + 1}: [SKIPPED, NOT EXECUTED] {stale_reason}; re-observing the screen before acting."
-                    )
-                    prev_step_was_terminal_candidate = False
+                    log.warning("Skipping step %d (%s on '%s'): %s", step_no, step.action_type, step.target, stale_reason)
+                    history_lines.append(f"Step {step_no}: [SKIPPED, NOT EXECUTED] {stale_reason}; re-observing the screen before acting.")
+                    self.policy.record_failed(progress)
                     continue
 
                 plan.steps.append(step)
-                prev_raw_img = curr_raw_img
-                prev_fg_title = curr_fg_title
+                prev_obs = obs
 
-                # 3. ACT: Execute the chosen physical step on the user's cursor/keyboard
+                # 3. ACT
                 step.status = "running"
                 if on_step_start:
                     on_step_start(step_idx, step)
-
                 outcome_desc = self._execute_step(
                     step=step,
-                    screenshot_b64=b64_img,
-                    region_orig_size=(orig_w, orig_h),
-                    region_offset=offset,
+                    screenshot_b64=obs.b64,
+                    region_orig_size=obs.size,
+                    region_offset=obs.offset,
                     on_pink_action=on_pink_action,
                     on_confirm_action=on_confirm_action,
                 )
@@ -1685,54 +1736,22 @@ class DesktopActionExecutor:
                     # (e.g. type without Enter, then press Enter) (REVIEW C3).
                     step.status = "canceled"
                     step.error_message = outcome_desc
-                    plan.is_finished = True
-                    plan.success = False
-                    plan.outcome_state = "aborted"
-                    plan.summary_message = "Canceled by user."
-                    log.info("Plan ended at step %d: user declined a sensitive action.", step_idx + 1)
-                    return False
+                    log.info("Plan ended at step %d: user declined a sensitive action.", step_no)
+                    return _finish(False, "aborted", "Canceled by user.")
 
                 step.status = "completed" if status == "executed" else "failed"
                 if on_step_complete:
                     on_step_complete(step_idx, step)
 
                 if status != "executed":
-                    # Nothing happened on screen, so no click/typing progress may be recorded; otherwise the
-                    # premature-done guard can report success for work that never happened (REVIEW C3).
-                    prev_step_was_terminal_candidate = False
-                    history_lines.append(
-                        f"Step {step_idx + 1}: action={step.action_type}, target='{step.target}' -> {outcome_desc}"
-                    )
+                    self.policy.record_failed(progress)
+                    history_lines.append(f"Step {step_no}: action={step.action_type}, target='{step.target}' -> {outcome_desc}")
                     continue
 
-                if step.coordinates is not None:
-                    last_click_coords = step.coordinates
-                if step.action_type in ("click_and_type", "type_text") and step.text:
-                    last_typed_text = step.text.strip().lower()
-                    has_searched_or_typed = True
-                    if not is_search_box_target and not step.text.strip().startswith(("http://", "https://", "www.")):
-                        has_typed_final_text = True
-
-                # Track whether this step is a candidate for completing the task (to be verified on the next screenshot!)
-                is_terminal_text_submit = (
-                    step.action_type in ("click_and_type", "type_text")
-                    and step.press_enter
-                    and bool(step.text)
-                    and not is_search_box_target
-                    and not step.text.strip().startswith(("http://", "https://", "www."))
-                    and not ("play " in goal_lower and not any(k in goal_lower for k in ("reply", "say ", "send ", "message", "terminal", "cmd", "git")))
-                )
-                is_media_play_click = (
-                    "play " in goal_lower
-                    and has_searched_or_typed
-                    and step.action_type in ("click", "double_click")
-                    and not any(k in target_lower for k in ("search", "address", "url", "tab", "input", "bar", "clear"))
-                )
-                prev_step_was_terminal_candidate = bool(step.done_after_this or is_terminal_text_submit or is_media_play_click)
-
+                self.policy.record_executed(progress, step)
                 self_check_prefix = f"[Self-Check: {step.self_check} — {step.self_check_reason}] " if step.self_check_reason else ""
                 history_lines.append(
-                    f"Step {step_idx + 1}: {self_check_prefix}action={step.action_type}, target='{step.target}'"
+                    f"Step {step_no}: {self_check_prefix}action={step.action_type}, target='{step.target}'"
                     + (f", text='{step.text}'" if step.text else "")
                     + (f", keys={step.keys}" if step.keys else "")
                     + (f", coords={step.coordinates}" if step.coordinates else "")
@@ -1743,16 +1762,12 @@ class DesktopActionExecutor:
                 if (
                     step.action_type == "focus_window"
                     and self._is_simple_open_goal(goal_text)
-                    and os_interop.window_matches_app(os_interop.get_foreground_window(), step.target)
+                    and os_interop.window_matches_app(self.input.foreground_window(), step.target)
                 ):
-                    plan.is_finished = True
-                    plan.success = True
-                    plan.outcome_state = "success"
-                    plan.summary_message = f"Opened {step.target}."
-                    log.info("Simple open goal satisfied at step %d — finishing immediately!", step_idx + 1)
-                    return True
+                    log.info("Simple open goal satisfied at step %d — finishing immediately!", step_no)
+                    return _finish(True, "success", f"Opened {step.target}.")
 
-                # Wait briefly for UI / browser / app to react so the NEXT step can take a confirmation screenshot!
+                # Let the UI react before the next confirmation screenshot
                 wait_time = max(0.35, min(3.0, step.wait_s))
                 for _ in range(int(wait_time * 10)):
                     os_interop.check_emergency_abort()
@@ -1761,37 +1776,52 @@ class DesktopActionExecutor:
                     time.sleep(0.1)
 
             # Reached max_steps without explicit 'done'
-            plan.is_finished = True
-            plan.success = False
-            plan.outcome_state = "unverified" if len(plan.steps) > 0 else "failed"
-            plan.summary_message = (
-                f"Reached maximum steps ({max_steps}) without visual confirmation of completion."
-                if len(plan.steps) > 0
-                else "No actions could be taken."
-            )
-            return False
+            if plan.steps:
+                return _finish(False, "unverified", f"Reached maximum steps ({max_steps}) without visual confirmation of completion.")
+            return _finish(False, "failed", "No actions could be taken.")
 
         except os_interop.EmergencyAbortError as abort_err:
             log.warning("Desktop execution aborted: %s", abort_err)
             if plan.steps and plan.current_step_index < len(plan.steps):
                 plan.steps[plan.current_step_index].status = "aborted"
                 plan.steps[plan.current_step_index].error_message = str(abort_err)
-            plan.is_finished = True
-            plan.success = False
-            plan.outcome_state = "aborted"
-            plan.summary_message = "Aborted by user."
-            return False
+            return _finish(False, "aborted", "Aborted by user.")
 
         except Exception as err:
             log.error("Desktop execution failed at step %d: %s", plan.current_step_index, err, exc_info=True)
             if plan.steps and plan.current_step_index < len(plan.steps):
                 plan.steps[plan.current_step_index].status = "failed"
                 plan.steps[plan.current_step_index].error_message = str(err)
-            plan.is_finished = True
-            plan.success = False
-            plan.outcome_state = "failed"
-            plan.summary_message = f"Error: {err}"
-            return False
+            return _finish(False, "failed", f"Error: {err}")
+
+    @staticmethod
+    def _visual_check_report(plan: DesktopPlan, step_idx: int, prev_obs: Observation, obs: Observation,
+                             progress: PlanProgress) -> str:
+        """Tell the model how much the screen changed after its previous action (and record it in ``progress``)."""
+        if prev_obs.image is None or obs.image is None:
+            return ""
+        progress.last_global_diff, progress.last_local_diff = compute_visual_diff(
+            prev_obs.image, obs.image, focus_coords=progress.last_click_coords, offset=obs.offset
+        )
+        fg_changed = obs.fg_desc != prev_obs.fg_desc
+        prev_step = plan.steps[-1] if plan.steps else None
+        prev_desc = f"{prev_step.action_type} on '{prev_step.target}'" if prev_step else "previous step"
+        g, l = progress.last_global_diff, progress.last_local_diff
+        if g < 0.15 and l < 0.35 and not fg_changed:
+            return (
+                f"⚠️ VISUAL SELF-CHECK WARNING FOR STEP {step_idx} ({prev_desc}):\n"
+                f"- Screen pixel change after your action was ALMOST ZERO (global={g:.2f}%, local={l:.2f}%).\n"
+                "- Your click or key press likely MISSED the interactive element or failed to focus the input field!\n"
+                "- Inspect the coordinate grid lines carefully and adjust your [ymin, xmin, ymax, xmax] coordinates (or use a hotkey)!"
+            )
+        return (
+            f"🔍 VISUAL SELF-CHECK FOR STEP {step_idx} ({prev_desc}):\n"
+            f"- Screen changed after your action (global diff={g:.2f}%, target region diff={l:.2f}%, window_changed={fg_changed}).\n"
+            "- Look at the attached screenshot to CONFIRM FOR YOURSELF:\n"
+            "  1. Did your last action achieve what you intended (or did it type into the wrong field / open a confirmation dialog like 'Don't Save')?\n"
+            "  2. If the user's entire request is now VISIBLY COMPLETE on screen, return action='done' with self_check='goal_confirmed_complete'!\n"
+            "  3. If another step is needed (e.g. clicking the message input box after opening a contact, or clicking 'Don't Save' on a popup), execute that next step now!"
+        )
 
     @staticmethod
     def _stale_step_reason(
@@ -1891,6 +1921,11 @@ class DesktopActionExecutor:
                 problem = str(err)
                 log.warning("Vision step %d decision rejected (attempt %d): %s", step_idx + 1, attempt + 1, err)
                 continue
+            if self.on_decision is not None:
+                try:
+                    self.on_decision(step_idx, parsed, screenshot_b64)
+                except Exception as err:   # recording must never break a takeover
+                    log.debug("on_decision hook failed: %s", err)
             log.info(
                 "Vision Step %d Decision [self_check=%s]: action=%s, target='%s', coords=%s, text=%r, keys=%s "
                 "(reason: %s | thought: %s)",
@@ -1914,13 +1949,14 @@ class DesktopActionExecutor:
         on_pink_action: Optional[Callable[[str, Optional[Tuple[int, int]]], None]] = None,
         on_confirm_action: Optional[Callable[[ActionStep, str, str], bool]] = None,
     ) -> str:
-        """Dispatch a single ActionStep using physical cursor and keyboard control."""
+        """Dispatch a single ActionStep. ALL mouse/keyboard input goes through ``self.input`` (plan 5.2)."""
         os_interop.check_emergency_abort()
         a_type = step.action_type
+        inp = self.input
 
         # Deterministic Confirmation Gate for sensitive/irreversible actions (REVIEW C2).
         # Without a confirmation channel a sensitive step is refused, never run silently.
-        fg = os_interop.get_foreground_window()
+        fg = inp.foreground_window()
         fg_title = fg.title if fg else ""
         fg_proc = fg.process_name if fg else ""
         confirmed = False
@@ -1953,17 +1989,21 @@ class DesktopActionExecutor:
                 return f"Launched and focused '{win.title}'"
             return f"Attempted to launch '{step.target}' via Start Menu"
 
-        if a_type in ("click", "double_click", "right_click", "click_and_type"):
-            # Check for elevated foreground window to prevent UIPI silent drop
-            curr_fg = os_interop.get_foreground_window()
+        if a_type in ("type_text", "press_key", "hotkey") and not step.coordinates and _pink_has_focus(inp):
+            keys = {_norm_key(k) for k in (step.keys or ())}
+            if not (a_type == "hotkey" and ("win" in keys or keys == {"alt", "tab"})):
+                return "FAILED: Pink's own window has keyboard focus, so nothing was typed or pressed"
+
+        if a_type in ("click", "double_click", "right_click", "click_and_type", "type_text"):
+            curr_fg = inp.foreground_window()
             if curr_fg:
                 is_elev, reason = os_interop.is_window_elevated(curr_fg.hwnd)
                 if is_elev:
                     log.warning("Foreground window '%s' [%s] is elevated: %s", curr_fg.title, curr_fg.process_name, reason)
                     return f"FAILED: Target window '{curr_fg.title}' is running as Administrator (UIPI restricted)"
 
-            target_coords = step.coordinates
-            if target_coords is None and step.target:
+            coords = step.coordinates
+            if a_type != "type_text" and coords is None and step.target:
                 # Try one explicit grounding call for the target element
                 box = ground_ui_element(
                     screenshot_b64=screenshot_b64,
@@ -1974,160 +2014,71 @@ class DesktopActionExecutor:
                 )
                 if box:
                     step.grounded_box = box
-                    target_coords = (box.pixel_x, box.pixel_y)
-                    step.coordinates = target_coords
-
-            if target_coords is None:
+                    coords = (box.pixel_x, box.pixel_y)
+                    step.coordinates = coords
+            if a_type != "type_text" and coords is None:
                 # NEVER click the center of the window blindly if the element wasn't found!
                 log.warning("Element '%s' not found on screen; skipping blind click.", step.target)
                 return f"FAILED: Could not locate UI element '{step.target}' on screen"
 
-            cx, cy = target_coords
-            if on_pink_action:
-                on_pink_action("move_to", (cx, cy))
+            if coords is not None:
+                cx, cy = coords
+                if on_pink_action:
+                    on_pink_action("move_to", (cx, cy))
+                if a_type == "type_text":
+                    inp.move(cx, cy, duration_s=0.28)
+                else:
+                    inp.move(cx, cy, duration_s=0.32, steps=26)
+                if a_type == "double_click":
+                    inp.click(cx, cy, button="left", clicks=2, interval_s=0.06)
+                    return f"Double-clicked '{step.target}' at ({cx}, {cy})"
+                if a_type == "right_click":
+                    inp.click(cx, cy, button="right", clicks=1)
+                    return f"Right-clicked '{step.target}' at ({cx}, {cy})"
+                inp.click(cx, cy, button="left", clicks=1)
+                if a_type == "click":
+                    return f"Clicked '{step.target}' at ({cx}, {cy})"
 
-            os_interop.smooth_move_mouse(cx, cy, duration_s=0.32, steps=26)
-
-            if a_type == "double_click":
-                os_interop.click_mouse(cx, cy, button="left", clicks=2, interval_s=0.06)
-                return f"Double-clicked '{step.target}' at ({cx}, {cy})"
-            elif a_type == "right_click":
-                os_interop.click_mouse(cx, cy, button="right", clicks=1)
-                return f"Right-clicked '{step.target}' at ({cx}, {cy})"
-            else:
-                os_interop.click_mouse(cx, cy, button="left", clicks=1)
-
-            if a_type == "click_and_type":
-                time.sleep(0.18)
-                # The click may have focused a different app than the one we judged above (e.g. a terminal pane).
-                # Re-judge against the window that will actually receive the keystrokes (REVIEW C2).
                 # Keystrokes go to whatever has focus AFTER the click; never to Pink's own bubble/chat (REVIEW H2).
-                fg_after = os_interop.get_foreground_window()
+                time.sleep(0.18 if a_type == "click_and_type" else 0.15)
+                fg_after = inp.foreground_window()
                 if fg_after is None or fg_after.process_id == os.getpid():
                     return f"FAILED: '{step.target}' did not take keyboard focus after the click"
                 curr_fg = fg_after
-                if not confirmed and curr_fg is not None and self._is_sensitive_action(
-                    step, fg_title=curr_fg.title, fg_proc=curr_fg.process_name
-                ):
+                # The click may have focused a different app than the one judged above (e.g. a terminal pane).
+                # Re-judge against the window that will actually receive the keystrokes (REVIEW C2).
+                if not confirmed and self._is_sensitive_action(step, fg_title=curr_fg.title, fg_proc=curr_fg.process_name):
                     if not _confirm(curr_fg.title, curr_fg.process_name):
                         return f"{CANCELED_PREFIX} Typing into '{curr_fg.title}' was not confirmed by user"
                     confirmed = True
                     _refocus_after_confirmation(curr_fg)
-                if step.select_all_first:
-                    os_interop.hotkey("ctrl", "a")
-                    time.sleep(0.05)
-                    os_interop.press_key("backspace")
-                    time.sleep(0.05)
-                if step.text:
-                    if on_pink_action:
-                        on_pink_action("typing", (cx, cy))
-                    prof = get_app_profile(curr_fg.process_name if curr_fg else "")
-                    if not prof and step.target:
-                        prof = get_app_profile(step.target)
-                    is_chat = prof.get("is_chat", False)
-                    if not is_chat:
-                        proc_l = curr_fg.process_name.lower() if curr_fg else ""
-                        tgt_l = (step.target or "").lower()
-                        is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
-                        is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
-                    use_shift_enter = prof.get("multiline_shift_enter", is_chat)
-                    expected_hwnd = curr_fg.hwnd if curr_fg else None
-                    os_interop.type_text(
-                        step.text,
-                        delay_between_chars_s=0.016,
-                        use_shift_enter=use_shift_enter,
-                        expected_hwnd=expected_hwnd,
-                        enter_on_newline=confirmed,
-                    )
-                if step.press_enter:
-                    time.sleep(0.08)
-                    os_interop.press_key("enter")
-                return (
-                    f"Clicked '{step.target}' at ({cx}, {cy}) and typed '{step.text or ''}'"
-                    + (" + Enter" if step.press_enter else "")
-                )
-
-            return f"Clicked '{step.target}' at ({cx}, {cy})"
-
-        if a_type in ("type_text", "press_key", "hotkey") and not step.coordinates and _pink_has_focus():
-            keys = {_norm_key(k) for k in (step.keys or ())}
-            if not (a_type == "hotkey" and ("win" in keys or keys == {"alt", "tab"})):
-                return "FAILED: Pink's own window has keyboard focus, so nothing was typed or pressed"
-
-        if a_type == "type_text":
-            curr_fg = os_interop.get_foreground_window()
-            if curr_fg:
-                is_elev, reason = os_interop.is_window_elevated(curr_fg.hwnd)
-                if is_elev:
-                    log.warning("Foreground window '%s' [%s] is elevated: %s", curr_fg.title, curr_fg.process_name, reason)
-                    return f"FAILED: Target window '{curr_fg.title}' is running as Administrator (UIPI restricted)"
-
-            # If the model also provided box_2d on type_text, click it first to be safe!
-            if step.coordinates:
-                cx, cy = step.coordinates
-                if on_pink_action:
-                    on_pink_action("move_to", (cx, cy))
-                os_interop.smooth_move_mouse(cx, cy, duration_s=0.28)
-                os_interop.click_mouse(cx, cy, button="left", clicks=1)
-                time.sleep(0.15)
-                fg_after = os_interop.get_foreground_window()
-                if fg_after is None or fg_after.process_id == os.getpid():
-                    return f"FAILED: '{step.target}' did not take keyboard focus after the click"
-                curr_fg = fg_after
-
-            if step.select_all_first and not step.coordinates:
+            elif step.select_all_first:
                 # Never send a blind Ctrl+A + Backspace to whatever has focus (REVIEW H8).
                 return "FAILED: refusing Ctrl+A/Backspace without clicking the field first"
-            if step.select_all_first:
-                os_interop.hotkey("ctrl", "a")
-                time.sleep(0.05)
-                os_interop.press_key("backspace")
-                time.sleep(0.05)
 
-            if step.text:
-                if on_pink_action:
-                    on_pink_action("typing", step.coordinates)
-                prof = get_app_profile(curr_fg.process_name if curr_fg else "")
-                if not prof and step.target:
-                    prof = get_app_profile(step.target)
-                is_chat = prof.get("is_chat", False)
-                if not is_chat:
-                    proc_l = curr_fg.process_name.lower() if curr_fg else ""
-                    tgt_l = (step.target or "").lower()
-                    is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
-                    is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
-                use_shift_enter = prof.get("multiline_shift_enter", is_chat)
-                expected_hwnd = curr_fg.hwnd if curr_fg else None
-                os_interop.type_text(
-                    step.text,
-                    delay_between_chars_s=0.016,
-                    use_shift_enter=use_shift_enter,
-                    expected_hwnd=expected_hwnd,
-                    enter_on_newline=confirmed,
-                )
-
-            if step.press_enter:
-                time.sleep(0.08)
-                os_interop.press_key("enter")
-
+            self._type_into(step, curr_fg, coords, confirmed, on_pink_action)
+            if a_type == "click_and_type":
+                cx, cy = coords
+                return (f"Clicked '{step.target}' at ({cx}, {cy}) and typed '{step.text or ''}'"
+                        + (" + Enter" if step.press_enter else ""))
             return f"Typed '{step.text or ''}'" + (" + Enter" if step.press_enter else "")
 
         if a_type == "press_key":
             key_name = step.key or step.target or "enter"
-            os_interop.press_key(key_name)
+            inp.press_key(key_name)
             return f"Pressed key '{key_name}'"
 
         if a_type == "hotkey":
             if step.keys:
-                os_interop.hotkey(*step.keys)
+                inp.hotkey(*step.keys)
                 return f"Pressed hotkey {'+'.join(step.keys)}"
             return "No keys specified for hotkey"
 
         if a_type == "scroll":
             if step.coordinates:
-                os_interop.smooth_move_mouse(step.coordinates[0], step.coordinates[1], duration_s=0.2)
+                inp.move(step.coordinates[0], step.coordinates[1], duration_s=0.2)
             clicks = step.scroll_clicks if step.scroll_clicks != 0 else -5
-            os_interop.scroll_mouse(clicks)
+            inp.scroll(clicks)
             return f"Scrolled mouse wheel by {clicks} clicks"
 
         if a_type == "wait":
@@ -2136,6 +2087,47 @@ class DesktopActionExecutor:
 
         log.warning("Unrecognized action_type '%s'", a_type)
         return f"Skipped unknown action '{a_type}'"
+
+    def _type_into(
+        self,
+        step: ActionStep,
+        curr_fg: Optional["os_interop.WindowInfo"],
+        coords: Optional[Tuple[int, int]],
+        confirmed: bool,
+        on_pink_action: Optional[Callable[[str, Optional[Tuple[int, int]]], None]],
+    ) -> None:
+        """Select-all (if asked), type the text into ``curr_fg`` and press Enter (if asked).
+
+        The one typing path for click_and_type and type_text (they used to be two diverging copies, plan 5.3).
+        """
+        inp = self.input
+        if step.select_all_first:
+            inp.hotkey("ctrl", "a")
+            time.sleep(0.05)
+            inp.press_key("backspace")
+            time.sleep(0.05)
+        if step.text:
+            if on_pink_action:
+                on_pink_action("typing", coords)
+            prof = get_app_profile(curr_fg.process_name if curr_fg else "")
+            if not prof and step.target:
+                prof = get_app_profile(step.target)
+            is_chat = prof.get("is_chat", False)
+            if not is_chat:
+                proc_l = curr_fg.process_name.lower() if curr_fg else ""
+                tgt_l = (step.target or "").lower()
+                is_chat = any(c in proc_l for c in ("whatsapp", "discord", "slack", "teams", "telegram"))
+                is_chat = is_chat or any(c in tgt_l for c in ("message", "chat", "reply"))
+            inp.type_text(
+                step.text,
+                delay_between_chars_s=0.016,
+                use_shift_enter=prof.get("multiline_shift_enter", is_chat),
+                expected_hwnd=curr_fg.hwnd if curr_fg else None,
+                enter_on_newline=confirmed,
+            )
+        if step.press_enter:
+            time.sleep(0.08)
+            inp.press_key("enter")
 
 
 # ---------------------------------------------------------------------------
@@ -2268,11 +2260,12 @@ if HAS_PYQT:
             plan: DesktopPlan,
             api_key: str = "",
             parent: Optional[QObject] = None,
+            latch: Optional["os_interop.PanicLatch"] = None,
         ) -> None:
             super().__init__(parent)
             self.plan = plan
             self.api_key = api_key
-            self.executor = DesktopActionExecutor(api_key=api_key)
+            self.executor = DesktopActionExecutor(api_key=api_key, latch=latch)
             self._confirm_lock = threading.Lock()
             self._confirm_event: Optional[threading.Event] = None
             self._confirm_result: bool = False

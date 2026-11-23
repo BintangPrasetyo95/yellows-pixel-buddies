@@ -119,7 +119,7 @@ def fake_esc(monkeypatch):
     monkeypatch.setattr(os_interop, "IS_WINDOWS", True)
     fake = _FakeUser32(0x8000)  # Esc currently held down
     monkeypatch.setattr(os_interop, "user32", fake)
-    monkeypatch.setattr(os_interop, "_SELF_ESC_UNTIL", 0.0)
+
     os_interop.reset_panic_abort()
     yield fake
     os_interop.reset_panic_abort()
@@ -394,6 +394,6 @@ def test_execute_desktop_action_refused_when_off(pet):
     pet._takeover_mode = tg.TAKEOVER_MODE_OFF
     try:
         assert pet.execute_desktop_action({"type": "desktop_action", "app": "Desktop", "intent": "open notepad"}) is False
-        assert pet._desktop_action_worker is None
+        assert pet._takeover.worker is None
     finally:
         pet._takeover_mode = tg.DEFAULT_TAKEOVER_MODE
