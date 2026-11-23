@@ -828,6 +828,14 @@ KNOWN_GAME_EXE_NAMES = {
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_FALLBACK_MODELS = ["gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash"]
 GEMINI_TIMEOUT_S = 35
+# One deadline for a whole request across all fallback models (REVIEW M19): offline used to mean 4 x 35 s.
+GEMINI_TOTAL_DEADLINE_S = 40.0
+GEMINI_CONNECT_TIMEOUT_S = 5.0
+GEMINI_MIN_ATTEMPT_S = 3.0          # don't start another model with less time than this left
+GEMINI_RATE_LIMIT_BACKOFF_S = 60.0  # after HTTP 429, unprompted calls pause instead of hopping models
+CHAT_HISTORY_TURNS = 16             # dialogue turns sent with a chat
+AMBIENT_HISTORY_TURNS = 4           # ...and with unprompted peeks / tray / cinema comments (REVIEW M19)
+MAX_HISTORY_TURNS_IN_MEMORY = 200   # MemoryManager.history is trimmed to this (REVIEW M21)
 DEFAULT_LANGUAGE = "en"  # "en" (English) or "id" (Bahasa Indonesia)
 PINK_SYSTEM_INSTRUCTION = """You are Pink, an animated desktop pet companion living on the Windows taskbar.
 You are a Lightner Ghost inhabiting an autonomous magical girl Darkner doll vessel (designed by Claire Belton, from Toby Fox's Deltarune universe).
@@ -3960,8 +3968,80 @@ def is_image_in_mime(mime_data) -> bool:
     return False
 
 
-def process_dropped_image_to_base64(mime_data) -> tuple[str | None, str]:
-    """Extract an image from QMimeData and return (base64_jpeg, display_name)."""
+WEB_IMAGE_MAX_BYTES = 15 * 1024 * 1024
+WEB_IMAGE_DEADLINE_S = 8.0
+
+
+def fetch_url_capped(url: str, max_bytes: int = WEB_IMAGE_MAX_BYTES, deadline_s: float = WEB_IMAGE_DEADLINE_S,
+                     clock=time.monotonic) -> bytes:
+    """Download ``url`` with a TOTAL deadline and a size cap (REVIEW M22). Raises on any violation."""
+    if not re.match(r"(?i)^https?://", url or ""):
+        raise ValueError("only http(s) image URLs can be fetched")
+    deadline = clock() + deadline_s
+    with requests.get(url, stream=True, timeout=(3.0, deadline_s)) as resp:
+        resp.raise_for_status()
+        declared = int(resp.headers.get("content-length") or 0)
+        if declared > max_bytes:
+            raise ValueError(f"image is too large ({declared} bytes)")
+        chunks, total = [], 0
+        for chunk in resp.iter_content(chunk_size=65536):
+            if clock() > deadline:
+                raise TimeoutError("image download took too long")
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("image is too large")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def web_image_url_in_mime(mime_data) -> str:
+    """The first remote image URL in a drop ("" if none)."""
+    if mime_data is None or not mime_data.hasUrls():
+        return ""
+    for qurl in mime_data.urls():
+        if not qurl.isLocalFile():
+            url_str = qurl.toString()
+            if any(url_str.lower().split("?")[0].endswith(ext) for ext in SUPPORTED_IMAGE_EXTENSIONS):
+                return url_str
+    return ""
+
+
+class WebImageFetchThread(QThread):
+    """Downloads a dropped web image off the GUI thread; emits fetched(base64_jpeg, name) or failed(message)."""
+    fetched = pyqtSignal(str, str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, url: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.url = url
+        self.finished.connect(self.deleteLater)
+
+    def run(self) -> None:
+        try:
+            img = QImage.fromData(fetch_url_capped(self.url))
+            b64 = qimage_to_base64_jpeg(img) if not img.isNull() else ""
+            if not b64:
+                raise ValueError("not a readable image")
+            self.fetched.emit(b64, self.url.split("/")[-1].split("?")[0] or "web_image.jpg")
+        except Exception as err:
+            log.info("Dropped web image could not be fetched: %s", type(err).__name__)
+            self.failed.emit(str(err)[:120])
+
+
+def start_web_image_fetch(owner: QWidget, url: str, on_image) -> WebImageFetchThread:
+    """Fetch ``url`` in the background and call ``on_image(b64, name)`` on the GUI thread when it arrives."""
+    th = WebImageFetchThread(url, parent=owner)
+    th.fetched.connect(on_image)
+    th.start()
+    return th
+
+
+def process_dropped_image_to_base64(mime_data, fetch_web: bool = False) -> tuple[str | None, str]:
+    """Extract an image from QMimeData and return (base64_jpeg, display_name).
+
+    Web URLs are NOT downloaded here unless ``fetch_web``: drop handlers use ``web_image_url_in_mime`` +
+    ``start_web_image_fetch`` so a slow server can't freeze Pink and the source browser (REVIEW M22).
+    """
     if mime_data is None:
         return None, ""
 
@@ -3988,18 +4068,16 @@ def process_dropped_image_to_base64(mime_data) -> tuple[str | None, str]:
                         b64 = qimage_to_base64_jpeg(img)
                         if b64:
                             return b64, local_path.name
-            else:
+            elif fetch_web:
                 url_str = qurl.toString()
                 if any(url_str.lower().split("?")[0].endswith(ext) for ext in SUPPORTED_IMAGE_EXTENSIONS):
                     try:
-                        resp = requests.get(url_str, timeout=5)
-                        if resp.status_code == 200:
-                            img = QImage.fromData(resp.content)
-                            if not img.isNull():
-                                b64 = qimage_to_base64_jpeg(img)
-                                if b64:
-                                    name = url_str.split("/")[-1].split("?")[0] or "web_image.jpg"
-                                    return b64, name
+                        img = QImage.fromData(fetch_url_capped(url_str))
+                        if not img.isNull():
+                            b64 = qimage_to_base64_jpeg(img)
+                            if b64:
+                                name = url_str.split("/")[-1].split("?")[0] or "web_image.jpg"
+                                return b64, name
                     except Exception as err:
                         log.debug("Failed to fetch web image URL %s: %s", url_str, err)
 
@@ -4522,6 +4600,11 @@ class ChatInputOverlay(QWidget):
         if b64:
             self.attach_image(b64, name)
             event.acceptProposedAction()
+            return
+        url = web_image_url_in_mime(event.mimeData())
+        if url:
+            event.acceptProposedAction()          # accept now; attach when the download finishes (REVIEW M22)
+            start_web_image_fetch(self, url, self.attach_image)
         else:
             event.ignore()
 
@@ -5035,6 +5118,9 @@ def identify_active_app_context(exe_name: str, exe_path: str, title: str) -> tup
 FINGERPRINT_SIZE = 32
 
 
+FINGERPRINT_PRESCALE = 64   # cheap nearest-neighbour downscale BEFORE any pixel conversion (REVIEW M20)
+
+
 def compute_screen_fingerprint(pixmap: QPixmap | QImage) -> bytes:
     """Downscale to a 32x32 grayscale image and return its 1024 luminance bytes (row-major, whole screen).
 
@@ -5045,7 +5131,9 @@ def compute_screen_fingerprint(pixmap: QPixmap | QImage) -> bytes:
     """
     if pixmap.isNull():
         return b""
-    src = pixmap.toImage() if isinstance(pixmap, QPixmap) else pixmap
+    # Never convert a full 4K frame: shrink to 64x64 first (fast), then do the careful 32x32 grayscale (REVIEW M20).
+    small = pixmap.scaled(FINGERPRINT_PRESCALE, FINGERPRINT_PRESCALE, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+    src = small.toImage() if isinstance(small, QPixmap) else small
     n = FINGERPRINT_SIZE
     img = src.scaled(n, n, Qt.IgnoreAspectRatio, Qt.SmoothTransformation).convertToFormat(QImage.Format_Grayscale8)
     bpl = img.bytesPerLine()
@@ -5063,25 +5151,40 @@ def compute_fingerprint_diff(fp1: bytes, fp2: bytes) -> float:
     return total_diff / (len(fp1) * 255.0)
 
 
-def capture_screen_and_fingerprint(screen: QScreen | None = None) -> tuple[str, bytes]:
-    """Capture the specified screen (or primaryScreen) and return (compressed JPEG as base64, 32x32 grayscale fingerprint)."""
+def grab_screen(screen: QScreen | None = None) -> tuple[QPixmap | None, bytes]:
+    """Grab a screen and fingerprint it cheaply. The caller runs its "did anything change?" check on the
+    fingerprint and only then converts/encodes the pixmap (REVIEW M20)."""
     target = screen or QApplication.primaryScreen()
     if target is None:
-        return "", b""
+        return None, b""
     pixmap = target.grabWindow(0)
     if pixmap.isNull():
-        return "", b""
-    fp = compute_screen_fingerprint(pixmap)
-    # Downscale to max width 1280 to keep API payload fast and lightweight
-    if pixmap.width() > 1280:
-        pixmap = pixmap.scaledToWidth(1280, Qt.SmoothTransformation)
+        return None, b""
+    return pixmap, compute_screen_fingerprint(pixmap)
 
+
+def encode_screenshot(img: QImage | QPixmap, max_width: int = 1280, quality: int = 75) -> str:
+    """JPEG + base64 for Gemini. Safe on worker threads when given a QImage (QPixmap is GUI-thread only)."""
+    if isinstance(img, QPixmap):
+        img = img.toImage()
+    if img is None or img.isNull():
+        return ""
+    if img.width() > max_width:
+        img = img.scaledToWidth(max_width, Qt.SmoothTransformation)
     buffer = QBuffer()
     buffer.open(QIODevice.WriteOnly)
-    pixmap.save(buffer, "JPEG", 75)
+    img.save(buffer, "JPEG", quality)
     raw_bytes = bytes(buffer.data())
     buffer.close()
-    return base64.b64encode(raw_bytes).decode("utf-8"), fp
+    return base64.b64encode(raw_bytes).decode("utf-8")
+
+
+def capture_screen_and_fingerprint(screen: QScreen | None = None) -> tuple[str, bytes]:
+    """Capture the specified screen (or primaryScreen) and return (compressed JPEG as base64, 32x32 grayscale fingerprint)."""
+    pixmap, fp = grab_screen(screen)
+    if pixmap is None:
+        return "", b""
+    return encode_screenshot(pixmap), fp
 
 
 def capture_screen_base64() -> str:
@@ -5338,6 +5441,12 @@ class MemoryManager:
                 shutil.copy2(str(local_env), str(self.env_path))
         except Exception as err:
             log.warning("Memory migration check skipped: %s", err)
+
+    def _append_history(self, turn: dict) -> None:
+        """Keep the in-memory history bounded; the session file still has everything (REVIEW M21)."""
+        self.history.append(turn)
+        if len(self.history) > MAX_HISTORY_TURNS_IN_MEMORY:
+            del self.history[:-MAX_HISTORY_TURNS_IN_MEMORY]
 
     def _generate_new_session_file(self) -> None:
         """Generate a unique session file path for a fresh session."""
@@ -6952,7 +7061,7 @@ class MemoryManager:
             }
         if seen:
             turn["seen"] = seen
-        self.history.append(turn)
+        self._append_history(turn)
 
         self._ensure_session_file()
         try:
@@ -6983,7 +7092,7 @@ class MemoryManager:
             "anim": anim,
             "had_screen": had_screen,
         }
-        self.history.append(turn)
+        self._append_history(turn)
 
         self._ensure_session_file()
         try:
@@ -7310,9 +7419,10 @@ class MemoryManager:
         overview, _ = self.get_recent_sessions_overview(max_days=2, max_sessions=6)
         return overview
 
-    def search_past_sessions(self, query: str, exclude_filenames: set[str] | None = None, max_results: int = 4) -> str:
-        """Search older session JSON files for keywords/phrases when user asks about past events.
-        Runs locally in ~5ms.
+    def search_past_sessions(self, query: str, exclude_filenames: set[str] | None = None, max_results: int = 4,
+                             max_files: int = 200) -> str:
+        """Search the newest ``max_files`` older session files for keywords when the user asks about past events.
+        Call it off the GUI thread (see GeminiWorkerThread.system_suffix_fn).
         """
         if not query or len(query.strip()) < 3:
             return ""
@@ -7339,7 +7449,7 @@ class MemoryManager:
 
         pattern = re.compile(r"\b(" + "|".join(words) + r")\b", re.IGNORECASE)
 
-        all_session_files = sorted(self.sessions_dir.glob("session_*.json"), reverse=True)
+        all_session_files = sorted(self.sessions_dir.glob("session_*.json"), reverse=True)[:max_files]
         matches = []
 
         for f in all_session_files:
@@ -8537,6 +8647,84 @@ def format_candidate_for_output(
     return formatted_text, anim, is_ghost, seen_summary
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Gemini request policy (REVIEW M19)
+# ---------------------------------------------------------------------------------------------------------------------
+_gemini_backoff_until: float = 0.0
+
+
+def gemini_backoff_remaining(now: float | None = None) -> float:
+    """Seconds left in the rate-limit back-off (0 when calls may go out)."""
+    return max(0.0, _gemini_backoff_until - (time.monotonic() if now is None else now))
+
+
+def note_gemini_rate_limited(now: float | None = None) -> None:
+    global _gemini_backoff_until
+    _gemini_backoff_until = (time.monotonic() if now is None else now) + GEMINI_RATE_LIMIT_BACKOFF_S
+
+
+def request_timeout(deadline: float | None, now: float | None = None) -> tuple[float, float]:
+    """(connect, read) timeout for one HTTP call that must finish before ``deadline``."""
+    if deadline is None:
+        return GEMINI_CONNECT_TIMEOUT_S, float(GEMINI_TIMEOUT_S)
+    remaining = deadline - (time.monotonic() if now is None else now)
+    return GEMINI_CONNECT_TIMEOUT_S, max(1.0, min(float(GEMINI_TIMEOUT_S), remaining))
+
+
+def run_model_fallback(models: list[str], attempt, deadline: float, clock=time.monotonic):
+    """Try ``attempt(model)`` for each model until one works, all within ONE deadline.
+
+    Returns ``(result, "")`` or ``(None, error_message)``. A 429 stops at once and starts the back-off: hopping
+    to the next model only burned more quota (REVIEW M19). 400/404/5xx, timeouts and network errors try the next
+    model while time remains; other HTTP errors (401/403...) stop immediately.
+    """
+    last_error = ""
+    for model in models:
+        if deadline - clock() < GEMINI_MIN_ATTEMPT_S:
+            return None, last_error or "Request timed out. Google Gemini servers might be busy!"
+        try:
+            return attempt(model), ""
+        except requests.exceptions.HTTPError as http_err:
+            status = http_err.response.status_code if http_err.response is not None else 0
+            body = http_err.response.text if http_err.response is not None else str(http_err)
+            last_error = privacy.redact_secrets(f"HTTP {status}: {body[:120]}")
+            if status == 429:
+                note_gemini_rate_limited()
+                log.warning("Gemini rate limited (HTTP 429) on %s; backing off for %.0fs.", model, GEMINI_RATE_LIMIT_BACKOFF_S)
+                return None, "Rate limited by Gemini (HTTP 429). Try again in a minute!"
+            if status in (400, 404, 500, 502, 503):
+                log.warning("Model %s returned HTTP %s, trying fallback...", model, status)
+                continue
+            return None, last_error
+        except requests.exceptions.Timeout:
+            last_error = "Request timed out. Google Gemini servers might be busy!"
+            log.warning("Model %s timed out, trying fallback...", model)
+        except Exception as err:
+            last_error = privacy.redact_secrets(f"Network error: {err}")
+            log.warning("Model %s failed (%s), trying fallback...", model, type(err).__name__)
+    return None, f"All models failed. Last error: {last_error[:120]}"
+
+
+def _log_gemini_payload(kind: str, model: str, system_inst: str, contents: list, image_b64: str | None) -> None:
+    if log.isEnabledFor(logging.DEBUG):
+        text_chars = sum(len(p.get("text", "")) for c in contents for p in c.get("parts", []) if isinstance(p, dict))
+        log.debug("Gemini %s -> %s: system=%d chars, contents=%d turns/%d chars, image=%d KB",
+                  kind, model, len(system_inst), len(contents), text_chars, len(image_b64 or "") * 3 // 4 // 1024)
+
+
+_PAST_CUES = re.compile(
+    r"\b(?:remember|recall|remind\s+me\s+what|yesterday|last\s+(?:time|night|week|month|session)|earlier|before|"
+    r"previously|ago|the\s+other\s+day|we\s+(?:talked|discussed|chatted|spoke)|did\s+(?:we|i|you)|you\s+said|"
+    r"i\s+(?:said|told|mentioned)|kemarin|dulu|tadi|minggu\s+lalu|bulan\s+lalu|waktu\s+itu|pernah|ingat|inget)\b",
+    re.IGNORECASE,
+)
+
+
+def wants_past_session_search(text: str) -> bool:
+    """Only questions about the past search old session files (REVIEW M21)."""
+    return bool(_PAST_CUES.search(text or ""))
+
+
 class GeminiWorkerThread(QThread):
     response_ready = pyqtSignal(str, str, bool, str)  # (spoken_text, anim_name, is_ghost, seen_summary)
     error_occurred = pyqtSignal(str)       # (error_message)
@@ -8551,6 +8739,8 @@ class GeminiWorkerThread(QThread):
         model_name: str = GEMINI_MODEL,
         is_auto_peek: bool = False,
         parent: QWidget | None = None,
+        screenshot_image: QImage | None = None,
+        system_suffix_fn=None,
     ) -> None:
         super().__init__(parent)
         self.api_key = api_key
@@ -8558,46 +8748,46 @@ class GeminiWorkerThread(QThread):
         self.system_instruction = system_instruction
         self.history = history
         self.screenshot_b64 = screenshot_b64
+        # Raw capture: JPEG-encoded here on the worker thread, not on the GUI thread (REVIEW M20)
+        self.screenshot_image = screenshot_image
+        # Slow context (e.g. searching old session files) computed here, off the GUI thread (REVIEW M21)
+        self.system_suffix_fn = system_suffix_fn
         self.model_name = model_name
         self.is_auto_peek = is_auto_peek
+        self._deadline: float | None = None
+
+    def _post_timeout(self) -> tuple[float, float]:
+        return request_timeout(self._deadline)
 
     def run(self) -> None:
-        models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
-        last_error = ""
-
-        for idx, model in enumerate(models_to_try):
-            is_last = (idx == len(models_to_try) - 1)
-            try:
-                spoken_text, anim, is_ghost, seen_summary = self._call_gemini(model)
-                self.response_ready.emit(spoken_text, anim, is_ghost, seen_summary)
+        try:
+            if self.is_auto_peek and gemini_backoff_remaining() > 0:
+                self.error_occurred.emit("Rate limited by Gemini; skipping this unprompted call.")
                 return
-            except requests.exceptions.HTTPError as http_err:
-                status_code = http_err.response.status_code if http_err.response is not None else 0
-                resp_text = http_err.response.text if http_err.response is not None else str(http_err)
-                last_error = f"HTTP {status_code}: {resp_text[:120]}"
-                # Fallback on model not found (404), bad model parameter (400), rate limit (429), or server issues (500, 502, 503)
-                if status_code in (400, 404, 429, 500, 502, 503) and not is_last:
-                    log.warning("Model %s returned HTTP %s, trying fallback...", model, status_code)
-                    continue
-                else:
-                    self.error_occurred.emit(last_error)
-                    return
-            except requests.exceptions.Timeout:
-                last_error = f"Model {model} request timed out."
-                if not is_last:
-                    log.warning("Model %s timed out, trying fallback...", model)
-                    continue
-                self.error_occurred.emit("Request timed out. Google Gemini servers might be busy!")
-                return
-            except Exception as err:
-                last_error = privacy.redact_secrets(f"Network error: {err}")
-                if not is_last:
-                    log.warning("Model %s had network error (%s), trying fallback...", model, err)
-                    continue
-                self.error_occurred.emit(last_error)
-                return
-
-        self.error_occurred.emit(f"All models failed. Last error: {last_error[:120]}")
+            if self.screenshot_image is not None and not self.screenshot_b64:
+                self.screenshot_b64 = encode_screenshot(self.screenshot_image) or None
+            self.screenshot_image = None
+            if self.system_suffix_fn is not None:
+                try:
+                    suffix = self.system_suffix_fn()
+                except Exception as err:   # extra context is optional
+                    log.debug("Extra prompt context failed: %s", err)
+                    suffix = ""
+                if suffix:
+                    self.system_instruction += f"\n\n{suffix}\n"
+            models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
+            self._deadline = time.monotonic() + GEMINI_TOTAL_DEADLINE_S
+            result, err = run_model_fallback(models_to_try, self._call_gemini, self._deadline)
+            if result is not None:
+                self.response_ready.emit(*result)
+            else:
+                self.error_occurred.emit(err)
+        finally:
+            # A finished worker must not pin a screenshot + 30 KB prompt in memory for the app's lifetime (REVIEW M21)
+            self.screenshot_b64 = None
+            self.screenshot_image = None
+            self.system_instruction = ""
+            self.history = []
 
     def _call_gemini(self, model: str) -> tuple[str, str, bool, str]:
         # Key in a header, never in the URL: requests puts the URL into error messages, which used to be logged and
@@ -8642,7 +8832,7 @@ class GeminiWorkerThread(QThread):
                     cleaned_p = re.sub(r"(?m)^\*\s+\*\s+", "* ", p_text)
                     chat_turns.append({"role": "model", "parts": [{"text": cleaned_p}]})
 
-        contents = chat_turns[-16:]
+        contents = chat_turns[-(AMBIENT_HISTORY_TURNS if self.is_auto_peek else CHAT_HISTORY_TURNS):]
 
         # Enrich system instruction with episodic memory of recent screen sights
         system_inst = self.system_instruction
@@ -8701,7 +8891,8 @@ class GeminiWorkerThread(QThread):
                     }
                 }
 
-                resp = requests.post(url, headers=headers, json=payload, timeout=GEMINI_TIMEOUT_S)
+                _log_gemini_payload("auto-peek", model, system_inst, attempt_contents, self.screenshot_b64)
+                resp = requests.post(url, headers=headers, json=payload, timeout=self._post_timeout())
                 resp.raise_for_status()
 
                 data = resp.json()
@@ -8838,7 +9029,8 @@ class GeminiWorkerThread(QThread):
             }
         }
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=GEMINI_TIMEOUT_S)
+        _log_gemini_payload("chat", model, system_inst, contents, self.screenshot_b64)
+        resp = requests.post(url, headers=headers, json=payload, timeout=self._post_timeout())
         resp.raise_for_status()
 
         data = resp.json()
@@ -8995,49 +9187,36 @@ class GeminiQuestionWorkerThread(QThread):
         source_type: str = "personality",
         model_name: str = GEMINI_MODEL,
         parent: QWidget | None = None,
+        screenshot_image: QImage | None = None,
     ) -> None:
         super().__init__(parent)
         self.api_key = api_key
         self.user_prompt = user_prompt
         self.system_instruction = system_instruction
         self.screenshot_b64 = screenshot_b64
+        self.screenshot_image = screenshot_image   # encoded on this thread (REVIEW M20)
         self.source_type = source_type
         self.model_name = model_name
+        self._deadline: float | None = None
 
     def run(self) -> None:
-        models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
-        last_error = ""
-
-        for idx, model in enumerate(models_to_try):
-            is_last = (idx == len(models_to_try) - 1)
-            try:
-                q_item = self._call_gemini(model)
+        try:
+            if gemini_backoff_remaining() > 0:
+                self.error_occurred.emit("Rate limited by Gemini; skipping this question.")
+                return
+            if self.screenshot_image is not None and not self.screenshot_b64:
+                self.screenshot_b64 = encode_screenshot(self.screenshot_image) or None
+            self.screenshot_image = None
+            models_to_try = [self.model_name] + [m for m in GEMINI_FALLBACK_MODELS if m != self.model_name]
+            self._deadline = time.monotonic() + GEMINI_TOTAL_DEADLINE_S
+            q_item, err = run_model_fallback(models_to_try, self._call_gemini, self._deadline)
+            if q_item is not None:
                 self.question_ready.emit(q_item, self.source_type)
-                return
-            except requests.exceptions.HTTPError as http_err:
-                status_code = http_err.response.status_code if http_err.response is not None else 0
-                resp_text = http_err.response.text if http_err.response is not None else str(http_err)
-                last_error = f"HTTP {status_code}: {resp_text[:120]}"
-                if status_code in (400, 404, 429, 500, 502, 503) and not is_last:
-                    log.warning("Model %s returned HTTP %s for question, trying fallback...", model, status_code)
-                    continue
-                else:
-                    self.error_occurred.emit(last_error)
-                    return
-            except requests.exceptions.Timeout:
-                last_error = f"Model {model} question request timed out."
-                if not is_last:
-                    continue
-                self.error_occurred.emit("Question request timed out.")
-                return
-            except Exception as err:
-                last_error = f"Network error during question generation: {err}"
-                if not is_last:
-                    continue
-                self.error_occurred.emit(last_error)
-                return
-
-        self.error_occurred.emit(f"All models failed for question. Last error: {last_error[:120]}")
+            else:
+                self.error_occurred.emit(err)
+        finally:
+            self.screenshot_b64 = None
+            self.system_instruction = ""
 
     def _call_gemini(self, model: str) -> QuestionItem:
         # Key in a header, never in the URL: requests puts the URL into error messages, which used to be logged and
@@ -9069,7 +9248,9 @@ class GeminiQuestionWorkerThread(QThread):
             }
         }
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=GEMINI_TIMEOUT_S)
+        _log_gemini_payload("question", model, self.system_instruction, payload["contents"], self.screenshot_b64)
+        resp = requests.post(url, headers=headers, json=payload,
+                             timeout=request_timeout(getattr(self, "_deadline", None)))
         resp.raise_for_status()
 
         data = resp.json()
@@ -10998,65 +11179,45 @@ class CodebaseStateProvider:
         self._git_cache_ttl: float = 60.0
 
     def get_git_info(self) -> dict[str, Any] | None:
-        """Query active Git branch, latest commit, and working tree status (cached)."""
+        """Cached git branch / commit / dirty state. Never blocks: a stale cache is refreshed on a background thread
+        and the GUI keeps using the previous value meanwhile (REVIEW M21)."""
         if getattr(sys, "frozen", False):
             return None
-
         if not (_exe_dir / ".git").is_dir():
             return None
-
         now = time.time()
-        if self._git_cache is not None and (now - self._last_git_check_time) < self._git_cache_ttl:
-            return self._git_cache
+        if (now - self._last_git_check_time) >= self._git_cache_ttl and not getattr(self, "_git_refreshing", False):
+            self._git_refreshing = True
+            self._last_git_check_time = now
+            threading.Thread(target=self._refresh_git_cache, name="git-info", daemon=True).start()
+        return self._git_cache
 
+    def _refresh_git_cache(self) -> None:
+        try:
+            self._git_cache = self._read_git_info()
+        finally:
+            self._git_refreshing = False
+
+    @staticmethod
+    def _read_git_info() -> dict[str, Any] | None:
         git_info: dict[str, Any] = {"branch": "", "commit": "", "is_dirty": False, "dirty_count": 0}
         try:
             extra_kwargs: dict[str, Any] = {
                 "cwd": str(_exe_dir),
                 "text": True,
-                "timeout": 0.8,
+                "timeout": 3.0,
                 "stderr": subprocess.DEVNULL,
+                "stdin": subprocess.DEVNULL,
             }
             if os.name == "nt":
                 extra_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                sinfo = subprocess.STARTUPINFO()
-                sinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                sinfo.wShowWindow = subprocess.SW_HIDE
-                extra_kwargs["startupinfo"] = sinfo
-
-            # Current branch
-            branch_out = subprocess.check_output(
-                ["git", "branch", "--show-current"],
-                **extra_kwargs
-            ).strip()
-            git_info["branch"] = branch_out or "detached"
-
-            # Last commit
-            commit_out = subprocess.check_output(
-                ["git", "log", "-1", "--format=%h - %s (%cr)"],
-                **extra_kwargs
-            ).strip()
-            git_info["commit"] = commit_out
-
-            # Status / uncommitted changes
-            status_out = subprocess.check_output(
-                ["git", "status", "--porcelain"],
-                **extra_kwargs
-            ).strip()
-            if status_out:
-                lines = [l for l in status_out.splitlines() if l.strip()]
-                git_info["is_dirty"] = len(lines) > 0
-                git_info["dirty_count"] = len(lines)
-            else:
-                git_info["is_dirty"] = False
-                git_info["dirty_count"] = 0
-
-            self._git_cache = git_info
-            self._last_git_check_time = now
+            git_info["branch"] = subprocess.check_output(["git", "branch", "--show-current"], **extra_kwargs).strip() or "detached"
+            git_info["commit"] = subprocess.check_output(["git", "log", "-1", "--format=%h - %s (%cr)"], **extra_kwargs).strip()
+            lines = [l for l in subprocess.check_output(["git", "status", "--porcelain"], **extra_kwargs).splitlines() if l.strip()]
+            git_info["is_dirty"] = bool(lines)
+            git_info["dirty_count"] = len(lines)
             return git_info
         except Exception:
-            self._git_cache = None
-            self._last_git_check_time = now
             return None
 
     def get_codebase_state(self, pet: Any) -> dict[str, Any]:
@@ -11330,7 +11491,6 @@ class YellowsPixelBuddies(QWidget):
         self._voice_manager: voice_service.VoiceManager | None = None
         self._voice_overlay: takeover_overlay.VoiceModeOverlay | None = None
         self._voice_mode_enabled: bool = False
-        self._voice_mode_context_action: QAction | None = None
         self._voice_mode_tray_action: QAction | None = None
         self._memory = MemoryManager(USER_DATA_DIR, legacy_dir=LEGACY_DATA_DIR)
         self._update_checker_thread: UpdateCheckerThread | None = None
@@ -11338,7 +11498,7 @@ class YellowsPixelBuddies(QWidget):
         self._git_update_thread: GitUpdateThread | None = None
         self._available_update_info: tuple[str, str, str, str, str] | None = None
         self._postponed_update_version: str | None = None
-        self._gemini_thread: GeminiWorkerThread | None = None
+        self._gemini_thread = None   # property: replacing it deletes the finished predecessor (REVIEW M21)
         self._is_ghost_talking: bool = False
         self._ghost_aura_cache: dict[int, QPixmap] = {}
         self._dialogue_enabled: bool = DIALOGUE_ENABLED
@@ -11394,7 +11554,7 @@ class YellowsPixelBuddies(QWidget):
         self._last_song_start_time: float = -9999.0
         self._filter_shorts_enabled: bool = SONG_FILTER_SHORTS_ENABLED
         self._is_handling_user_chat: bool = False
-        self._question_thread: GeminiQuestionWorkerThread | None = None
+        self._question_thread = None
         self._question_token: int = 0   # bumped when chat opens / a takeover starts, so stale questions are dropped
         self._current_song: tuple[str, str] | None = None
         self._recent_question_texts: list[str] = []
@@ -13116,25 +13276,20 @@ RULES:
 
         source = forced_source or self._pick_question_source()
 
-        screenshot_b64 = None
+        screenshot_image = None
         if source == "screen" and not self._may_capture_autonomously("question"):
             source = "memory" if self._has_memory_highlights() else "personality"   # REVIEW H12
         if source == "screen":
-            if hasattr(self, "_dialogue_overlay"):
-                self._dialogue_overlay.hide()
-            self.hide()
-            QApplication.processEvents()
             try:
-                screenshot_b64, _ = capture_screen_and_fingerprint()
-                if screenshot_b64:
-                    self._note_screen_capture("question")
+                grab, _ = self._grab_screen_without_pink()
+                if grab is None:
+                    raise RuntimeError("empty capture")
+                screenshot_image = grab.toImage()
+                self._note_screen_capture("question")
             except Exception as err:
                 log.warning("Question screenshot failed, falling back to memory/personality: %s", err)
                 source = "memory" if self._has_memory_highlights() else "personality"
-                screenshot_b64 = None
-            finally:
-                self.show()
-                ensure_window_topmost(self)
+                screenshot_image = None
 
         self._phase = Phase.PAUSE
         self._pause_elapsed = False
@@ -13165,7 +13320,7 @@ RULES:
             api_key=api_key,
             user_prompt=user_prompt,
             system_instruction=system_inst,
-            screenshot_b64=screenshot_b64,
+            screenshot_image=screenshot_image,
             source_type=source,
             model_name=GEMINI_MODEL,
             parent=self,
@@ -14288,28 +14443,21 @@ RULES:
             return
 
         screenshot_b64 = None
+        screenshot_image = None
         if attached_image_b64:
             screenshot_b64 = attached_image_b64
         elif see_screen:
-            # Briefly hide Pink and speech bubble so she doesn't screenshot herself
-            if hasattr(self, "_dialogue_overlay"):
-                self._dialogue_overlay.hide()
-            self.hide()
-            QApplication.processEvents()
             try:
-                screenshot_b64 = capture_screen_base64()
-                if not screenshot_b64:
+                grab, _ = self._grab_screen_without_pink()
+                if grab is None:
                     raise RuntimeError("Screen capture returned empty image.")
+                screenshot_image = grab.toImage()   # JPEG-encoded on the worker thread (REVIEW M20)
             except Exception as err:
-                self.show()
-                ensure_window_topmost(self)
                 err_msg = f"Screen capture failed: {err}"
                 spoken_err = f"* Mew?! My screen vision short-circuited:\n* {str(err)[:80]}"
                 self._memory.record_error(text, err_msg, spoken_text=spoken_err, anim="burnt", had_screen=True)
                 self._trigger_error_burnt(spoken_err)
                 return
-            self.show()
-            ensure_window_topmost(self)
 
         # Enter thinking state
         self._phase = Phase.PAUSE
@@ -14423,10 +14571,12 @@ RULES:
                 "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs!"
             )
 
-        # On-demand search through older sessions if user asks about past topics or events
-        searched_history = self._memory.search_past_sessions(text, exclude_filenames=included_files)
-        if searched_history:
-            system_inst += f"\n\n{searched_history}\n"
+        # On-demand search through older sessions, only when the user asks about the past, and on the worker
+        # thread: it parses old session files and used to run on the GUI thread for every chat (REVIEW M21).
+        past_search_fn = None
+        if wants_past_session_search(text):
+            mem, inc = self._memory, set(included_files)
+            past_search_fn = lambda q=text: mem.search_past_sessions(q, exclude_filenames=inc)  # noqa: E731
 
         ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
         if ambient_ctx:
@@ -14555,6 +14705,8 @@ RULES:
             system_instruction=system_inst,
             history=self._memory.history,
             screenshot_b64=screenshot_b64,
+            screenshot_image=screenshot_image,
+            system_suffix_fn=past_search_fn,
             model_name=GEMINI_MODEL,
             is_auto_peek=False,
             parent=self,
@@ -15175,13 +15327,13 @@ RULES:
         if hasattr(self, "_chat_input") and self._chat_input is not None:
             self._chat_input.set_language(lang)
 
-        for act in (getattr(self, "_en_tray_action", None), getattr(self, "_en_context_action", None)):
+        for act in (getattr(self, "_en_tray_action", None),):
             if act is not None:
                 act.blockSignals(True)
                 act.setChecked(lang == "en")
                 act.blockSignals(False)
 
-        for act in (getattr(self, "_id_tray_action", None), getattr(self, "_id_context_action", None)):
+        for act in (getattr(self, "_id_tray_action", None),):
             if act is not None:
                 act.blockSignals(True)
                 act.setChecked(lang == "id")
@@ -15202,7 +15354,7 @@ RULES:
             self._voice_mode_enabled = bool(enabled)
 
         # Synchronize checkable action states without recursive signal loops
-        for act in (getattr(self, "_voice_mode_tray_action", None), getattr(self, "_voice_mode_context_action", None)):
+        for act in (getattr(self, "_voice_mode_tray_action", None),):
             if act is not None:
                 act.blockSignals(True)
                 act.setChecked(self._voice_mode_enabled)
@@ -15220,7 +15372,7 @@ RULES:
     def _on_voice_overlay_dismissed(self) -> None:
         """Sync menu states when user dismisses the Voice Mode HUD via ESC or [X]."""
         self._voice_mode_enabled = False
-        for act in (getattr(self, "_voice_mode_tray_action", None), getattr(self, "_voice_mode_context_action", None)):
+        for act in (getattr(self, "_voice_mode_tray_action", None),):
             if act is not None:
                 act.blockSignals(True)
                 act.setChecked(False)
@@ -15354,25 +15506,15 @@ RULES:
 
         self._reset_ambient_ai_cooldowns(time.perf_counter())
 
-        # Briefly hide Pink and speech bubble so she doesn't screenshot herself
-        if hasattr(self, "_dialogue_overlay"):
-            self._dialogue_overlay.hide()
-        self.hide()
-        QApplication.processEvents()
-        screenshot_b64 = None
-        current_fp = b""
+        # Grab + cheap fingerprint first; the JPEG is only made (on the worker) if the screen changed (REVIEW M20).
         try:
-            screenshot_b64, current_fp = capture_screen_and_fingerprint()
-            if not screenshot_b64:
+            grab, current_fp = self._grab_screen_without_pink()
+            if grab is None:
                 raise RuntimeError("Screen capture returned empty image.")
             self._note_screen_capture("auto comment")
         except Exception as err:
-            self.show()
-            ensure_window_topmost(self)
             log.warning("Auto screen capture failed: %s", err)
             return
-        self.show()
-        ensure_window_topmost(self)
 
         is_gaming, game_name = self._check_is_game_mode()
         diff_threshold = GAME_DIFF_THRESHOLD if is_gaming else AUTO_SCREEN_DIFF_THRESHOLD
@@ -15388,6 +15530,7 @@ RULES:
                 return
 
         self._last_screen_fingerprint = current_fp
+        screenshot_image = grab.toImage()
 
         # Enter thinking state
         self._phase = Phase.PAUSE
@@ -15434,16 +15577,7 @@ RULES:
             except Exception:
                 pass
 
-        recent_history, _ = self._memory.get_recent_sessions_overview(max_days=2, max_sessions=6)
-        if recent_history:
-            system_inst += (
-                f"\n\nRECENT PAST CONVERSATION LOGS (TODAY & YESTERDAY):\n"
-                f"{recent_history}\n\n"
-                "CRITICAL INSTRUCTION ON PAST SESSIONS:\n"
-                "- The user may ask about what you talked about earlier today, yesterday, what problems you solved together, or exact timestamps.\n"
-                "- Refer directly to the exact logs above! State the true facts and timestamps as recorded.\n"
-                "- If the user asks about an event or exact minute that is NOT in the logs, DO NOT GUESS OR INVENT IT. Honestly state in your sassy way that it's not in your logs!"
-            )
+        # Unprompted peeks don't carry earlier-session logs: they were most of every peek's payload (REVIEW M19).
 
         ambient_ctx = self._memory.get_recent_ambient_context(max_items=3, max_age_s=120)
         if ambient_ctx:
@@ -15587,7 +15721,7 @@ RULES:
             user_prompt=auto_prompt,
             system_instruction=system_inst,
             history=self._memory.history,
-            screenshot_b64=screenshot_b64,
+            screenshot_image=screenshot_image,
             model_name=GEMINI_MODEL,
             is_auto_peek=True,
             parent=self,
@@ -17668,11 +17802,9 @@ RULES:
             log.info("Tray screen reading skipped: workstation locked or user away.")
             return
 
-        screenshot_b64 = None
-        current_fp = b""
         try:
-            screenshot_b64, current_fp = capture_screen_and_fingerprint()
-            if not screenshot_b64:
+            grab, current_fp = grab_screen()
+            if grab is None:
                 return
             self._note_screen_capture("while hidden in tray")
         except Exception as err:
@@ -17686,6 +17818,7 @@ RULES:
                 return
 
         self._last_screen_fingerprint = current_fp
+        screenshot_image = grab.toImage()
 
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
@@ -17758,7 +17891,7 @@ RULES:
             user_prompt=tray_prompt,
             system_instruction=system_inst,
             history=self._memory.history,
-            screenshot_b64=screenshot_b64,
+            screenshot_image=screenshot_image,
             model_name=GEMINI_MODEL,
             is_auto_peek=True,
             parent=self,
@@ -18712,11 +18845,18 @@ RULES:
 
         b64_data, filename = process_dropped_image_to_base64(event.mimeData())
         if not b64_data:
-            event.ignore()
+            url = web_image_url_in_mime(event.mimeData())
+            if not url:
+                event.ignore()
+                return
+            event.acceptProposedAction()          # accept now; handle when the download finishes (REVIEW M22)
+            start_web_image_fetch(self, url, self._handle_dropped_image)
             return
 
         event.acceptProposedAction()
+        self._handle_dropped_image(b64_data, filename)
 
+    def _handle_dropped_image(self, b64_data: str, filename: str) -> None:
         # If chat input overlay is currently open, attach to it!
         if hasattr(self, "_chat_input") and self._chat_input.isVisible():
             self._chat_input.attach_image(b64_data, filename)
@@ -18886,6 +19026,7 @@ RULES:
                 chosen = hide_menu.exec_(event.globalPos())
             finally:
                 self._menu_open = False
+                hide_menu.deleteLater()   # every right-click used to leak a QMenu (REVIEW L10)
 
             if chosen is show_up_action:
                 self._on_peek_ears_clicked()
@@ -18904,7 +19045,6 @@ RULES:
         voice_mode_act.setCheckable(True)
         voice_mode_act.setChecked(getattr(self, "_voice_mode_enabled", False))
         voice_mode_act.toggled.connect(self._toggle_voice_mode)
-        self._voice_mode_context_action = voice_mode_act
 
         lang_menu = menu.addMenu("Language / Bahasa")
         cur_lang = getattr(self, "_language", "en")
@@ -18912,13 +19052,11 @@ RULES:
         en_act.setCheckable(True)
         en_act.setChecked(cur_lang == "en")
         en_act.triggered.connect(lambda: self.set_language("en"))
-        self._en_context_action = en_act
 
         id_act = lang_menu.addAction("Bahasa Indonesia")
         id_act.setCheckable(True)
         id_act.setChecked(cur_lang == "id")
         id_act.triggered.connect(lambda: self.set_language("id"))
-        self._id_context_action = id_act
         ask_action = menu.addAction("Ask me something")
         shop_action = menu.addAction("Visit Shop")
         alarms_action = menu.addAction("Alarms & Timers (COMING SOON)")
@@ -19004,6 +19142,8 @@ RULES:
         finally:
             self._menu_open = False
             self._resume_walk_after_menu()
+            # The menu is rebuilt from the model each time, so nothing may keep pointers into it (REVIEW L10).
+            menu.deleteLater()
         if chosen is exit_action:
             self._quit()
         elif chosen is restart_action:
@@ -19923,23 +20063,14 @@ RULES:
 
         # Capture video screen snapshot for vision context
         target_screen = video_screen or self._current_screen() or QApplication.primaryScreen()
-        screenshot_b64 = None
+        grab = None
         current_fp = b""
         try:
-            # Briefly hide speech overlay so Pink doesn't screenshot her own bubble
-            if hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active():
-                self._dialogue_overlay.hide()
-            self.hide()
-            QApplication.processEvents()
-
-            screenshot_b64, current_fp = capture_screen_and_fingerprint(target_screen)
-            if screenshot_b64:
+            grab, current_fp = self._grab_screen_without_pink(target_screen)
+            if grab is not None:
                 self._note_screen_capture("cinema")
         except Exception as err:
             log.warning("Cinema screenshot capture error: %s", err)
-        finally:
-            self.show()
-            ensure_window_topmost(self)
 
         # Visual delta check: If screen hasn't changed at all (e.g. paused on freeze frame)
         if self._last_cinema_fingerprint is not None and current_fp:
@@ -19949,6 +20080,7 @@ RULES:
                 return
         if current_fp:
             self._last_cinema_fingerprint = current_fp
+        screenshot_image = grab.toImage() if grab is not None else None
 
         # Build prompt
         clean_title = video_title or getattr(self, "_cinema_video_title", "") or "Video"
@@ -19996,7 +20128,7 @@ RULES:
                 user_prompt=cinema_prompt,
                 system_instruction=system_inst,
                 history=[],
-                screenshot_b64=screenshot_b64,
+                screenshot_image=screenshot_image,
                 model_name=GEMINI_MODEL,
                 is_auto_peek=True,
                 parent=self,
@@ -20147,6 +20279,71 @@ RULES:
             self._abort_desktop_takeover("Desktop Cursor Control switched off")
         self._save_live_settings()
         log.info("Desktop Cursor Control mode: %s", mode)
+
+    @staticmethod
+    def _retire_thread(old) -> None:
+        """deleteLater a finished worker that is being replaced. Every worker is parented to the pet, so before
+        this each one (with its screenshot and prompt) lived until exit (REVIEW M21)."""
+        if old is not None:
+            try:
+                if not old.isRunning():
+                    old.deleteLater()
+            except RuntimeError:
+                pass
+
+    @property
+    def _gemini_thread(self):
+        return self.__dict__.get("_gemini_thread_obj")
+
+    @_gemini_thread.setter
+    def _gemini_thread(self, thread) -> None:
+        old = self.__dict__.get("_gemini_thread_obj")
+        if old is not thread:
+            self._retire_thread(old)
+        self.__dict__["_gemini_thread_obj"] = thread
+
+    @property
+    def _question_thread(self):
+        return self.__dict__.get("_question_thread_obj")
+
+    @_question_thread.setter
+    def _question_thread(self, thread) -> None:
+        old = self.__dict__.get("_question_thread_obj")
+        if old is not thread:
+            self._retire_thread(old)
+        self.__dict__["_question_thread_obj"] = thread
+
+    def _grab_screen_without_pink(self, screen: QScreen | None = None) -> tuple[QPixmap | None, bytes]:
+        """Grab the screen with Pink, her bubble and the chat box left out.
+
+        Uses capture exclusion (WDA_EXCLUDEFROMCAPTURE) instead of hide()/processEvents()/show(), which made Pink
+        blink on every peek and re-entered the event loop mid-handler (REVIEW M20). Falls back to hiding on Windows
+        versions without capture exclusion.
+        """
+        widgets = [w for w in (self, getattr(self, "_dialogue_overlay", None), getattr(self, "_chat_input", None))
+                   if w is not None and w.isVisible()]
+        keep_excluded = self._is_taking_over_cursor       # a takeover already excludes them; leave that alone
+        results = [os_interop.set_window_exclude_from_capture(w, True) for w in widgets]
+        hidden: list = []
+        if not all(results):
+            for w, ok in zip(widgets, results):
+                if ok and not keep_excluded:
+                    os_interop.set_window_exclude_from_capture(w, False)
+                w.hide()
+                hidden.append(w)
+            QApplication.processEvents()
+        else:
+            os_interop.dwm_flush()
+        try:
+            return grab_screen(screen)
+        finally:
+            if not hidden and not keep_excluded:
+                for w in widgets:
+                    os_interop.set_window_exclude_from_capture(w, False)
+            for w in hidden:
+                w.show()
+            if hidden:
+                ensure_window_topmost(self)
 
     def _may_capture_autonomously(self, kind: str) -> bool:
         """May Pink take a screenshot on her OWN initiative right now? (REVIEW H12)
