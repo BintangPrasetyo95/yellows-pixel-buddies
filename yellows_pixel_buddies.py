@@ -86,6 +86,8 @@ import datetime
 from enum import Enum, auto
 from functools import lru_cache
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -135,10 +137,10 @@ except Exception:
     pass
 
 from PyQt5.QtCore import (
-    QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QSize, QThread, Qt, QTimer, pyqtSignal
+    QBuffer, QIODevice, QPoint, QPointF, QRect, QRectF, QSize, QThread, Qt, QTimer, QUrl, pyqtSignal
 )
 from PyQt5.QtGui import (
-    QColor, QCursor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
+    QColor, QCursor, QDesktopServices, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
     QPainter, QPalette, QPen, QPixmap, QRegion, QScreen, QTextOption, QTransform
 )
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket
@@ -153,7 +155,9 @@ from PyQt5.QtWidgets import (
 from sound_manager import get_sound_manager, play_sound
 import os_interop
 import action_planner
+import privacy
 import takeover_gate
+import update_security
 import takeover_overlay
 import voice_service
 
@@ -4689,6 +4693,15 @@ def is_workstation_locked() -> bool:
     return False
 
 
+def idle_seconds_from_ticks(tick_now: int, last_input_tick: int) -> float:
+    """Seconds between two 32-bit GetTickCount values, correct across the 49.7-day DWORD wrap.
+
+    GetTickCount used to be read as a *signed* int (no restype), so after ~24.8 days of uptime idle time came
+    out negative, was clamped to 0, and every "user is away" privacy gate failed open (REVIEW M15).
+    """
+    return ((int(tick_now) - int(last_input_tick)) & 0xFFFFFFFF) / 1000.0
+
+
 def get_user_idle_seconds() -> float:
     """Return number of seconds since last user keyboard or mouse input across the system."""
     if sys.platform != "win32":
@@ -4697,8 +4710,9 @@ def get_user_idle_seconds() -> float:
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
         if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
-            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
-            return max(0.0, millis / 1000.0)
+            k32 = ctypes.windll.kernel32
+            k32.GetTickCount.restype = ctypes.c_uint32
+            return idle_seconds_from_ticks(k32.GetTickCount(), lii.dwTime)
     except Exception:
         pass
     return 0.0
@@ -5212,12 +5226,37 @@ class MemoryManager:
         self._load_token_stats()
 
         self._ensure_dirs()
+        self._scrub_saved_secrets_once()
         self._generate_new_session_file()
         self.history: list[dict[str, any]] = []
         # Temporary in-memory only storage for immediate ambient dialogue reactions (never saved to disk)
         self.recent_ambient_dialogues: deque[dict[str, any]] = deque(maxlen=4)
         # Temporary in-memory only storage for physical actions, body state & physics events (never saved to disk)
         self.recent_physical_actions: deque[dict[str, any]] = deque(maxlen=12)
+
+    def _scrub_saved_secrets_once(self) -> None:
+        """Older versions could save the Gemini key inside session files (network error text). Redact it once."""
+        marker = self.memory_dir / ".secrets_redacted_v1"
+        if marker.exists() or not self.sessions_dir.is_dir():
+            return
+        fixed = 0
+        for f in self.sessions_dir.glob("session_*.json"):
+            try:
+                text = f.read_text(encoding="utf-8")
+                if not privacy.contains_secret(text):
+                    continue
+                tmp = f.with_suffix(".json.tmp")
+                tmp.write_text(privacy.redact_secrets(text), encoding="utf-8")
+                os.replace(tmp, f)
+                fixed += 1
+            except OSError as err:
+                log.debug("Could not scrub %s: %s", f.name, err)
+        try:
+            marker.write_text("1", encoding="utf-8")
+        except OSError:
+            pass
+        if fixed:
+            log.info("Redacted a leaked API key from %d old session file(s) (REVIEW M9).", fixed)
 
     def _migrate_existing_data(self) -> None:
         """If transitioning from local exe directory to AppData, seamlessly copy existing memory."""
@@ -6876,6 +6915,8 @@ class MemoryManager:
         had_screen: bool = False,
     ) -> None:
         """Record an error turn in history and persist to session file with error formatting."""
+        error_msg = privacy.redact_secrets(error_msg)          # REVIEW M9
+        spoken_text = privacy.redact_secrets(spoken_text) if spoken_text else spoken_text
         pink_entry = spoken_text if spoken_text else f"[Error: {error_msg}]"
         turn = {
             "timestamp": datetime.datetime.now().isoformat(),
@@ -8493,7 +8534,7 @@ class GeminiWorkerThread(QThread):
                 self.error_occurred.emit("Request timed out. Google Gemini servers might be busy!")
                 return
             except Exception as err:
-                last_error = f"Network error: {err}"
+                last_error = privacy.redact_secrets(f"Network error: {err}")
                 if not is_last:
                     log.warning("Model %s had network error (%s), trying fallback...", model, err)
                     continue
@@ -8503,8 +8544,10 @@ class GeminiWorkerThread(QThread):
         self.error_occurred.emit(f"All models failed. Last error: {last_error[:120]}")
 
     def _call_gemini(self, model: str) -> tuple[str, str, bool, str]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
-        headers = {"Content-Type": "application/json"}
+        # Key in a header, never in the URL: requests puts the URL into error messages, which used to be logged and
+        # saved to session files (REVIEW M9).
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
 
         # Build contents and episodic memory:
         # User-initiated chat turns are kept as interactive dialogue (role: user / role: model).
@@ -8941,8 +8984,10 @@ class GeminiQuestionWorkerThread(QThread):
         self.error_occurred.emit(f"All models failed for question. Last error: {last_error[:120]}")
 
     def _call_gemini(self, model: str) -> QuestionItem:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
-        headers = {"Content-Type": "application/json"}
+        # Key in a header, never in the URL: requests puts the URL into error messages, which used to be logged and
+        # saved to session files (REVIEW M9).
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
 
         prompt_parts = [{"text": self.user_prompt}]
         if self.screenshot_b64:
@@ -10292,7 +10337,9 @@ def is_token_query(text: str) -> bool:
 
 class UpdateCheckerThread(QThread):
     """Checks GitHub Releases for new versions of Yellow's Pixel Buddies in background."""
-    update_available = pyqtSignal(str, str, str, str)  # (version, changelog, download_url, asset_name)
+    # (version, changelog, download_url, asset_name, checksums_url). checksums_url is "" when the release
+    # publishes no SHA256SUMS.txt; such releases are never installed automatically (REVIEW H11).
+    update_available = pyqtSignal(str, str, str, str, str)
     no_update = pyqtSignal()
     check_failed = pyqtSignal(str)
 
@@ -10360,213 +10407,150 @@ class UpdateCheckerThread(QThread):
                 if target_asset:
                     dl_url = target_asset.get("browser_download_url", "")
                     asset_name = target_asset.get("name", "update.exe")
-                    self.update_available.emit(tag, body, dl_url, asset_name)
+                    if not update_security.is_trusted_release_url(dl_url, self.repo):
+                        self.check_failed.emit(f"untrusted update URL: {dl_url!r}")
+                        return
+                    sums_asset = update_security.find_checksum_asset(assets)
+                    sums_url = sums_asset.get("browser_download_url", "") if sums_asset else ""
+                    if sums_url and not update_security.is_trusted_release_url(sums_url, self.repo):
+                        sums_url = ""
+                    self.update_available.emit(tag, body, dl_url, asset_name, sums_url)
                     return
             self.no_update.emit()
         except Exception as err:
             self.check_failed.emit(str(err))
 
 
+def _update_staging_dir() -> Path:
+    """Where downloaded updates are staged before the verified install step."""
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or "."
+    d = Path(base) / "YellowsPixelBuddies" / "updates"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 class UpdateDownloaderThread(QThread):
-    """Downloads update asset and triggers Windows updater script."""
+    """Downloads an update asset and proves it authentic before anything may run it (REVIEW H11).
+
+    Requires the release's SHA256SUMS.txt; the asset must hash to the published value, and every HTTP hop must be
+    HTTPS on GitHub. Emits completed(path, sha256) or failed(message); a message starting with "NO_CHECKSUM"
+    means the release can only be installed manually.
+    """
     progress = pyqtSignal(int)
-    completed = pyqtSignal(str)
+    completed = pyqtSignal(str, str)   # (file_path, verified_sha256)
     failed = pyqtSignal(str)
 
-    def __init__(self, download_url: str, target_filename: str) -> None:
+    def __init__(self, download_url: str, target_filename: str, checksums_url: str = "", repo: str = GITHUB_REPO) -> None:
         super().__init__()
         self.download_url = download_url
         self.target_filename = target_filename
+        self.checksums_url = checksums_url
+        self.repo = repo
+
+    @staticmethod
+    def _check_hops(resp) -> None:
+        for hop in list(getattr(resp, "history", []) or []) + [resp]:
+            if not update_security.is_trusted_download_host(getattr(hop, "url", "")):
+                raise update_security.UpdateVerificationError(f"download left GitHub: {getattr(hop, 'url', '')!r}")
 
     def run(self) -> None:
+        dest_path: Path | None = None
         try:
-            update_dir = Path(os.environ.get("TEMP", ".")) / "yellows_update"
-            update_dir.mkdir(parents=True, exist_ok=True)
-            dest_path = update_dir / self.target_filename
+            if not update_security.is_trusted_release_url(self.download_url, self.repo):
+                raise update_security.UpdateVerificationError(f"untrusted update URL: {self.download_url!r}")
+            if not self.checksums_url:
+                raise update_security.ChecksumUnavailable("this release publishes no SHA256SUMS.txt")
 
+            sums_resp = requests.get(self.checksums_url, timeout=15)
+            sums_resp.raise_for_status()
+            self._check_hops(sums_resp)
+            expected = update_security.expected_hash_for(
+                update_security.parse_sha256sums(sums_resp.text), self.target_filename)
+
+            dest_path = _update_staging_dir() / update_security.safe_asset_filename(self.target_filename)
             resp = requests.get(self.download_url, stream=True, timeout=30)
             resp.raise_for_status()
+            self._check_hops(resp)
             total_size = int(resp.headers.get("content-length", 0))
             downloaded = 0
+            digest = hashlib.sha256()
 
             with open(dest_path, "wb") as f:
                 for chunk in resp.iter_content(chunk_size=65536):
+                    if self.isInterruptionRequested():
+                        raise IOError("download cancelled")
                     if chunk:
                         f.write(chunk)
+                        digest.update(chunk)
                         downloaded += len(chunk)
                         if total_size > 0:
-                            pct = int((downloaded / total_size) * 100)
-                            self.progress.emit(pct)
+                            self.progress.emit(int((downloaded / total_size) * 100))
 
-            # Integrity verification: ensure file is complete and not truncated
             if total_size > 0 and downloaded < total_size:
                 raise IOError(f"Incomplete download: {downloaded}/{total_size} bytes received.")
-            if not dest_path.exists() or dest_path.stat().st_size < 1024 * 500:
-                raise IOError(f"Downloaded update payload is corrupted or incomplete ({dest_path.stat().st_size} bytes).")
+            if downloaded < update_security.MIN_UPDATE_BYTES:
+                raise IOError(f"Downloaded update payload is too small ({downloaded} bytes).")
+            if not hmac.compare_digest(digest.hexdigest(), expected):
+                raise update_security.UpdateVerificationError(
+                    f"SHA-256 mismatch for {self.target_filename}: refusing to install")
 
-            self.completed.emit(str(dest_path))
+            self.completed.emit(str(dest_path), expected)
+        except update_security.ChecksumUnavailable as err:
+            self.failed.emit(f"NO_CHECKSUM: {err}")
         except Exception as err:
-            self.failed.emit(str(err))
+            if dest_path is not None:
+                try:
+                    dest_path.unlink(missing_ok=True)   # never leave an unverified payload around
+                except OSError:
+                    pass
+            self.failed.emit(privacy.redact_secrets(str(err)))
 
 
-def apply_application_update(update_file_path: str) -> None:
-    """Launches updater script or installer, then terminates current process.
-    Your memories and facts in AppData are 100% safe!"""
+def apply_application_update(update_file_path: str, expected_sha256: str) -> bool:
+    """Verify the payload once more, hand it to the installer / static update worker, then exit.
+
+    Returns False (and keeps Pink running) if the payload fails verification or the helper can't be started,
+    instead of exiting into nothing (REVIEW H11, M10). Your memories and facts in AppData are 100% safe!
+    """
     up_path = Path(update_file_path).resolve()
     current_exe = Path(sys.executable).resolve()
 
-    if not up_path.exists() or up_path.stat().st_size < 1024 * 500:
-        log.error("Update payload is missing or incomplete: %s", up_path)
-        return
+    try:
+        update_security.verify_file(up_path, expected_sha256)   # re-check right before anything runs it
+    except update_security.UpdateVerificationError as err:
+        log.error("Refusing to apply update: %s", err)
+        try:
+            up_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
 
     if not getattr(sys, "frozen", False):
-        log.info("Running in development mode; update saved to: %s", up_path)
+        log.info("Running in development mode; verified update saved to: %s", up_path)
         try:
-            if "setup" in up_path.name.lower() or "installer" in up_path.name.lower():
-                subprocess.Popen([str(up_path)], creationflags=0x00000008 if os.name == "nt" else 0)
-            elif up_path.suffix.lower() == ".exe":
-                os.startfile(str(up_path))
-            else:
-                os.startfile(str(up_path.parent))
+            os.startfile(str(up_path.parent))
         except Exception as e:
-            log.warning("Could not launch dev update: %s", e)
-        return
+            log.warning("Could not open update folder: %s", e)
+        return False   # never replace a source checkout's python.exe
 
+    flags = 0x00000008 if os.name == "nt" else 0   # DETACHED_PROCESS
     try:
         if "setup" in up_path.name.lower() or "installer" in up_path.name.lower():
-            # Inno Setup installer: run with /CLOSEAPPLICATIONS to cleanly close Pink
+            # Inno Setup installer: it handles elevation itself and closes Pink cleanly.
             installer_cmd = [str(up_path), "/CLOSEAPPLICATIONS"]
-            log.info("Spawning installer: %s", installer_cmd)
-            subprocess.Popen(installer_cmd, creationflags=0x00000008 if os.name == "nt" else 0)
+            log.info("Spawning verified installer: %s", installer_cmd)
+            subprocess.Popen(installer_cmd, creationflags=flags)
         else:
-            # Standalone .exe replacement via hardened PowerShell worker with PID wait & UAC elevation
+            # Standalone .exe swap via the STATIC worker: values go in as arguments, never into the script text.
             ps_path = up_path.parent / "apply_update.ps1"
-            bat_path = up_path.parent / "apply_update.bat"
             log_path = up_path.parent / "update.log"
-
-            ps_content = f"""# Pink Auto-Update Worker
-param(
-    [int]$TargetPid = {os.getpid()},
-    [string]$SourcePath = '{up_path}',
-    [string]$TargetPath = '{current_exe}',
-    [string]$LogPath = '{log_path}'
-)
-
-function Log-Message([string]$msg) {{
-    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    $line = "[$timestamp] $msg"
-    Add-Content -Path $LogPath -Value $line -ErrorAction SilentlyContinue
-}}
-
-Log-Message "=== Pink Updater Worker Started ==="
-Log-Message "Target PID: $TargetPid"
-Log-Message "Source: $SourcePath"
-Log-Message "Target: $TargetPath"
-
-# 1. Wait for parent Pink process to exit and release file handles
-if ($TargetPid -gt 0) {{
-    try {{
-        $proc = Get-Process -Id $TargetPid -ErrorAction SilentlyContinue
-        if ($proc) {{
-            Log-Message "Waiting for Pink process $TargetPid to exit..."
-            $null = $proc.WaitForExit(15000)
-        }}
-    }} catch {{
-        Log-Message "Process wait note: $_"
-    }}
-}}
-
-# Buffer delay for Windows kernel to clear file locks
-Start-Sleep -Milliseconds 600
-
-# 2. Retry file replacement up to 30 times (~15 seconds)
-$copied = $false
-for ($i = 1; $i -le 30; $i++) {{
-    try {{
-        Copy-Item -Path $SourcePath -Destination $TargetPath -Force -ErrorAction Stop
-        $copied = $true
-        Log-Message "Update copy succeeded on attempt $i."
-        break
-    }} catch {{
-        Log-Message "Attempt $i failed: $_. Retrying in 500ms..."
-        Start-Sleep -Milliseconds 500
-    }}
-}}
-
-# 3. If standard copy failed (e.g. Program Files), attempt UAC elevation
-if (-not $copied) {{
-    Log-Message "Standard copy failed. Attempting elevated retry via RunAs..."
-    try {{
-        $elevatedArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -TargetPid 0 -SourcePath `"$SourcePath`" -TargetPath `"$TargetPath`" -LogPath `"$LogPath`""
-        $elevProc = Start-Process powershell -ArgumentList $elevatedArgs -Verb RunAs -PassThru -Wait
-        if ($elevProc.ExitCode -eq 0) {{
-            $copied = $true
-            Log-Message "Elevated copy succeeded."
-        }}
-    }} catch {{
-        Log-Message "Elevation was cancelled or failed: $_"
-    }}
-}}
-
-# 4. Finalize
-if ($copied) {{
-    Log-Message "Launching updated application: $TargetPath"
-    Start-Process -FilePath $TargetPath
-    Log-Message "Removing temporary download: $SourcePath"
-    Remove-Item -Path $SourcePath -Force -ErrorAction SilentlyContinue
-    Log-Message "Update finished successfully."
-}} else {{
-    Log-Message "ERROR: Could not overwrite $TargetPath after retries. Preserving $SourcePath."
-    Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show(
-        "Pink was unable to replace the executable file (it may be locked or write-protected).`n`nThe updated version is saved at:`n$SourcePath",
-        "Update Notification",
-        [System.Windows.Forms.MessageBoxButtons]::OK,
-        [System.Windows.Forms.MessageBoxIcon]::Warning
-    )
-}}
-"""
-            ps_path.write_text(ps_content, encoding="utf-8")
-
-            # Fallback batch script in case PowerShell execution is disabled (using ping for delay)
-            bat_content = f"""@echo off
-set "SOURCE={up_path}"
-set "TARGET={current_exe}"
-
-:: Retry copy using ping for delay (timeout crashes without console stdin)
-for /l %%i in (1, 1, 30) do (
-    copy /y "%SOURCE%" "%TARGET%" >nul 2>&1
-    if not errorlevel 1 goto :copy_done
-    ping -n 2 127.0.0.1 >nul
-)
-
-:copy_done
-start "" "%TARGET%"
-del "%SOURCE%" >nul 2>&1
-(goto) 2>nul & del "%~f0"
-"""
-            bat_path.write_text(bat_content, encoding="utf-8")
-
-            # Execute PowerShell worker; fall back to cmd.exe if PowerShell fails to start
-            ps_cmd = [
-                "powershell.exe",
-                "-NoProfile",
-                "-NonInteractive",
-                "-WindowStyle", "Hidden",
-                "-ExecutionPolicy", "Bypass",
-                "-File", str(ps_path),
-                "-TargetPid", str(os.getpid()),
-                "-SourcePath", str(up_path),
-                "-TargetPath", str(current_exe),
-                "-LogPath", str(log_path)
-            ]
-            try:
-                subprocess.Popen(ps_cmd, creationflags=0x00000008 if os.name == "nt" else 0)
-            except Exception as ps_err:
-                log.warning("PowerShell launcher failed: %s; falling back to cmd.exe", ps_err)
-                subprocess.Popen(["cmd.exe", "/c", str(bat_path)], creationflags=0x00000008 if os.name == "nt" else 0)
+            ps_path.write_text(update_security.UPDATER_PS1, encoding="utf-8")
+            cmd = update_security.updater_command(ps_path, os.getpid(), up_path, current_exe, expected_sha256, log_path)
+            log.info("Spawning update worker for %s", current_exe)
+            subprocess.Popen(cmd, creationflags=flags)
     except Exception as err:
-        log.error("Failed to execute update helper: %s", err)
+        log.error("Failed to start the update helper; keeping the current version running: %s", err)
+        return False
 
     release_single_instance_lock()
     # Force process exit so Windows instantly releases the file lock on current_exe
@@ -10574,6 +10558,72 @@ del "%SOURCE%" >nul 2>&1
     if app:
         app.quit()
     os._exit(0)
+
+
+def cleanup_previous_update() -> None:
+    """Delete the .old/.new files a finished exe swap leaves behind (we're running, so the update worked)."""
+    if not getattr(sys, "frozen", False):
+        return
+    for leftover in update_security.leftover_update_files(sys.executable):
+        try:
+            leftover.unlink()
+            log.info("Removed leftover update file %s", leftover)
+        except OSError as err:
+            log.debug("Could not remove %s: %s", leftover, err)
+
+
+class GitUpdateThread(QThread):
+    """Safely fast-forward a source checkout to origin/main in the background (REVIEW M11).
+
+    Never blocks the UI, never prompts for credentials, refuses to touch a checkout with local changes or on a
+    feature branch, only fast-forwards, and reports "nothing to update" instead of pretending it updated.
+    """
+    succeeded = pyqtSignal(str, bool)   # (new short commit, requirements.txt changed)
+    up_to_date = pyqtSignal()
+    failed = pyqtSignal(str)            # human-readable reason
+
+    def __init__(self, repo_dir: Path, branch: str = "main") -> None:
+        super().__init__()
+        self.repo_dir = Path(repo_dir)
+        self.branch = branch
+
+    def _git(self, *args: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
+        kwargs: dict[str, Any] = {
+            "cwd": str(self.repo_dir), "capture_output": True, "text": True, "timeout": timeout,
+            "stdin": subprocess.DEVNULL, "env": {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"},
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        return subprocess.run(["git", *args], **kwargs)
+
+    def run(self) -> None:
+        try:
+            if self._git("status", "--porcelain", "--untracked-files=no").stdout.strip():
+                self.failed.emit("you have local changes; commit or stash them, then update manually")
+                return
+            current = self._git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            if current != self.branch:
+                self.failed.emit(f"you're on branch '{current}', not '{self.branch}'; update manually")
+                return
+            before = self._git("rev-parse", "HEAD").stdout.strip()
+            fetch = self._git("fetch", "origin", self.branch, timeout=90.0)
+            if fetch.returncode != 0:
+                self.failed.emit((fetch.stderr or "git fetch failed").strip()[:200])
+                return
+            merge = self._git("merge", "--ff-only", f"origin/{self.branch}")
+            if merge.returncode != 0:
+                self.failed.emit("can't fast-forward (your branch has diverged); update manually")
+                return
+            after = self._git("rev-parse", "HEAD").stdout.strip()
+            if not after or after == before:
+                self.up_to_date.emit()
+                return
+            changed = self._git("diff", "--name-only", before, after).stdout.split()
+            self.succeeded.emit(after[:7], any(Path(c).name.lower().startswith("requirements") for c in changed))
+        except subprocess.TimeoutExpired:
+            self.failed.emit("git timed out (network or credentials?)")
+        except Exception as err:
+            self.failed.emit(privacy.redact_secrets(str(err))[:200])
 
 
 def restart_application() -> None:
@@ -11213,6 +11263,7 @@ class YellowsPixelBuddies(QWidget):
         self._is_taking_over_cursor: bool = False
         self._autonomous_vision_enabled: bool = False   # Pink may screenshot on her own (REVIEW H12)
         self._tray_vision_enabled: bool = False         # ...even while hidden in the tray
+        self._last_screen_capture: tuple[datetime.datetime, str] | None = None   # shown in the tray tooltip
         self._confirm_pending: bool = False
         self._confirm_token: int = 0
         self._sequence_area_rect: QRect | None = None   # monitor captured for hide/exit/summon sequences (REVIEW L7)
@@ -11226,7 +11277,8 @@ class YellowsPixelBuddies(QWidget):
         self._memory = MemoryManager(USER_DATA_DIR, legacy_dir=LEGACY_DATA_DIR)
         self._update_checker_thread: UpdateCheckerThread | None = None
         self._update_downloader_thread: UpdateDownloaderThread | None = None
-        self._available_update_info: tuple[str, str, str, str] | None = None
+        self._git_update_thread: GitUpdateThread | None = None
+        self._available_update_info: tuple[str, str, str, str, str] | None = None
         self._postponed_update_version: str | None = None
         self._gemini_thread: GeminiWorkerThread | None = None
         self._is_ghost_talking: bool = False
@@ -12997,6 +13049,8 @@ RULES:
         source = forced_source or self._pick_question_source()
 
         screenshot_b64 = None
+        if source == "screen" and not self._may_capture_autonomously("question"):
+            source = "memory" if self._has_memory_highlights() else "personality"   # REVIEW H12
         if source == "screen":
             if hasattr(self, "_dialogue_overlay"):
                 self._dialogue_overlay.hide()
@@ -13004,6 +13058,8 @@ RULES:
             QApplication.processEvents()
             try:
                 screenshot_b64, _ = capture_screen_and_fingerprint()
+                if screenshot_b64:
+                    self._note_screen_capture("question")
             except Exception as err:
                 log.warning("Question screenshot failed, falling back to memory/personality: %s", err)
                 source = "memory" if self._has_memory_highlights() else "personality"
@@ -15111,8 +15167,8 @@ RULES:
 
     def _trigger_auto_screen_comment(self) -> None:
         """Capture desktop screen in background and generate spontaneous commentary via Gemini AI."""
-        if not self._autonomous_vision_enabled:
-            return  # REVIEW H12
+        if not self._may_capture_autonomously("auto comment"):
+            return  # opt-in + never a password manager / private / banking window (REVIEW H12)
         api_key = self._memory.get_api_key()
         if not api_key:
             return
@@ -15143,6 +15199,7 @@ RULES:
             screenshot_b64, current_fp = capture_screen_and_fingerprint()
             if not screenshot_b64:
                 raise RuntimeError("Screen capture returned empty image.")
+            self._note_screen_capture("auto comment")
         except Exception as err:
             self.show()
             ensure_window_topmost(self)
@@ -15438,7 +15495,7 @@ RULES:
 
         self._update_checker_thread = UpdateCheckerThread(APP_VERSION, GITHUB_REPO)
         self._update_checker_thread.update_available.connect(
-            lambda v, b, u, a: self._on_update_available(v, b, u, a, manual)
+            lambda v, b, u, a, c: self._on_update_available(v, b, u, a, manual, c)
         )
         self._update_checker_thread.no_update.connect(
             lambda: self._on_no_update_available(manual)
@@ -15448,8 +15505,9 @@ RULES:
         )
         self._update_checker_thread.start()
 
-    def _on_update_available(self, version: str, body: str, download_url: str, asset_name: str, manual: bool) -> None:
-        self._available_update_info = (version, body, download_url, asset_name)
+    def _on_update_available(self, version: str, body: str, download_url: str, asset_name: str, manual: bool,
+                             checksums_url: str = "") -> None:
+        self._available_update_info = (version, body, download_url, asset_name, checksums_url)
         log.info("Update available: %s (%s)", version, download_url)
 
         notes = body.strip()
@@ -15504,42 +15562,31 @@ RULES:
         )
 
         if reply == QMessageBox.Yes:
-            self._start_update_download(download_url, asset_name)
+            self._start_update_download(download_url, asset_name, checksums_url)
         else:
             self._postponed_update_version = version
             self._say(f"* Update to {version} postponed, mew!", force=True, record_memory=False)
 
     def _apply_git_update(self, version: str) -> None:
-        """Update the repository via git pull in development/source environments."""
-        self._say("* Running git pull to update Pink... hang tight, mew!", force=True, record_memory=False)
-        try:
-            extra_kwargs: dict[str, Any] = {
-                "cwd": str(_exe_dir),
-                "capture_output": True,
-                "text": True,
-                "timeout": 30,
-            }
-            if os.name == "nt":
-                extra_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                sinfo = subprocess.STARTUPINFO()
-                sinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                sinfo.wShowWindow = subprocess.SW_HIDE
-                extra_kwargs["startupinfo"] = sinfo
+        """Update a source checkout via a safe fast-forward of origin/main, off the GUI thread (REVIEW M11)."""
+        if getattr(self, "_git_update_thread", None) is not None and self._git_update_thread.isRunning():
+            return
+        self._say("* Fetching the update with git... hang tight, mew!", force=True, record_memory=False)
+        self._git_update_thread = GitUpdateThread(_exe_dir, branch="main")
+        self._git_update_thread.succeeded.connect(lambda commit, deps, v=version: self._on_git_update_done(v, commit, deps))
+        self._git_update_thread.up_to_date.connect(
+            lambda: self._say("* Git says you're already up to date, mew! Nothing to restart.", force=True, record_memory=False))
+        self._git_update_thread.failed.connect(
+            lambda why: self._say(f"* Mew... I didn't update: {why}.", force=True, record_memory=False))
+        self._git_update_thread.start()
 
-            result = subprocess.run(
-                ["git", "pull"],
-                **extra_kwargs
-            )
-            if result.returncode == 0:
-                self._say(f"* Update to {version} complete! Restarting Pink now, mew!!", force=True, record_memory=False)
-                QTimer.singleShot(1500, restart_application)
-            else:
-                err_msg = (result.stderr or result.stdout or "").strip()
-                log.warning("git pull failed: %s", err_msg)
-                self._say("* Mew... git pull had conflicts or failed. Please check git status!", force=True, record_memory=False)
-        except Exception as err:
-            log.error("Failed to run git pull: %s", err)
-            self._say("* Mew?! Could not execute git pull. Please update manually via git!", force=True, record_memory=False)
+    def _on_git_update_done(self, version: str, commit: str, requirements_changed: bool) -> None:
+        if requirements_changed:
+            self._say(f"* Updated to {version} ({commit})! Dependencies changed: run 'pip install -r requirements.txt', "
+                      "then restart me, mew!", force=True, record_memory=False)
+            return
+        self._say(f"* Update to {version} ({commit}) complete! Restarting Pink now, mew!!", force=True, record_memory=False)
+        QTimer.singleShot(1500, restart_application)
 
     def _on_no_update_available(self, manual: bool) -> None:
         if manual:
@@ -15552,11 +15599,11 @@ RULES:
         if manual:
             self._say("* Mew... couldn't check for updates right now.", force=True, record_memory=False)
 
-    def _start_update_download(self, download_url: str, asset_name: str) -> None:
+    def _start_update_download(self, download_url: str, asset_name: str, checksums_url: str = "") -> None:
         if self._update_downloader_thread and self._update_downloader_thread.isRunning():
             return
         self._say("* Downloading the new update... hang tight, mew!", force=True, record_memory=False)
-        self._update_downloader_thread = UpdateDownloaderThread(download_url, asset_name)
+        self._update_downloader_thread = UpdateDownloaderThread(download_url, asset_name, checksums_url, GITHUB_REPO)
         self._update_downloader_thread.progress.connect(self._on_update_progress)
         self._update_downloader_thread.completed.connect(self._on_update_downloaded)
         self._update_downloader_thread.failed.connect(self._on_update_download_failed)
@@ -15566,17 +15613,32 @@ RULES:
         if percent in (25, 50, 75):
             self._say(f"* Downloading update: {percent}%... mew!", force=True, record_memory=False)
 
-    def _on_update_downloaded(self, file_path: str) -> None:
+    def _on_update_downloaded(self, file_path: str, sha256: str) -> None:
         if self._is_taking_over_cursor:
             # Applying the update ends the process with os._exit; never do that mid-step (REVIEW H13/H9).
             log.info("Update downloaded during a desktop takeover; deferring apply until it ends.")
-            QTimer.singleShot(5000, lambda fp=file_path: self._on_update_downloaded(fp))
+            QTimer.singleShot(5000, lambda fp=file_path, h=sha256: self._on_update_downloaded(fp, h))
             return
-        self._say("* Update downloaded! Restarting to apply... See you in a second, mew!!", force=True, record_memory=False)
-        QTimer.singleShot(1500, lambda: apply_application_update(file_path))
+        self._say("* Update downloaded and verified! Restarting to apply... See you in a second, mew!!", force=True, record_memory=False)
+        QTimer.singleShot(1500, lambda fp=file_path, h=sha256: self._apply_verified_update(fp, h))
+
+    def _apply_verified_update(self, file_path: str, sha256: str) -> None:
+        if not apply_application_update(file_path, sha256):   # only returns when it did NOT exit
+            if getattr(sys, "frozen", False):
+                self._say("* Mew?! The update didn't pass my checks, so I kept this version. Update manually on GitHub!",
+                          force=True, record_memory=False)
+            else:
+                self._say("* Verified update saved to the updates folder (running from source, so I won't swap it).",
+                          force=True, record_memory=False)
 
     def _on_update_download_failed(self, err: str) -> None:
         log.warning("Update download failed: %s", err)
+        if err.startswith("NO_CHECKSUM"):
+            # Can't prove this release is authentic: never auto-install it, send the user to the page (REVIEW H11).
+            self._say("* Hmph! That release has no checksum, so I won't install it blindly. Opening the GitHub page, mew!",
+                      force=True, record_memory=False)
+            QDesktopServices.openUrl(QUrl(f"https://github.com/{GITHUB_REPO}/releases/latest"))
+            return
         self._say("* Mew?! Update download failed. You can update manually on GitHub!", force=True, record_memory=False)
 
     def _open_reminders_dialog(self) -> None:
@@ -17420,7 +17482,7 @@ RULES:
         """Periodic 5-minute screen reading while Pink is hidden in tray to maintain active session and context."""
         if not getattr(self, "_hidden_in_tray", False):
             return
-        if not (self._autonomous_vision_enabled and self._tray_vision_enabled):
+        if not self._tray_vision_enabled or not self._may_capture_autonomously("tray"):
             return  # never screenshot while Pink is hidden unless the user explicitly opted in (REVIEW H12)
 
         api_key = self._memory.get_api_key()
@@ -17446,6 +17508,7 @@ RULES:
             screenshot_b64, current_fp = capture_screen_and_fingerprint()
             if not screenshot_b64:
                 return
+            self._note_screen_capture("while hidden in tray")
         except Exception as err:
             log.warning("Tray screen capture failed: %s", err)
             return
@@ -19677,8 +19740,8 @@ RULES:
         self._last_cinema_comment_time = now
 
         api_key = self._memory.get_api_key() if hasattr(self, "_memory") and self._memory else ""
-        if not api_key or not self._autonomous_vision_enabled:
-            # No unprompted screenshots without the user's opt-in (REVIEW H12): keep the curated lines.
+        if not api_key or not self._may_capture_autonomously("cinema"):
+            # No unprompted screenshots without the user's opt-in, nor of sensitive windows (REVIEW H12).
             self._deliver_canned_cinema_comment()
             return
 
@@ -19702,6 +19765,8 @@ RULES:
             QApplication.processEvents()
 
             screenshot_b64, current_fp = capture_screen_and_fingerprint(target_screen)
+            if screenshot_b64:
+                self._note_screen_capture("cinema")
         except Exception as err:
             log.warning("Cinema screenshot capture error: %s", err)
         finally:
@@ -19914,6 +19979,32 @@ RULES:
             self._abort_desktop_takeover("Desktop Cursor Control switched off")
         self._save_live_settings()
         log.info("Desktop Cursor Control mode: %s", mode)
+
+    def _may_capture_autonomously(self, kind: str) -> bool:
+        """May Pink take a screenshot on her OWN initiative right now? (REVIEW H12)
+
+        Requires the user's opt-in, and never captures a password manager, a private/incognito window, a sign-in,
+        banking or payment page, or a Windows credential/UAC prompt. Fails closed if the foreground can't be read.
+        """
+        if not self._autonomous_vision_enabled:
+            return False
+        try:
+            _hwnd, exe_name, _exe_path, title, _pid = get_foreground_process_info()
+        except Exception:
+            return False
+        if privacy.is_sensitive_window(exe_name, title):
+            log.info("Skipped %s screenshot: sensitive foreground window (%s).", kind, exe_name or "?")
+            return False
+        return True
+
+    def _note_screen_capture(self, kind: str) -> None:
+        """Make unprompted screenshots visible: record when and why, and show it in the tray tooltip."""
+        self._last_screen_capture = (datetime.datetime.now(), kind)
+        log.info("Pink took an unprompted screenshot (%s).", kind)
+        tray = getattr(self, "_tray_icon", None)
+        if tray is not None:
+            tray.setToolTip(f"Yellow's Pixel Buddies\nPink last looked at your screen: "
+                            f"{self._last_screen_capture[0]:%H:%M} ({kind})")
 
     def _toggle_autonomous_vision(self, checked: bool) -> None:
         """Allow / forbid Pink from taking screenshots on her own (auto comments, screen questions, cinema)."""
@@ -20343,6 +20434,8 @@ DesktopPet = YellowsPixelBuddies  # backward compatibility alias
 def main() -> int:
     level = logging.DEBUG if (DEBUG_JUMP_MENU or DEBUG_DRAW_HAND_ANCHOR) else logging.INFO
     logging.basicConfig(level=level, format="[%(levelname)s] %(message)s")
+    privacy.install_log_redaction()   # no log line may ever contain the Gemini key (REVIEW M9)
+    cleanup_previous_update()
     signal.signal(signal.SIGINT, signal.SIG_DFL)   # Ctrl+C in the console quits immediately
 
     is_restarting = "--restarting" in sys.argv

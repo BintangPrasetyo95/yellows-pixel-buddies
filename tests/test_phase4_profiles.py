@@ -21,14 +21,44 @@ class TestPhase4Profiles(unittest.TestCase):
         self.assertEqual(prof_none, {})
 
     def test_start_menu_launch_whitelist(self):
-        # Whitelisted app passes whitelist check
+        # Allowed app with a registered executable launches directly: no Win key, no typing (REVIEW M6)
         with patch.object(os_interop, "find_window", return_value=None), \
+             patch.object(os_interop.os, "startfile", create=True) as mock_start, \
              patch.object(os_interop, "press_key") as mock_pk, \
              patch.object(os_interop, "type_text") as mock_type:
             os_interop.launch_or_focus("notepad", use_start_menu=True)
-            # Should have called press_key("win") and typed "notepad"
-            mock_pk.assert_any_call("win")
-            mock_type.assert_called_with("notepad", delay_between_chars_s=0.02)
+            mock_start.assert_called_once_with("notepad.exe")
+            mock_pk.assert_not_called()
+            mock_type.assert_not_called()
+
+    def test_start_menu_search_types_only_when_search_has_focus(self):
+        search = os_interop.WindowInfo(hwnd=5, title="Search", process_id=5, process_name="SearchHost.exe",
+                                       bounds=(0, 0, 10, 10), is_minimized=False, is_cloaked=False)
+        other = os_interop.WindowInfo(hwnd=6, title="Chat", process_id=6, process_name="whatsapp.exe",
+                                      bounds=(0, 0, 10, 10), is_minimized=False, is_cloaked=False)
+        # Start search opened: query typed, Enter pressed
+        with patch.object(os_interop, "find_window", return_value=None), \
+             patch.object(os_interop, "get_foreground_window", return_value=search), \
+             patch.object(os_interop.time, "sleep"), \
+             patch.object(os_interop, "press_key") as mock_pk, \
+             patch.object(os_interop, "type_text") as mock_type:
+            os_interop.launch_or_focus("Discord", use_start_menu=True)
+            mock_type.assert_called_with("discord", delay_between_chars_s=0.02)
+            mock_pk.assert_any_call("enter")
+        # Start search did NOT open: nothing typed into the chat window that still has focus
+        with patch.object(os_interop, "find_window", return_value=None), \
+             patch.object(os_interop, "get_foreground_window", return_value=other), \
+             patch.object(os_interop.time, "sleep"), \
+             patch.object(os_interop, "press_key") as mock_pk, \
+             patch.object(os_interop, "type_text") as mock_type:
+            self.assertIsNone(os_interop.launch_or_focus("discord", use_start_menu=True))
+            mock_type.assert_not_called()
+            self.assertNotIn(unittest.mock.call("enter"), mock_pk.call_args_list)
+
+    def test_allowlist_is_exact(self):
+        self.assertFalse(os_interop.is_allowed_launch_query("regedit calc"))
+        self.assertFalse(os_interop.is_allowed_launch_query("settings edge"))
+        self.assertTrue(os_interop.is_allowed_launch_query("  Spotify App "))
 
     def test_start_menu_launch_blocks_unvetted_and_injection(self):
         with patch.object(os_interop, "find_window", return_value=None), \

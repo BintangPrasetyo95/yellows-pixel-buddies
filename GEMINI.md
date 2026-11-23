@@ -116,7 +116,11 @@ Whenever preparing a release, drafting release notes, or building distribution a
    Ensure `temp/release_notes_vX.Y.Z.W.md` (or `README.md`) matches the exact same version string.
 4. **Rebuild Order**:
    **NEVER run `build_release.bat` before updating both `yellows_pixel_buddies.py` and `installer.iss`.** Otherwise, `Yellows-Pixel-Buddies-Setup.exe` will be compiled with the previous version's metadata and the updater (`UpdateCheckerThread`) will loop or download stale binaries.
-5. **Pre-Release Check**:
+5. **Upload checksums with the release**:
+   `build_release.bat` writes `dist\SHA256SUMS.txt`. Attach it to the GitHub release next to the `.exe` files.
+   The in-app updater only installs an asset whose SHA-256 matches that file; a release without it is never
+   auto-installed (users are sent to the release page instead).
+6. **Pre-Release Check**:
    Before committing, verify synchronization across the codebase:
    ```powershell
    Select-String -Path "yellows_pixel_buddies.py", "installer.iss" -Pattern "(APP_VERSION|MyAppVersion)"
