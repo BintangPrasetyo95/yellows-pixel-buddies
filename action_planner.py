@@ -34,6 +34,7 @@ except Exception:
     HAS_PYQT = False
 
 import os_interop
+from pink.ai import protocol
 
 log = logging.getLogger("yellows_pixel_buddies.action_planner")
 
@@ -721,8 +722,8 @@ def _parse_json_object(text: str, allow_bare_box: bool = False) -> Optional[dict
     if m:
         try:
             return json.loads(m.group(1))
-        except Exception:
-            pass
+        except Exception as err:
+            log.debug("_parse_json_object: ignored %s: %s", type(err).__name__, err)
 
     # 2. Try first '{' to last '}'
     start = cleaned.find("{")
@@ -736,8 +737,8 @@ def _parse_json_object(text: str, allow_bare_box: bool = False) -> Optional[dict
             candidate_fixed = re.sub(r",\s*([}\]])", r"\1", candidate)
             try:
                 return json.loads(candidate_fixed)
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("_parse_json_object: ignored %s: %s", type(err).__name__, err)
 
     # 3. Fallback for bare box_2d array (grounding only)
     if not allow_bare_box:
@@ -1216,8 +1217,8 @@ def _refocus_after_confirmation(win: Optional["os_interop.WindowInfo"]) -> None:
     # Moving the mouse to answer the bubble must not count as "user pulled the mouse away" (REVIEW H2).
     try:
         os_interop.reanchor_automated_cursor()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as err:  # noqa: BLE001
+        log.debug("_refocus_after_confirmation: ignored %s: %s", type(err).__name__, err)
     if win is None or win.process_id == os.getpid():
         return
     try:
@@ -2226,12 +2227,7 @@ def merge_desktop_actions(actions: List[Dict[str, str]]) -> Optional[Dict[str, s
 
 def strip_desktop_action_tags(text: str) -> str:
     """Remove desktop action tags from dialogue text so they are not shown to the user."""
-    cleaned = re.sub(
-        r"\[(?:desktop_action|quick_reply|click_ui|click_target|click|type_input|type_text):\s*[^\]]+\]",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
+    cleaned = protocol.strip_tags(text, protocol.DESKTOP_TAGS)
     lines = []
     for line in cleaned.splitlines():
         s = line.strip()

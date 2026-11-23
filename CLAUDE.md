@@ -31,7 +31,10 @@
   that calls `_on_chat_submitted` / `_on_gemini_response` must pass the right `origin` (`TurnOrigin`);
   ambient/screen/song/shop turns must never start a takeover. Sensitive-step policy lives in
   `action_planner._is_sensitive_action` (allowlists: `SAFE_KEYS`, `SAFE_HOTKEYS`, `SHELL_PROCESSES`).
-- Any change to AI tag parsing must update both `yellows_pixel_buddies.py` and `shop_window.py`.
+- AI tag names and grammar live in `pink/ai/protocol.py` (used by `yellows_pixel_buddies.py`, `shop_window.py` and
+  `action_planner.py`). Add or change a tag there; never add another strip regex.
+- `pink/` holds modules extracted from the monolith (prompt pieces, tag protocol, slash-command router, pure
+  text intents, shop menu layout). They must not import Qt, torch or the main script.
 
 ## Environment
 - Windows only, Python 3.13. The Bash tool is Git Bash; PowerShell is also available.

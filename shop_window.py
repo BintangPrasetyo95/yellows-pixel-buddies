@@ -27,6 +27,11 @@ from __future__ import annotations
 
 import datetime
 import json
+
+from pink.ai import protocol
+from pink.shop import menus
+from pink.text import intents
+from pink.text.intents import evaluate_task_value  # noqa: F401 - used below and re-exported
 import logging
 import math
 import os
@@ -298,64 +303,6 @@ def _is_task_creation_turn(msg: dict[str, Any]) -> bool:
     return False
 
 
-def evaluate_task_value(text: str) -> int:
-    """Pink evaluates a task's worth between P$ 1 and P$ 4 based on effort, complexity, and scope."""
-    clean = (text or "").strip().lower()
-    if not clean:
-        return 1
-
-    words = re.findall(r"[a-zA-Z0-9_]+", clean)
-    if not words:
-        return 1
-
-    word_set = set(words)
-    score = 2  # Baseline reward for standard daily chores
-
-    # 1. High-complexity / Heavy cognitive or heavy manual labor (+2)
-    heavy_kws = {
-        "code", "coding", "program", "programming", "develop", "dev", "build", "deploy",
-        "deployment", "refactor", "refactoring", "algorithm", "database", "sql", "migration",
-        "infrastructure", "infra", "architecture", "thesis", "dissertation", "exam", "finals",
-        "midterm", "audit", "presentation", "slides", "pipeline", "backend", "frontend",
-        "fullstack", "security", "docker", "kubernetes", "deepwork", "assignment", "paper"
-    }
-    if any(w in word_set for w in heavy_kws):
-        score += 2
-
-    # 2. Medium-complexity / Substantial chores (+1)
-    medium_kws = {
-        "study", "studying", "homework", "research", "analyze", "analysis", "review",
-        "write", "writing", "draft", "article", "essay", "chapter", "documentation", "docs",
-        "clean", "cleaning", "organize", "organizing", "declutter", "vacuum", "mop", "laundry",
-        "cook", "cooking", "mealprep", "bake", "baking", "workout", "exercise", "gym",
-        "fitness", "run", "running", "cardio", "budget", "finance", "taxes", "debug",
-        "debugging", "test", "testing", "practice", "rehearse", "design", "figma",
-        "wireframe", "read", "reading", "translate", "translation", "groceries", "grocery"
-    }
-    if any(w in word_set for w in medium_kws):
-        score += 1
-
-    # 3. Action / Execution commitment verbs (+1)
-    commitment_kws = {
-        "finish", "complete", "completed", "submit", "submitted", "publish", "published",
-        "ship", "shipped", "finalize", "finalized", "implement", "implemented", "solve", "solved"
-    }
-    if any(w in word_set for w in commitment_kws):
-        score += 1
-
-    # 4. Detail & specificity bonus (+1 if user clearly defined scope)
-    if len(words) >= 6 or len(clean) >= 32:
-        score += 1
-
-    # 5. Micro-habits & trivial actions (-1, but min 1)
-    trivial_kws = {
-        "water", "drink", "sip", "snack", "eat", "bite", "stretch", "breathe",
-        "blink", "afk", "glance", "check", "tap", "nap", "brush", "floss", "rest"
-    }
-    if any(w in word_set for w in trivial_kws):
-        score -= 1
-
-    return max(1, min(4, score))
 
 class DeltaruneShopWindow(QWidget):
     """Pink's Dark World Sanctuary & Companion Command Center."""
@@ -895,8 +842,7 @@ class DeltaruneShopWindow(QWidget):
         """Clean AI metadata tags, asterisks, and format into speech lines starting with '* '."""
         if not text:
             return ["* ..."]
-        t = re.sub(r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|add_reminder|delete_reminder|edit_reminder|"
-                   r"set_timer|set_alarm|emotion|think|thought|desktop_action|quick_reply|click_ui|click_target|click|type_input|type_text):\s*[^\]]+\]", "", text, flags=re.IGNORECASE)
+        t = protocol.strip_tags(text, protocol.ALL_TAGS)
         t = re.sub(r"\*{2,}", "", t)
         lines = [l.strip() for l in t.splitlines() if l.strip()]
         out: list[str] = []
@@ -1077,6 +1023,7 @@ class DeltaruneShopWindow(QWidget):
         self._timer_seconds_remaining = self._timer_total_seconds
         self._timer_label = label
         self._timer_active = True
+        self._focus_timer.start()   # it used to be marked active but never ticked (REVIEW L13)
         self.set_dialogue(
             f"* Calibrating focus hourglass and sand crystals...\n"
             f"* Focus countdown primed for {minutes}m ({label})!\n"
@@ -1209,25 +1156,8 @@ class DeltaruneShopWindow(QWidget):
         return GOALS_PATH
 
     def evaluate_goal_value(self, text: str) -> int:
-        """Pink decides what a personal goal/milestone is worth (awarding between P$ 03 and P$ 08)."""
-        clean = (text or "").lower()
-        score = 4
-        major_kws = [
-            "finish", "complete", "publish", "ship", "launch", "exam", "thesis",
-            "marathon", "project", "degree", "clean", "build", "develop", "refactor",
-            "gym", "workout", "fitness", "run", "exercise", "learn", "study",
-            "write", "chapter", "release", "portfolio", "presentation", "assignment",
-            "win", "champion", "nationals", "#1", "first"
-        ]
-        score += sum(1 for kw in major_kws if kw in clean)
-        if len(clean.split()) >= 6:
-            score += 1
-        if len(clean) >= 35:
-            score += 1
-        trivial_kws = ["water", "drink", "check", "eat", "snack", "stretch", "breathe", "nap"]
-        if any(kw in clean for kw in trivial_kws):
-            score -= 1
-        return max(3, min(8, score))
+        """Pink decides what a personal goal/milestone is worth (one shared rule: pink.text.intents)."""
+        return intents.evaluate_goal_value(text)
 
     def _get_goals(self) -> list[str]:
         if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "get_active_goals"):
@@ -1650,6 +1580,17 @@ class DeltaruneShopWindow(QWidget):
             self._scroll_down()
         event.accept()
 
+    def _scroll_spec(self) -> "menus.ScrollSpec | None":
+        return SCROLL_SPECS.get(self.state)
+
+    def _follow_selection(self) -> None:
+        spec = self._scroll_spec()
+        if spec is None:
+            return
+        attr = spec.offset_attr(self)
+        setattr(self, attr, menus.follow_selection(self._selected_index, getattr(self, attr),
+                                                   spec.item_count(self), spec.back_scrolls))
+
     def _nav_up(self) -> None:
         count = self._get_menu_count()
         if count <= 0:
@@ -1666,42 +1607,7 @@ class DeltaruneShopWindow(QWidget):
         else:
             self._selected_index = (self._selected_index - 1) % count
 
-        # Auto-scroll viewport
-        if self.state == ShopState.TASKS:
-            offset_attr = [
-                "_goals_scroll_offset",
-                "_tasks_scroll_offset",
-                "_alarms_scroll_offset",
-                "_timers_scroll_offset",
-            ][self._tasks_tab]
-            cur_off = getattr(self, offset_attr)
-            if self._selected_index < cur_off:
-                setattr(self, offset_attr, self._selected_index)
-            elif self._selected_index >= cur_off + 4:
-                setattr(self, offset_attr, max(0, self._selected_index - 3))
-        elif self.state == ShopState.FACTS_EDIT:
-            if self._selected_index < self._notes_scroll_offset:
-                self._notes_scroll_offset = self._selected_index
-            elif self._selected_index >= self._notes_scroll_offset + 4:
-                self._notes_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.TALK_MENU:
-            topics_count = len(TALK_TOPICS) - 1
-            if self._selected_index < self._talk_scroll_offset:
-                self._talk_scroll_offset = self._selected_index
-            elif self._selected_index < topics_count and self._selected_index >= self._talk_scroll_offset + 4:
-                self._talk_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
-            total_items = len(self._session_summaries)
-            if self._selected_index < self._sessions_scroll_offset:
-                self._sessions_scroll_offset = self._selected_index
-            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
-                self._sessions_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
-            total_items = len(self._session_summaries)
-            if self._selected_index < self._sessions_scroll_offset:
-                self._sessions_scroll_offset = self._selected_index
-            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
-                self._sessions_scroll_offset = max(0, self._selected_index - 3)
+        self._follow_selection()   # one auto-scroll rule for up and down (REVIEW L13)
 
         self._on_selection_changed()
         self.update()
@@ -1722,42 +1628,7 @@ class DeltaruneShopWindow(QWidget):
         else:
             self._selected_index = (self._selected_index + 1) % count
 
-        # Auto-scroll viewport
-        if self.state == ShopState.TASKS:
-            offset_attr = [
-                "_goals_scroll_offset",
-                "_tasks_scroll_offset",
-                "_alarms_scroll_offset",
-                "_timers_scroll_offset",
-            ][self._tasks_tab]
-            cur_off = getattr(self, offset_attr)
-            if self._selected_index < cur_off:
-                setattr(self, offset_attr, self._selected_index)
-            elif self._selected_index >= cur_off + 4:
-                setattr(self, offset_attr, max(0, self._selected_index - 3))
-        elif self.state == ShopState.FACTS_EDIT:
-            if self._selected_index < self._notes_scroll_offset:
-                self._notes_scroll_offset = self._selected_index
-            elif self._selected_index >= self._notes_scroll_offset + 4:
-                self._notes_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.TALK_MENU:
-            topics_count = len(TALK_TOPICS) - 1
-            if self._selected_index < self._talk_scroll_offset:
-                self._talk_scroll_offset = self._selected_index
-            elif self._selected_index < topics_count and self._selected_index >= self._talk_scroll_offset + 4:
-                self._talk_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
-            total_items = len(self._session_summaries)
-            if self._selected_index < self._sessions_scroll_offset:
-                self._sessions_scroll_offset = self._selected_index
-            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
-                self._sessions_scroll_offset = max(0, self._selected_index - 3)
-        elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
-            total_items = len(self._session_summaries)
-            if self._selected_index < self._sessions_scroll_offset:
-                self._sessions_scroll_offset = self._selected_index
-            elif self._selected_index < total_items and self._selected_index >= self._sessions_scroll_offset + 4:
-                self._sessions_scroll_offset = max(0, self._selected_index - 3)
+        self._follow_selection()   # one auto-scroll rule for up and down (REVIEW L13)
 
         self._on_selection_changed()
         self.update()
@@ -2786,59 +2657,21 @@ class DeltaruneShopWindow(QWidget):
                     return 2  # Back
             return None
 
-        # Left-side submenus: start_x = 44, start_y = 283, line_h = 36 (TOGGLES_MENU has line_h = 28)
-        if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS,
-                          ShopState.SETTINGS_MENU, ShopState.SCALES_MENU, ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT,
-                          ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS):
-            if 20 <= pt.x() <= 400 and 265 <= pt.y() <= 485:
-                if self.state == ShopState.TOGGLES_MENU:
-                    row = (pt.y() - 262) // 28
-                    return row if 0 <= row < 7 else None
-                row = (pt.y() - 265) // 36
-                if 0 <= row < 6:
-                    if self.state in (ShopState.CHARACTER, ShopState.TASKS_SUBMENU) and row < 5:
-                        return row
-                    elif self.state == ShopState.SCALES_MENU:
-                        return row if row < 3 else None
-                    elif self.state == ShopState.SETTINGS_MENU:
-                        return row if row < 5 else None
-                    elif self.state == ShopState.TASKS:
-                        raw_len = self._get_menu_count() - 1
-                        if row == 4:
-                            return raw_len  # Back
-                        off = [self._goals_scroll_offset, self._tasks_scroll_offset, self._alarms_scroll_offset, self._timers_scroll_offset][self._tasks_tab]
-                        idx = off + row
-                        return idx if idx < raw_len else None
-                    elif self.state == ShopState.FACTS_EDIT:
-                        raw_len = len(self._get_facts_menu_items())
-                        if row == 4:
-                            return raw_len  # Back
-                        idx = self._notes_scroll_offset + row
-                        return idx if idx < raw_len else None
-                    elif self.state == ShopState.TALK_MENU:
-                        topics_count = len(TALK_TOPICS) - 1
-                        if row == 4:
-                            return topics_count  # Back
-                        idx = self._talk_scroll_offset + row
-                        return idx if idx < topics_count else None
-                    elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
-                        raw_len = len(self._session_summaries)
-                        if row == 4:
-                            return raw_len  # Back
-                        idx = self._sessions_scroll_offset + row
-                        return idx if idx < raw_len else None
+        # Left-side submenus (layouts shared with drawing: pink.shop.menus)
+        if self.state in LEFT_MENU_STATES:
+            layout = menus.TOGGLES_LIST if self.state == ShopState.TOGGLES_MENU else menus.LEFT_LIST
+            row = layout.row_at(pt.x(), pt.y())
+            if row is not None:
+                spec = self._scroll_spec()
+                if spec is not None:
+                    return menus.list_index_at_row(row, getattr(self, spec.offset_attr(self)), spec.item_count(self))
+                return row if row < self._get_menu_count() else None
 
-        # Right-side menus: start_x = 444, start_y = 283, line_h = 36
-        if self.state in (ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
-            if 412 <= pt.x() <= 630 and 265 <= pt.y() <= 465:
-                row = (pt.y() - 265) // 36
-                if 0 <= row < 5:
-                    if self.state == ShopState.ROOT:
-                        return row
-                    elif self.state == ShopState.ITEM_ACTION:
-                        return row if row < len(self._inspect_options) else None
-                    elif self.state in (ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM):
-                        return row if row < 2 else None
+        # Right-side menus
+        if self.state in RIGHT_MENU_STATES:
+            row = menus.RIGHT_LIST.row_at(pt.x(), pt.y())
+            if row is not None and row < min(5, self._get_menu_count()):
+                return row
 
         return None
 
@@ -2913,9 +2746,7 @@ class DeltaruneShopWindow(QWidget):
 
         p.setFont(self._font_body)
         options = ["CHARACTER", "TASKS & ALARMS", "TALK", "CONFIG & SETTINGS", "EXIT"]
-        start_x = 444
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.RIGHT_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -2934,9 +2765,7 @@ class DeltaruneShopWindow(QWidget):
         # Left Submenu Options (Layout, margins, line_h=36, font matching sub menu.png)
         p.setFont(self._font_body)
         options = ["Pink (Equipped)", "(COMING SOON)", "(COMING SOON)", "(COMING SOON)", "Back"]
-        start_x = 44
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -2971,9 +2800,7 @@ class DeltaruneShopWindow(QWidget):
         # Left Submenu Options (Layout, margins, line_h=36, font matching sub menu.png)
         p.setFont(self._font_body)
         options = ["Goals", "Tasks", "Alarms (COMING SOON)", "Timers (COMING SOON)", "Back"]
-        start_x = 44
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -3011,9 +2838,7 @@ class DeltaruneShopWindow(QWidget):
     def _draw_tasks_and_alarms_state(self, p: QPainter) -> None:
         # Left Submenu Options (Layout, margins, line_h=36, font matching sub menu.png)
         p.setFont(self._font_body)
-        start_x = 44
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
         if self._tasks_tab == 0:
             raw_list = ["[+ Add New Goal]"] + self._get_goals()
@@ -3022,7 +2847,7 @@ class DeltaruneShopWindow(QWidget):
             raw_list = ["[+ Add New Task]"] + self._get_active_reminders()
             scroll_off = self._tasks_scroll_offset
 
-        visible_items = raw_list[scroll_off : scroll_off + 4]
+        visible_items = raw_list[scroll_off : scroll_off + menus.VISIBLE_ROWS]
 
         for r_idx, label in enumerate(visible_items):
             actual_idx = scroll_off + r_idx
@@ -3050,7 +2875,7 @@ class DeltaruneShopWindow(QWidget):
         p.setPen(QColor(255, 255, 0))
         if scroll_off > 0:
             p.drawText(380, 283, "▲")
-        if scroll_off + 4 < len(raw_list):
+        if scroll_off + menus.VISIBLE_ROWS < len(raw_list):
             p.drawText(380, 391, "▼")
 
         # Right Box: Item details & Valuation preview inside QRect(430, 269, 185, 175)
@@ -3091,9 +2916,7 @@ class DeltaruneShopWindow(QWidget):
             f"Dialogue Scale: [{dlg_s_str}]",
             "Back",
         ]
-        start_x = 44
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -3135,9 +2958,7 @@ class DeltaruneShopWindow(QWidget):
             "Uninstall Pink",
             "Back",
         ]
-        start_x = 44
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -3194,9 +3015,7 @@ class DeltaruneShopWindow(QWidget):
             f"SFX Volume: [ < {vol_pct}% > ]",
             "Back",
         ]
-        start_x = 44
-        start_y = 278
-        line_h = 28
+        start_x, start_y, line_h = menus.TOGGLES_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -3228,13 +3047,11 @@ class DeltaruneShopWindow(QWidget):
 
     def _draw_facts_edit_state(self, p: QPainter) -> None:
         p.setFont(self._font_body)
-        start_x = 44
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
         raw_list = self._get_facts_menu_items()
         scroll_off = self._notes_scroll_offset
-        visible_items = raw_list[scroll_off : scroll_off + 4]
+        visible_items = raw_list[scroll_off : scroll_off + menus.VISIBLE_ROWS]
 
         for r_idx, label in enumerate(visible_items):
             actual_idx = scroll_off + r_idx
@@ -3262,7 +3079,7 @@ class DeltaruneShopWindow(QWidget):
         p.setPen(QColor(255, 255, 0))
         if scroll_off > 0:
             p.drawText(380, 283, "▲")
-        if scroll_off + 4 < len(raw_list):
+        if scroll_off + menus.VISIBLE_ROWS < len(raw_list):
             p.drawText(380, 391, "▼")
 
         # Right Box: Dialogue preview inside QRect(430, 269, 185, 175)
@@ -3292,13 +3109,11 @@ class DeltaruneShopWindow(QWidget):
         if self.state == ShopState.TALK_MENU:
             # Left Box: Topics (Layout matching talk inside or submenu.png)
             p.setFont(self._font_body)
-            start_x = 44
-            start_y = 283
-            line_h = 36
+            start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
             topics_without_back = TALK_TOPICS[:-1]
             scroll_off = self._talk_scroll_offset
-            visible_topics = topics_without_back[scroll_off : scroll_off + 4]
+            visible_topics = topics_without_back[scroll_off : scroll_off + menus.VISIBLE_ROWS]
 
             for r_idx, (t_title, _) in enumerate(visible_topics):
                 actual_idx = scroll_off + r_idx
@@ -3326,7 +3141,7 @@ class DeltaruneShopWindow(QWidget):
             p.setPen(QColor(255, 255, 0))
             if scroll_off > 0:
                 p.drawText(380, 283, "▲")
-            if scroll_off + 4 < len(topics_without_back):
+            if scroll_off + menus.VISIBLE_ROWS < len(topics_without_back):
                 p.drawText(380, 391, "▼")
 
             # Right Box: Dialogue preview inside QRect(430, 269, 185, 175)
@@ -3346,13 +3161,11 @@ class DeltaruneShopWindow(QWidget):
         elif self.state == ShopState.CHAT_HISTORY_SESSIONS:
             # Left Box: Session items list
             p.setFont(self._font_body)
-            start_x = 44
-            start_y = 283
-            line_h = 36
+            start_x, start_y, line_h = menus.LEFT_LIST.draw_origin()
 
             total_sessions = len(self._session_summaries)
             scroll_off = self._sessions_scroll_offset
-            visible_sessions = self._session_summaries[scroll_off : scroll_off + 4]
+            visible_sessions = self._session_summaries[scroll_off : scroll_off + menus.VISIBLE_ROWS]
 
             for r_idx, sess in enumerate(visible_sessions):
                 actual_idx = scroll_off + r_idx
@@ -3390,7 +3203,7 @@ class DeltaruneShopWindow(QWidget):
             p.setPen(QColor(255, 255, 0))
             if scroll_off > 0:
                 p.drawText(380, 283, "▲")
-            if scroll_off + 4 < total_sessions:
+            if scroll_off + menus.VISIBLE_ROWS < total_sessions:
                 p.drawText(380, 391, "▼")
 
             # Right Box: Session preview inside QRect(430, 269, 185, 175)
@@ -3495,9 +3308,7 @@ class DeltaruneShopWindow(QWidget):
 
             # Right Box: Action Choices at start_x=444, start_y=283, line_h=36
             p.setFont(self._font_body)
-            start_x = 444
-            start_y = 283
-            line_h = 36
+            start_x, start_y, line_h = menus.RIGHT_LIST.draw_origin()
 
             for i, opt in enumerate(self._inspect_options):
                 is_active = (i == self._inspect_choice_idx)
@@ -3517,9 +3328,7 @@ class DeltaruneShopWindow(QWidget):
 
         p.setFont(self._font_body)
         options = ["CLAIM REWARD", "CANCEL"]
-        start_x = 444
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.RIGHT_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -3539,9 +3348,7 @@ class DeltaruneShopWindow(QWidget):
 
         p.setFont(self._font_body)
         options = ["I REALLY DID!", "...CAUGHT ME"]
-        start_x = 444
-        start_y = 283
-        line_h = 36
+        start_x, start_y, line_h = menus.RIGHT_LIST.draw_origin()
 
         for i, opt in enumerate(options):
             is_active = (i == self._selected_index)
@@ -3648,3 +3455,21 @@ for _name in SNAPSHOT_GETTERS:
 for _name in SNAPSHOT_INVALIDATORS:
     if hasattr(DeltaruneShopWindow, _name):
         setattr(DeltaruneShopWindow, _name, _snapshot_invalidator(getattr(DeltaruneShopWindow, _name)))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Menu tables (REVIEW L13, plan 8.6): which states are left / right menus and how each scrolling list scrolls.
+# ---------------------------------------------------------------------------------------------------------------------
+LEFT_MENU_STATES = frozenset({
+    ShopState.CHARACTER, ShopState.TASKS_SUBMENU, ShopState.TASKS, ShopState.SETTINGS_MENU, ShopState.SCALES_MENU,
+    ShopState.TOGGLES_MENU, ShopState.FACTS_EDIT, ShopState.TALK_MENU, ShopState.CHAT_HISTORY_SESSIONS,
+})
+RIGHT_MENU_STATES = frozenset({ShopState.ROOT, ShopState.ITEM_ACTION, ShopState.TASK_CONFIRM, ShopState.TASK_SECOND_CONFIRM})
+_TASK_TAB_OFFSETS = ("_goals_scroll_offset", "_tasks_scroll_offset", "_alarms_scroll_offset", "_timers_scroll_offset")
+SCROLL_SPECS = {
+    ShopState.TASKS: menus.ScrollSpec(lambda w: _TASK_TAB_OFFSETS[w._tasks_tab], lambda w: w._get_menu_count() - 1, True),
+    ShopState.FACTS_EDIT: menus.ScrollSpec(lambda w: "_notes_scroll_offset", lambda w: len(w._get_facts_menu_items()), True),
+    ShopState.TALK_MENU: menus.ScrollSpec(lambda w: "_talk_scroll_offset", lambda w: len(TALK_TOPICS) - 1, False),
+    ShopState.CHAT_HISTORY_SESSIONS: menus.ScrollSpec(lambda w: "_sessions_scroll_offset",
+                                                      lambda w: len(w._session_summaries), False),
+}

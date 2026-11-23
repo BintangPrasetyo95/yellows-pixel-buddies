@@ -45,8 +45,8 @@ def _play_sound(name: str) -> None:
     try:
         import sound_manager
         sound_manager.play_sound(name)
-    except Exception:
-        pass
+    except Exception as err:
+        log.debug("_play_sound: ignored %s: %s", type(err).__name__, err)
 
 
 class TakeoverController(QObject):
@@ -352,8 +352,8 @@ class TakeoverController(QObject):
             try:
                 dlg.close()
                 dlg.deleteLater()
-            except RuntimeError:
-                pass
+            except RuntimeError as err:
+                log.debug("_close_text_viewer: ignored %s: %s", type(err).__name__, err)
 
     def _hide_voice_hud(self) -> None:
         vo = getattr(self.host, "_voice_overlay", None)
@@ -380,8 +380,8 @@ class TakeoverController(QObject):
                 if sig is not None:
                     try:
                         sig.disconnect()
-                    except Exception:
-                        pass
+                    except (TypeError, RuntimeError) as err:   # nothing connected / already deleted
+                        log.debug("abort: ignored %s: %s", type(err).__name__, err)
             worker.abort()
         self._teardown(self.abort_reaction if announce else None)
         if announce:

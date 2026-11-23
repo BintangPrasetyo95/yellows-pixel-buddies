@@ -17,8 +17,6 @@ import base64
 import io
 import logging
 import os
-from pathlib import Path
-import site
 import sys
 import threading
 import time
@@ -27,29 +25,10 @@ from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 
-# Resolve Windows PyTorch DLLs if on Python 3.8+ on Windows
-_DLL_HANDLES: list = []
-if sys.platform == "win32":
-    candidate_paths = []
-    try:
-        candidate_paths.extend(site.getsitepackages())
-    except Exception:
-        pass
-    try:
-        user_site = site.getusersitepackages()
-        if user_site:
-            candidate_paths.append(user_site)
-    except Exception:
-        pass
-    for sp in candidate_paths:
-        t_lib = Path(sp) / "torch" / "lib"
-        if t_lib.exists():
-            try:
-                os.environ["PATH"] = str(t_lib) + os.pathsep + os.environ.get("PATH", "")
-                if hasattr(os, "add_dll_directory"):
-                    _DLL_HANDLES.append(os.add_dll_directory(str(t_lib)))
-            except Exception:
-                pass
+# Resolve Windows PyTorch DLLs (one shared helper, plan 8.4) before whisper/torch are imported
+from pink.torch_dll import register_torch_dll_dirs  # noqa: E402
+
+_DLL_HANDLES: list = register_torch_dll_dirs()
 
 # Import whisper/torch BEFORE sounddevice to avoid C-level DLL initialization conflict on Windows
 _WHISPER_ERR = None
