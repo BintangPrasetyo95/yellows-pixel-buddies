@@ -3555,3 +3555,96 @@ class DeltaruneShopWindow(QWidget):
         p.setFont(self._font_small)
         p.setPen(QColor(255, 180, 220))
         p.drawText(430, 459, f"P$ {self._wallet.pink_dollars:06d}")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Data snapshot (REVIEW M21): paintEvent, hit-tests and navigation used to re-read goals / facts / reminders JSON on
+# every frame (and some readers write when they prune). The getters below now serve a snapshot that is refreshed on
+# open, on state change, after every edit or input event, and every 2 s while the shop is visible.
+# ---------------------------------------------------------------------------------------------------------------------
+import copy as _copy
+import functools as _functools
+
+SNAPSHOT_GETTERS = (
+    "_get_goals", "_get_fact_notes", "_get_user_name", "_get_active_reminder_objects", "_get_active_reminders",
+    "_get_active_alarms_list", "_get_scheduled_alarms", "_get_active_timers",
+)
+SNAPSHOT_INVALIDATORS = (
+    "_add_goal", "_delete_goal", "_complete_goal", "_save_facts", "_edit_fact_note", "_delete_fact_note",
+    "_complete_reminder", "_on_input_submitted", "keyPressEvent", "mousePressEvent", "mouseReleaseEvent",
+)
+SNAPSHOT_REFRESH_MS = 2000
+
+
+def _snapshot_getter(fn):
+    name = fn.__name__
+
+    @_functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        if args or kwargs:
+            return fn(self, *args, **kwargs)
+        cache = self.__dict__.setdefault("_snapshot_cache", {})
+        if name not in cache:
+            cache[name] = fn(self)
+        return _copy.deepcopy(cache[name])   # callers may mutate what they get (e.g. goals.append)
+    wrapper.__wrapped_uncached__ = fn
+    return wrapper
+
+
+def _snapshot_invalidator(fn):
+    @_functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            self.refresh_snapshot()
+    return wrapper
+
+
+def _refresh_snapshot(self) -> None:
+    """Drop the cached data; the next read reloads it once (outside paintEvent)."""
+    self.__dict__["_snapshot_cache"] = {}
+
+
+def _state_get(self):
+    return self.__dict__.get("_shop_state")
+
+
+def _state_set(self, value) -> None:
+    if self.__dict__.get("_shop_state") is not value:
+        self.__dict__["_shop_state"] = value
+        self.refresh_snapshot()
+
+
+_orig_show_event = DeltaruneShopWindow.showEvent
+_orig_hide_event = DeltaruneShopWindow.hideEvent
+
+
+def _show_event(self, event) -> None:
+    self.refresh_snapshot()
+    timer = self.__dict__.get("_snapshot_timer")
+    if timer is None:
+        timer = QTimer(self)
+        timer.setInterval(SNAPSHOT_REFRESH_MS)
+        timer.timeout.connect(lambda: (self.refresh_snapshot(), self.update()))
+        self.__dict__["_snapshot_timer"] = timer
+    timer.start()
+    _orig_show_event(self, event)
+
+
+def _hide_event(self, event) -> None:
+    timer = self.__dict__.get("_snapshot_timer")
+    if timer is not None:
+        timer.stop()
+    _orig_hide_event(self, event)
+
+
+DeltaruneShopWindow.refresh_snapshot = _refresh_snapshot
+DeltaruneShopWindow.state = property(_state_get, _state_set)
+DeltaruneShopWindow.showEvent = _show_event
+DeltaruneShopWindow.hideEvent = _hide_event
+for _name in SNAPSHOT_GETTERS:
+    setattr(DeltaruneShopWindow, _name, _snapshot_getter(getattr(DeltaruneShopWindow, _name)))
+for _name in SNAPSHOT_INVALIDATORS:
+    if hasattr(DeltaruneShopWindow, _name):
+        setattr(DeltaruneShopWindow, _name, _snapshot_invalidator(getattr(DeltaruneShopWindow, _name)))

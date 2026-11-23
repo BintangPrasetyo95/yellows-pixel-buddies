@@ -951,6 +951,15 @@ def set_window_input_transparent(target: Any, enabled: bool = True) -> bool:
         return False
 
 
+def dwm_flush() -> None:
+    """Wait for the next DWM composition, so a just-changed capture exclusion applies to the next grab."""
+    if IS_WINDOWS and dwmapi is not None:
+        try:
+            dwmapi.DwmFlush()
+        except Exception:
+            pass
+
+
 def set_window_exclude_from_capture(target: Any, enabled: bool = True) -> bool:
     """Exclude window from screen captures (WDA_EXCLUDEFROMCAPTURE) while keeping it visible to the user."""
     if not IS_WINDOWS or not user32:
