@@ -11959,16 +11959,26 @@ RULES:
         # start is decided below by takeover_gate from the turn's origin (REVIEW C1). The old phrase-based
         # fallback that turned replies like "watch and learn!" into takeovers is gone (REVIEW H1).
         desktop_actions = action_planner.extract_desktop_action_tags(spoken_text)
+        gate_decision = None
+        dropped_hint = None
         if desktop_actions:
             spoken_text = action_planner.strip_desktop_action_tags(spoken_text)
+            gate_decision = takeover_gate.takeover_decision(user_text, origin, had_visual=had_screen, mode=self._takeover_mode)
+            if gate_decision is takeover_gate.GateDecision.DENY:
+                # Pink just said "fine, I'll do it": never leave that as a silent lie.
+                dropped_hint = takeover_gate.dropped_takeover_hint(
+                    user_text, origin, self._takeover_mode, getattr(self, "_language", "en"))
 
-        self._memory.record_turn(user_text, spoken_text, anim, had_screen=had_screen, seen=seen)
+        recorded_text = f"{spoken_text}\n{dropped_hint}" if dropped_hint else spoken_text
+        self._memory.record_turn(user_text, recorded_text, anim, had_screen=had_screen, seen=seen)
 
         if (hasattr(self, "_dialogue_overlay") and self._dialogue_overlay.is_active()
                 and not self._dialogue_overlay.has_pending_fixed_decision()):
             self._dialogue_overlay.dismiss(clear_queue=True)
 
         steps = split_dual_dialogue(spoken_text, default_anim=anim, default_ghost=is_ghost, had_screen=had_screen)
+        if dropped_hint:
+            steps.append(DialogueStep(text=dropped_hint, anim=steps[-1].anim, is_ghost=steps[-1].is_ghost))
         first_step = steps[0]
         remaining_steps = steps[1:] if len(steps) > 1 else None
 
@@ -12012,7 +12022,7 @@ RULES:
             if len(desktop_actions) > 1:
                 log.warning("Gemini emitted %d desktop action tags; merged into one goal: %r",
                             len(desktop_actions), action.get("intent"))
-            decision = takeover_gate.takeover_decision(user_text, origin, had_visual=had_screen, mode=self._takeover_mode)
+            decision = gate_decision
             if decision is takeover_gate.GateDecision.AUTO:
                 self.execute_desktop_action(action, user_request=user_text)
             elif decision is takeover_gate.GateDecision.CONFIRM:
