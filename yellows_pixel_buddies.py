@@ -8597,6 +8597,7 @@ class YellowsPixelBuddies(QWidget):
         self._takeover = takeover_controller.TakeoverController(
             self, abort_reaction=SHAKEN_REACTION, stall_timeout_s=TAKEOVER_STALL_TIMEOUT_S)
         self._takeover_prev_state = takeover_controller.TakeoverState.IDLE
+        self._pending_update: tuple[str, str] | None = None   # (file, sha256) downloaded mid-takeover (plan 2.4)
         self.setAttribute(Qt.WA_TranslucentBackground, True)   # per-pixel transparency
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)   # don't grab focus when shown
         self._scale_modifier: float = DEFAULT_SCALE_MODIFIER
@@ -12070,6 +12071,9 @@ RULES:
             reaction = self._takeover.last_reaction
             if reaction and self._phase is Phase.HANG:
                 self._fall_after_jump(reaction)
+            if self._pending_update is not None:
+                pending, self._pending_update = self._pending_update, None
+                self._on_update_downloaded(*pending)
 
     def _on_takeover_pink_action(self, anim: str, cx: int, cy: int) -> None:
         """The worker moved / typed: face the target and keep hanging from the cursor."""
@@ -12789,7 +12793,7 @@ RULES:
         if self._takeover.is_active:
             # Applying the update ends the process with os._exit; never do that mid-step (REVIEW H13/H9).
             log.info("Update downloaded during a desktop takeover; deferring apply until it ends.")
-            QTimer.singleShot(5000, lambda fp=file_path, h=sha256: self._on_update_downloaded(fp, h))
+            self._pending_update = (file_path, sha256)   # applied by _on_takeover_state_changed on IDLE (plan 2.4)
             return
         self._say("* Update downloaded and verified! Restarting to apply... See you in a second, mew!!", force=True, record_memory=False)
         QTimer.singleShot(1500, lambda fp=file_path, h=sha256: self._apply_verified_update(fp, h))

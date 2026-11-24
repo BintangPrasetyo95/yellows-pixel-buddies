@@ -1285,6 +1285,25 @@ class DeltaruneShopWindow(QWidget):
                 log.warning("Could not load fact notes from %s: %s", p, e)
         return []
 
+    def _get_fact_sources(self) -> dict[str, str]:
+        """Note text -> where it came from, for notes not typed in plain chat (e.g. "visual") (REVIEW C5)."""
+        p = self._get_facts_file_path()
+        if p.exists():
+            try:
+                sources = self._json_read(p).get("note_sources", {})
+                return sources if isinstance(sources, dict) else {}
+            except (OSError, ValueError, AttributeError, StoreCorrupt) as e:   # unreadable / not a dict: no flags
+                log.warning("Could not load fact sources from %s: %s", p, e)
+        return {}
+
+    def _is_visual_fact(self, note_text: str) -> bool:
+        return self._get_fact_sources().get(note_text) == "visual"
+
+    def _drop_fact_source(self, data: dict, note_text: str) -> None:
+        """The user edited or deleted this note, so it no longer needs review."""
+        if isinstance(data.get("note_sources"), dict):
+            data["note_sources"].pop(note_text, None)
+
     def _save_facts(self, name: str | None = None, new_note: str | None = None) -> None:
         if name and hasattr(self, "_memory") and self._memory and hasattr(self._memory, "set_user_name"):
             self._memory.set_user_name(name)
@@ -1320,6 +1339,7 @@ class DeltaruneShopWindow(QWidget):
             try:
                 data = self._json_read(p) if p.exists() else {}
                 data["notes"] = notes
+                self._drop_fact_source(data, old_text)
                 self._json_write(p, data)
                 return True
             except Exception as e:
@@ -1340,6 +1360,7 @@ class DeltaruneShopWindow(QWidget):
             try:
                 data = self._json_read(p) if p.exists() else {}
                 data["notes"] = notes
+                self._drop_fact_source(data, note_text)
                 self._json_write(p, data)
                 return True
             except Exception as e:
@@ -1746,8 +1767,11 @@ class DeltaruneShopWindow(QWidget):
             f"Nickname: [{name}] (Edit)",
             "[+ Add New Fact Note]",
         ]
+        sources = self._get_fact_sources()
         for i, n in enumerate(notes):
             preview = n.replace("\n", " ").strip()
+            if sources.get(n) == "visual":
+                preview = "(img) " + preview   # learned from a screenshot/image: flag it for review (REVIEW C5)
             if len(preview) > 28:
                 preview = preview[:27] + "..."
             items.append(f"{i+1}. {preview}")
@@ -1873,7 +1897,8 @@ class DeltaruneShopWindow(QWidget):
                 self.set_dialogue("* Inscribe a new permanent fact note into Pink's logs.", typewriter=False)
             elif self._selected_index - 2 < len(notes):
                 full_note = notes[self._selected_index - 2]
-                self.set_dialogue(f"* Fact Note #{self._selected_index - 1}:\n* \"{full_note}\"", typewriter=False)
+                seen = "\n* (I learned this from a screenshot. Check it!)" if self._is_visual_fact(full_note) else ""
+                self.set_dialogue(f"* Fact Note #{self._selected_index - 1}:\n* \"{full_note}\"{seen}", typewriter=False)
             else:
                 self.set_dialogue("* Return to sanctuary settings.", typewriter=False)
 
@@ -3139,7 +3164,8 @@ class DeltaruneShopWindow(QWidget):
             desc = f"* Inscribe a new permanent fact note into Pink's memory logs.{curiosity_hint}"
         elif 2 <= self._selected_index < len(notes) + 2:
             n_text = notes[self._selected_index - 2]
-            desc = f"* Note #{self._selected_index - 1}:\n* \"{n_text}\"\n* [Click to open & edit]"
+            seen = "\n* Learned from a screenshot. Is it right?" if self._is_visual_fact(n_text) else ""
+            desc = f"* Note #{self._selected_index - 1}:\n* \"{n_text}\"{seen}\n* [Click to open & edit]"
         else:
             desc = "* Return to sanctuary settings."
         p.drawText(QRect(430, 269, 185, 175), Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap, desc)
@@ -3416,7 +3442,8 @@ import copy as _copy
 import functools as _functools
 
 SNAPSHOT_GETTERS = (
-    "_get_goals", "_get_fact_notes", "_get_user_name", "_get_active_reminder_objects", "_get_active_reminders",
+    "_get_goals", "_get_fact_notes", "_get_fact_sources", "_get_user_name", "_get_active_reminder_objects",
+    "_get_active_reminders",
     "_get_active_alarms_list", "_get_scheduled_alarms", "_get_active_timers",
 )
 SNAPSHOT_INVALIDATORS = (
