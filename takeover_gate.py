@@ -56,10 +56,16 @@ def is_slash_command(text: str) -> bool:
 # A request the user actually phrased as an instruction, at the START of their own words.
 # English + Indonesian verbs. Deliberately excludes "do", "show", "act", "start" (which match
 # ordinary questions like "what do you think?" or "can you show me how X works?").
+# Polite/indirect openers ("help me", "I want you to", "go", "bantu aku", "coba") still need one of the
+# verbs right after them, so "help me understand X" stays a question. Indonesian verbs take the
+# colloquial -in / -kan suffixes ("bukain", "kirimin", "puterin").
 _IMPERATIVE = re.compile(
-    r"^(?:(?:hey\s+)?pink[,!:.]?\s+)?(?:please\s+|pls\s+|tolong\s+)?(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?"
+    r"^(?:(?:hey\s+)?pink[,!:.]?\s+)?(?:please\s+|pls\s+|tolong\s+)?"
+    r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|(?:please\s+)?help\s+me\s+(?:to\s+)?|i\s+(?:want|need)\s+you\s+to\s+"
+    r"|go\s+(?:and\s+)?|bantu(?:in)?\s+(?:aku|saya|gue|gw)\s+(?:untuk\s+)?|coba\s+)?"
     r"(?:open|launch|run|click|type|press|send|reply|play|pause|search|go\s+to|switch\s+to|close|quit|navigate\s+to|message|"
-    r"buka|jalankan|putar|kirim|balas|cari|klik|ketik|tutup|pergi\s+ke)\b"
+    r"buka(?:in|kan)?|jalan(?:in|kan)|put(?:a|e)r(?:in|kan)?|kirim(?:in|kan)?|bal(?:a|e)s(?:in|kan)?|cari(?:in|kan)?|"
+    r"klik(?:in)?|ketik(?:in|kan)?|tutup(?:in)?|pergi\s+ke)\b"
 )
 
 
@@ -101,6 +107,36 @@ def takeover_decision(user_text: str, origin: TurnOrigin | str, had_visual: bool
     if not is_imperative_request(text):
         return GateDecision.DENY
     return GateDecision.CONFIRM  # had_visual or not: model-proposed takeovers are always confirmed
+
+
+_HINT_MAX_CHARS = 160
+
+
+def dropped_takeover_hint(user_text: str, origin: TurnOrigin | str, mode: str | None, language: str = "en") -> str | None:
+    """The line Pink adds when the model proposed a takeover that ``takeover_decision`` DENIED.
+
+    Without it Pink says "Fine, I'll open it!" and then nothing happens. The hint offers the explicit
+    ``/do`` command built from the user's OWN words, never from the model's tag, so content on screen
+    can't put a command in Pink's mouth. Only for the user's own typed/voice turns and only while takeovers
+    are switched on; every other case returns None.
+    """
+    mode = normalize_mode(mode)
+    if mode == TAKEOVER_MODE_OFF:
+        return None
+    try:
+        origin = TurnOrigin(origin)
+    except ValueError:
+        return None
+    if origin not in (TurnOrigin.TYPED, TurnOrigin.VOICE):
+        return None
+    text = " ".join((user_text or "").split())
+    if not text or text.startswith("[") or is_slash_command(text):
+        return None
+    if len(text) > _HINT_MAX_CHARS:
+        text = text[:_HINT_MAX_CHARS].rstrip() + "…"
+    if language == "id":
+        return f"* ...eh, tunggu! Yang itu aku belum bisa langsung ambil alih. Ketik: /do {text}"
+    return f"* ...wait! I can't take over for that one on my own. Type: /do {text}"
 
 
 # ---------------------------------------------------------------------------------------------

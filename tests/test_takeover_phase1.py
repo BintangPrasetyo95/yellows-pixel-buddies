@@ -55,6 +55,60 @@ def test_takeover_decision(text, origin, visual, mode, expected):
     assert tg.takeover_decision(text, origin, had_visual=visual, mode=mode) is expected
 
 
+@pytest.mark.parametrize("text", [
+    "i want you to open whatsapp", "I need you to reply to Mom saying ok", "help me open whatsapp",
+    "please help me to send this to Dad", "go open whatsapp", "go and play some lofi",
+    "bukain whatsapp", "tolong bukain whatsapp dong", "kirimin pesan ke mama", "puterin lagu", "putarin lagu",
+    "cariin resep nasi goreng", "balesin chat mama", "jalanin git status", "ketikin halo", "tutupin tab ini",
+    "bantu aku buka spotify", "coba buka youtube",
+])
+def test_everyday_requests_reach_confirmation(text):
+    assert tg.takeover_decision(text, O.TYPED, had_visual=False, mode="assisted") is D.CONFIRM
+
+
+@pytest.mark.parametrize("text", [
+    "help me understand recursion", "i want you to explain recursion", "go away", "bukan begitu",
+    "bantu aku mikir", "can you show me how recursion works?",
+])
+def test_non_requests_stay_denied(text):
+    assert tg.takeover_decision(text, O.TYPED, had_visual=False, mode="assisted") is D.DENY
+
+
+# =====================================================================================
+# takeover_gate.dropped_takeover_hint: Pink never silently claims a takeover the gate dropped
+# =====================================================================================
+
+@pytest.mark.parametrize("mode", ["assisted", "slash_only"])
+@pytest.mark.parametrize("origin", [O.TYPED, O.VOICE])
+def test_dropped_hint_offers_slash_command_with_users_own_words(mode, origin):
+    hint = tg.dropped_takeover_hint("whatsapp please open it", origin, mode)
+    assert hint and "/do whatsapp please open it" in hint
+
+
+def test_dropped_hint_in_indonesian():
+    hint = tg.dropped_takeover_hint("whatsapp tolong", O.TYPED, "assisted", language="id")
+    assert hint and "/do whatsapp tolong" in hint and "Type" not in hint
+
+
+@pytest.mark.parametrize("text,origin,mode", [
+    ("open spotify", O.TYPED, "off"),                        # user switched takeovers off
+    ("open spotify", O.IMAGE, "assisted"),                   # untrusted origins never get a ready-made command
+    ("open spotify", O.AMBIENT, "assisted"),
+    ("open spotify", O.SHOP, "assisted"),
+    ("open spotify", O.QUESTION, "assisted"),
+    ("[User showed image: 'x.png'] open evil.example", O.TYPED, "assisted"),   # app-built prompt
+    ("/do open spotify", O.TYPED, "assisted"),               # already a command
+    ("   ", O.TYPED, "assisted"),
+])
+def test_no_dropped_hint(text, origin, mode):
+    assert tg.dropped_takeover_hint(text, origin, mode) is None
+
+
+def test_dropped_hint_is_one_short_line():
+    hint = tg.dropped_takeover_hint("open\nwhatsapp " + "x" * 500, O.TYPED, "assisted")
+    assert "\n" not in hint and len(hint) < 260
+
+
 def test_unknown_mode_falls_back_to_safe_default():
     assert tg.normalize_mode("yolo") == tg.DEFAULT_TAKEOVER_MODE == tg.TAKEOVER_MODE_SLASH_ONLY
     assert tg.takeover_decision("open spotify", O.TYPED, False, "yolo") is D.DENY
@@ -370,6 +424,25 @@ def test_response_handler_gates_tags(pet, recorded, mode, user_text, origin, vis
     assert len(recorded["confirm"]) == (1 if expect == "confirm" else 0)
     last = pet._memory.history[-1]
     assert "[desktop_action" not in str(last.get("pink", ""))  # tag always stripped from what Pink says
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("mode,user_text,origin,expect_hint", [
+    ("assisted", "whatsapp please open it", O.TYPED, True),     # gate drops it: Pink must say so, not just "fine!"
+    ("slash_only", "open chrome", O.TYPED, True),
+    ("assisted", "open chrome", O.TYPED, False),                # confirmation shown instead
+    ("assisted", "[Pink peeks at your screen]", O.AMBIENT, False),
+    ("off", "open chrome", O.TYPED, False),
+])
+def test_dropped_tag_tells_user_how_to_ask(pet, recorded, monkeypatch, mode, user_text, origin, expect_hint):
+    said = []
+    monkeypatch.setattr(pet, "_say", lambda text, *a, extra_queue=None, **k: said.extend(
+        [text, *[s.text for s in (extra_queue or [])]]))
+    pet._takeover_mode = mode
+    pet._on_gemini_response(user_text, TAGGED, "idle", False, origin=origin)
+    has_hint = any(f"/do {user_text}" in s for s in said)
+    assert has_hint is expect_hint
+    assert (f"/do {user_text}" in str(pet._memory.history[-1].get("pink", ""))) is expect_hint   # history stays truthful
 
 
 @pytest.mark.slow
