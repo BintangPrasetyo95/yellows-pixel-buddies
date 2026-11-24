@@ -22,7 +22,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['onnxruntime'],   # unused; PyInstaller's analysis of it crashes (torch after PyQt5)
     noarchive=False,
     optimize=0,
 )

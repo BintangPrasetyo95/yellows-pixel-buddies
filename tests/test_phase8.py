@@ -282,3 +282,18 @@ def test_no_silent_excepts(path, cls):
 def test_torch_dll_helper_is_idempotent():
     from pink import torch_dll
     assert torch_dll.register_torch_dll_dirs() is torch_dll.register_torch_dll_dirs()
+
+
+def test_build_excludes_onnxruntime_which_the_app_never_imports():
+    """PyInstaller crashes analysing onnxruntime (it imports torch after PyQt5: access violation). The app doesn't use
+    it (torch.onnx only references it optionally), so the spec excludes it. Guard that exclusion stays safe."""
+    root = Path(__file__).resolve().parents[1]
+    spec = (root / "Yellows-Pixel-Buddies.spec").read_text(encoding="utf-8")
+    excludes = ast.literal_eval(spec.split("excludes=", 1)[1].split("]", 1)[0] + "]")
+    assert "onnxruntime" in excludes
+    sources = [p for p in root.glob("*.py")] + list((root / "pink").rglob("*.py"))
+    for p in sources:
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        names = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+        names |= {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+        assert not any(m.split(".")[0] in ("onnxruntime", "faster_whisper") for m in names), p.name

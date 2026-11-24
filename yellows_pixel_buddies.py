@@ -182,7 +182,7 @@ import voice_service
 # =============================================================================
 
 # --- Application Metadata & Auto-Update --------------------------------------
-APP_VERSION = "0.9.8.6"
+APP_VERSION = "0.9.9.0"
 GITHUB_REPO = "BintangPrasetyo95/yellows-pixel-buddies"
 
 # --- Paths & Sprites ---------------------------------------------------------
