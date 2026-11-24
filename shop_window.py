@@ -26,9 +26,10 @@ Comprehensive Feature Set:
 from __future__ import annotations
 
 import datetime
-import json
 
 from pink.ai import protocol
+from pink.storage import sessions
+from pink.storage.json_store import JsonStore, StoreCorrupt
 from pink.shop import menus
 from pink.text import intents
 from pink.text.intents import evaluate_task_value  # noqa: F401 - used below and re-exported
@@ -130,62 +131,94 @@ class ShopState(Enum):
     EXITING = auto()               # Goodbye dialogue, requires second click to exit
 
 class PinkWallet:
-    """Manages Pink Dollars (P$) and unlocked forms persisted in memory/wallet.json."""
+    """A view of memory/wallet.json (Pink Dollars, forms, topic counters) with ONE owner: the memory store.
 
-    def __init__(self, path: Path) -> None:
+    The shop used to load the wallet once and later save its stale balance over P$ awarded by chat goal completions
+    (REVIEW H16). Now every change re-reads the file under the store's lock and changes only its own fields, and the
+    balance is reloaded whenever the shop opens.
+    """
+    DEFAULTS = {"pink_dollars": 15, "unlocked_forms": ["doll"], "active_form": "doll", "topic_counts": {}}
+
+    def __init__(self, path: Path, store: JsonStore | None = None) -> None:
         self._path = path
+        self._store = store or JsonStore()
         self.pink_dollars: int = 15
         self.unlocked_forms: list[str] = ["doll"]
         self.active_form: str = "doll"
         self.topic_counts: dict[str, int] = {}
         self._load()
 
+    def _apply(self, data: dict) -> None:
+        old_val = data.get("pink_dollars", data.get("dark_dollars", 15))
+        try:
+            self.pink_dollars = max(0, int(old_val))
+        except (TypeError, ValueError):
+            self.pink_dollars = 15
+        self.unlocked_forms = list(data.get("unlocked_forms", ["doll"]))
+        self.active_form = str(data.get("active_form", "doll"))
+        self.topic_counts = dict(data.get("topic_counts", {}))
+
     def _load(self) -> None:
-        if self._path.exists():
-            try:
-                data = json.loads(self._path.read_text(encoding="utf-8"))
-                old_val = data.get("pink_dollars", data.get("dark_dollars", 15))
-                self.pink_dollars = max(0, int(old_val))
-                self.unlocked_forms = list(data.get("unlocked_forms", ["doll"]))
-                self.active_form = str(data.get("active_form", "doll"))
-                self.topic_counts = dict(data.get("topic_counts", {}))
-                return
-            except Exception as e:
-                log.warning("Error reading wallet %s: %s", self._path, e)
-        self.pink_dollars = 15
-        self.unlocked_forms = ["doll"]
-        self.active_form = "doll"
-        self.topic_counts = {}
-        self.save()
+        """Reload from disk. A missing wallet is created with the defaults; a corrupt one is never overwritten."""
+        data = self._store.read(self._path, None)
+        if not isinstance(data, dict):
+            self._apply(dict(self.DEFAULTS))
+            if not self._path.exists():
+                self._update(lambda d: None)
+            return
+        self._apply(data)
+
+    reload = _load
+
+    def _update(self, mutate) -> bool:
+        def _do(data: dict) -> None:
+            for k, v in self.DEFAULTS.items():
+                data.setdefault(k, v if not isinstance(v, (list, dict)) else type(v)(v))
+            mutate(data)
+            data["updated_at"] = time.time()
+            self._apply(data)
+        try:
+            self._store.update(self._path, {}, _do)
+            return True
+        except (StoreCorrupt, OSError) as e:
+            log.warning("Wallet not saved (%s): %s", self._path.name, e)
+            return False
 
     def save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "pink_dollars": self.pink_dollars,
-                "unlocked_forms": self.unlocked_forms,
-                "active_form": self.active_form,
-                "topic_counts": self.topic_counts,
-                "updated_at": time.time(),
-            }
-            self._path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        except Exception as e:
-            log.warning("Error saving wallet %s: %s", self._path, e)
+        """Persist forms and topic counters. The BALANCE is never written from this cached copy: only add/spend
+        (and MemoryManager.award_pink_dollars) change it, each from a fresh read."""
+        forms, active, topics = list(self.unlocked_forms), self.active_form, dict(self.topic_counts)
+
+        def _m(data: dict) -> None:
+            data["unlocked_forms"], data["active_form"] = forms, active
+            data["topic_counts"] = {**data.get("topic_counts", {}), **topics}
+        self._update(_m)
+
+    def bump_topic(self, key: str) -> int:
+        def _m(data: dict) -> None:
+            counts = data.setdefault("topic_counts", {})
+            counts[key] = int(counts.get(key, 0)) + 1
+        self._update(_m)
+        return self.topic_counts.get(key, 0)
 
     def add(self, amount: int) -> int:
-        self.pink_dollars = max(0, self.pink_dollars + amount)
-        self.save()
+        def _m(data: dict) -> None:
+            data["pink_dollars"] = max(0, int(data.get("pink_dollars", 15)) + amount)
+        self._update(_m)
         play_sound("coin")
         return self.pink_dollars
 
     def spend(self, amount: int) -> bool:
-        if self.pink_dollars >= amount:
-            self.pink_dollars -= amount
-            self.save()
-            play_sound("coin")
-            return True
-        play_sound("menu_error")
-        return False
+        ok = {"v": False}
+
+        def _m(data: dict) -> None:
+            bal = int(data.get("pink_dollars", 15))
+            if bal >= amount:
+                data["pink_dollars"] = bal - amount
+                ok["v"] = True
+        self._update(_m)
+        play_sound("coin" if ok["v"] else "menu_error")
+        return ok["v"]
 
 
 # --- Character Forms (Classic Doll active; others COMING SOON) -----------------
@@ -326,7 +359,7 @@ class DeltaruneShopWindow(QWidget):
         self._awaiting_ai_reply = False   # True only while an 'Ask Pink' question is waiting for Gemini (REVIEW M17)
         self._font_family = font_family
         wallet_path = self._memory.wallet_path if hasattr(self, "_memory") and self._memory and hasattr(self._memory, "wallet_path") else WALLET_PATH
-        self._wallet = PinkWallet(wallet_path)
+        self._wallet = PinkWallet(wallet_path, store=getattr(self._memory, "store", None))
 
         # Scale factor & Geometry
         self._scale = 1.0
@@ -637,9 +670,7 @@ class DeltaruneShopWindow(QWidget):
 
     def _get_topic_dialogue(self, topic_key: str) -> list[str]:
         if topic_key == "place":
-            count = self._wallet.topic_counts.get("place", 0)
-            self._wallet.topic_counts["place"] = count + 1
-            self._wallet.save()
+            count = self._wallet.bump_topic("place") - 1
             if count == 0:
                 return [
                     "* I've never seen a sunset so breathtaking...",
@@ -655,9 +686,7 @@ class DeltaruneShopWindow(QWidget):
                 ]
 
         elif topic_key == "name":
-            count = self._wallet.topic_counts.get("name", 0)
-            self._wallet.topic_counts["name"] = count + 1
-            self._wallet.save()
+            count = self._wallet.bump_topic("name") - 1
             if count == 0:
                 return [
                     "* Right, of course, I'm also human. That's why I look and feel like a flower.",
@@ -672,9 +701,7 @@ class DeltaruneShopWindow(QWidget):
                 ]
 
         elif topic_key == "ears":
-            count = self._wallet.topic_counts.get("ears", 0)
-            self._wallet.topic_counts["ears"] = count + 1
-            self._wallet.save()
+            count = self._wallet.bump_topic("ears") - 1
             variant = count % 3
             if variant == 0:  # Kris variant
                 return [
@@ -696,9 +723,7 @@ class DeltaruneShopWindow(QWidget):
                 ]
 
         elif topic_key == "people":
-            count = self._wallet.topic_counts.get("people", 0)
-            self._wallet.topic_counts["people"] = count + 1
-            self._wallet.save()
+            count = self._wallet.bump_topic("people") - 1
             if count == 0:
                 return [
                     "* Asgore... he seems happy. You should be happy for him, too.",
@@ -756,6 +781,7 @@ class DeltaruneShopWindow(QWidget):
         return []
 
     def open_shop(self) -> None:
+        self._wallet.reload()   # P$ may have been awarded in chat since the shop was last open (REVIEW H16)
         self._calculate_target_geometry()
         self.state = ShopState.ROOT
         self._selected_index = 0
@@ -888,14 +914,14 @@ class DeltaruneShopWindow(QWidget):
         sessions_dir = getattr(mem, "sessions_dir", None)
         if sessions_dir and sessions_dir.is_dir():
             active_name = mem.session_file.name if hasattr(mem, "session_file") and mem.session_file else ""
-            files = sorted(sessions_dir.glob("session_*.json"), reverse=True)
+            files = sessions.session_files(sessions_dir)
             for f in files:
                 if f.name == active_name:
                     continue
                 try:
                     if f.stat().st_size <= 120:
                         continue
-                    data = json.loads(f.read_text(encoding="utf-8"))
+                    data = sessions.load_session(f)
                     msgs = data.get("messages", [])
                     if not msgs:
                         continue
@@ -1114,9 +1140,9 @@ class DeltaruneShopWindow(QWidget):
         # folder MemoryManager writes to (REVIEW H17).
         sessions_dir = getattr(mem, "sessions_dir", None) or (_BASE_DIR / "memory" / "sessions")
         if sessions_dir.exists():
-            for s_file in sorted(sessions_dir.glob("session_*.json"), reverse=True)[:12]:
+            for s_file in sessions.session_files(sessions_dir)[:12]:
                 try:
-                    data = json.loads(s_file.read_text(encoding="utf-8"))
+                    data = sessions.load_session(s_file)
                     for msg in data.get("messages", []):
                         msg_ts = _parse_iso_ts(msg.get("timestamp"))
                         # Validate that evidence occurred strictly after task creation
@@ -1165,7 +1191,7 @@ class DeltaruneShopWindow(QWidget):
         p = self._get_goals_file_path()
         if p.exists():
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                data = self._json_read(p)
                 if isinstance(data, list):
                     return [g.get("text", "") if isinstance(g, dict) else str(g) for g in data if g and not (isinstance(g, dict) and g.get("completed"))]
             except Exception as e:
@@ -1184,7 +1210,7 @@ class DeltaruneShopWindow(QWidget):
             p = self._get_goals_file_path()
             try:
                 p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(json.dumps([{"text": g, "completed": False} for g in goals], indent=2), encoding="utf-8")
+                self._json_write(p, [{"text": g, "completed": False} for g in goals])
                 return True
             except Exception as e:
                 log.warning("Could not save goals: %s", e)
@@ -1199,7 +1225,7 @@ class DeltaruneShopWindow(QWidget):
             goals.remove(text)
             p = self._get_goals_file_path()
             try:
-                p.write_text(json.dumps([{"text": g, "completed": False} for g in goals], indent=2), encoding="utf-8")
+                self._json_write(p, [{"text": g, "completed": False} for g in goals])
                 return True
             except Exception as e:
                 log.warning("Could not delete goal: %s", e)
@@ -1243,7 +1269,7 @@ class DeltaruneShopWindow(QWidget):
         p = self._get_facts_file_path()
         if p.exists():
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                data = self._json_read(p)
                 return data.get("user_name", "Minion")
             except Exception:
                 pass
@@ -1253,7 +1279,7 @@ class DeltaruneShopWindow(QWidget):
         p = self._get_facts_file_path()
         if p.exists():
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                data = self._json_read(p)
                 return list(data.get("notes", []))
             except Exception as e:
                 log.warning("Could not load fact notes from %s: %s", p, e)
@@ -1269,7 +1295,7 @@ class DeltaruneShopWindow(QWidget):
         data = {"user_name": "Minion", "notes": []}
         if p.exists():
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                data = self._json_read(p)
             except Exception:
                 pass
         if name:
@@ -1281,7 +1307,7 @@ class DeltaruneShopWindow(QWidget):
             data["notes"] = notes
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            self._json_write(p, data)
         except Exception as e:
             log.warning("Error saving facts to %s: %s", p, e)
 
@@ -1292,9 +1318,9 @@ class DeltaruneShopWindow(QWidget):
             notes[idx] = new_text
             p = self._get_facts_file_path()
             try:
-                data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+                data = self._json_read(p) if p.exists() else {}
                 data["notes"] = notes
-                p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                self._json_write(p, data)
                 return True
             except Exception as e:
                 log.warning("Could not edit fact note: %s", e)
@@ -1312,9 +1338,9 @@ class DeltaruneShopWindow(QWidget):
             notes.remove(note_text)
             p = self._get_facts_file_path()
             try:
-                data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+                data = self._json_read(p) if p.exists() else {}
                 data["notes"] = notes
-                p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                self._json_write(p, data)
                 return True
             except Exception as e:
                 log.warning("Could not delete fact note: %s", e)
@@ -1373,6 +1399,23 @@ class DeltaruneShopWindow(QWidget):
 
     # --- Item Action / Inspector Mode -----------------------------------------
 
+    def _json_read(self, p: Path) -> Any:
+        """Read facts/goals through the memory store (corrupt files are quarantined, never overwritten - REVIEW C6)."""
+        if not p.exists():
+            raise FileNotFoundError(p)
+        return self._wallet._store.read(p, strict=True)
+
+    def _json_write(self, p: Path, data: Any) -> None:
+        if not self._wallet._store.write(p, data):
+            raise StoreCorrupt(p)
+
+    def _inspect_item_ref(self) -> str:
+        """The inspected reminder's ID (stable) - its text only if it has none (REVIEW H14)."""
+        data = self._inspect_item_data
+        if isinstance(data, dict) and data.get("id"):
+            return str(data["id"])
+        return self._inspect_item_text
+
     def _open_item_action(self, kind: str, text: str, data: Any = None) -> None:
         self._inspect_item_kind = kind
         self._inspect_item_text = text
@@ -1427,7 +1470,7 @@ class DeltaruneShopWindow(QWidget):
         elif self._inspect_item_kind == "task":
             if opt.startswith("Complete"):
                 task_text = self._inspect_item_text
-                self._pending_sell_reminder = task_text
+                self._pending_sell_reminder = self._inspect_item_ref()
                 self._pending_sell_value = evaluate_task_value(task_text)
                 r_data = self._inspect_item_data if isinstance(self._inspect_item_data, dict) else None
                 has_ev, on_screen, kw = self._scan_task_evidence(task_text, task_data=r_data)
@@ -1449,7 +1492,7 @@ class DeltaruneShopWindow(QWidget):
                     )
             elif opt.startswith("Delete"):
                 if self._memory:
-                    self._memory.delete_reminder(self._inspect_item_text)
+                    self._memory.delete_reminder(self._inspect_item_ref())
                 play_sound("menu_select")
                 self.set_dialogue(f"* Task removed from chore board:\n* \"{self._inspect_item_text}\"")
                 self.state = ShopState.TASKS

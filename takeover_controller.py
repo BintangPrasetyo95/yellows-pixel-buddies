@@ -45,7 +45,7 @@ def _play_sound(name: str) -> None:
     try:
         import sound_manager
         sound_manager.play_sound(name)
-    except Exception as err:
+    except Exception as err:  # noqa: BLE001 - a sound problem must never break a takeover
         log.debug("_play_sound: ignored %s: %s", type(err).__name__, err)
 
 
@@ -147,7 +147,8 @@ class TakeoverController(QObject):
                 f"- User: {t.get('user', '')[:140]} | Pink: {t.get('pink', '')[:140]}"
                 for t in turns if isinstance(t, dict) and t.get("user")
             )
-        except Exception:
+        except (AttributeError, TypeError) as err:   # history missing or not a list of dicts
+            log.debug("No recent chat context for the takeover: %s", err)
             return ""
 
     def _open_session(self, worker: Any, max_steps: int) -> None:

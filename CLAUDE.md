@@ -21,9 +21,10 @@
   docs and the review drift. Small targeted edits only (GEMINI.md §3).
 - Known bugs are `xfail(strict=True, reason="REVIEW <ID>")` in `tests/`. A fix must remove the
   marker; put the finding IDs in the commit message, e.g. `fix(takeover): cancel ends plan [C3]`.
-- Current work: `temp/REVIEW.md` (68 findings) and `temp/IMPLEMENTATION_PLAN.md` (phases 0–8;
-  Phase 0 merged, Phase 1 on `fix/takeover-safety-gates`, Phase 6 stacked on it in `fix/phase6-general-bugs`).
-  Both are gitignored and exist locally only.
+- Current work: `temp/REVIEW.md` (68 findings) and `temp/IMPLEMENTATION_PLAN.md` (phases 0–8), both gitignored.
+  Phases are stacked branches, merge in order: 1, 6 → `fix/phase3-privacy-security` → `fix/phase4-takeover-targeting`
+  → `fix/phase7-performance` → `refactor/phase5-takeover-controller` → `refactor/phase8-decomposition`
+  → `fix/phase2-data-integrity`.
 - Alarms/timers ship OFF (`ALARMS_ENABLED = False`) until `_check_alarms_and_timers` actually rings; flip only together.
 - Tests that build the full pet must tear it down with `tests.conftest.shutdown_pet()` (or `_do_real_quit()`):
   a still-running MediaWatcher QThread at exit kills pytest before it prints a summary.
@@ -35,6 +36,11 @@
   `action_planner.py`). Add or change a tag there; never add another strip regex.
 - `pink/` holds modules extracted from the monolith (prompt pieces, tag protocol, slash-command router, pure
   text intents, shop menu layout). They must not import Qt, torch or the main script.
+- Memory: `pink/storage/manager.py` (`MemoryManager`). Every memory JSON read/write goes through its `store`
+  (`pink/storage/json_store.py`: atomic, locked, corrupt files backed up and never overwritten). Never `write_text`
+  a memory file. Sessions are append-only `session_*.jsonl` (`pink/storage/sessions.py`; old `.json` still read).
+- Memory tags in Gemini replies are only *parsed* on worker threads (`pink/storage/actions.py`) and applied on the
+  GUI thread with a `MemoryPolicy`: ambient/tray/cinema/song turns change nothing, visual turns only add.
 
 ## Environment
 - Windows only, Python 3.13. The Bash tool is Git Bash; PowerShell is also available.
