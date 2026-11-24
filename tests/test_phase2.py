@@ -234,6 +234,28 @@ def test_media_watcher_stops_without_waiting_out_its_sleep(qapp):
     assert time.monotonic() - t0 < 0.3
 
 
+def test_update_downloaded_mid_takeover_is_applied_when_it_ends(monkeypatch):
+    TS = ypb.takeover_controller.TakeoverState
+    applied, timers = [], []
+    monkeypatch.setattr(ypb.QTimer, "singleShot", lambda ms, fn: timers.append(fn))
+    cls = ypb.YellowsPixelBuddies
+    host = types.SimpleNamespace(
+        _takeover=types.SimpleNamespace(is_active=True, last_reaction=None), _phase=ypb.Phase.PAUSE,
+        _pending_update=None, _takeover_prev_state=TS.RUNNING, _say=lambda *a, **k: None,
+        _apply_verified_update=lambda fp, h: applied.append((fp, h)),
+    )
+    host._on_update_downloaded = lambda fp, h: cls._on_update_downloaded(host, fp, h)
+
+    host._on_update_downloaded("setup.exe", "abc")
+    assert host._pending_update == ("setup.exe", "abc") and timers == []      # no 5 s polling, nothing applied
+
+    host._takeover.is_active = False
+    cls._on_takeover_state_changed(host, TS.IDLE)
+    assert host._pending_update is None and len(timers) == 1
+    timers[0]()
+    assert applied == [("setup.exe", "abc")]
+
+
 # =====================================================================================
 # H14 - IDs and one-snapshot resolution
 # =====================================================================================
@@ -297,6 +319,21 @@ def test_shop_completes_reminders_by_id(shop, mem):
     ok, deleted = mem.delete_reminder(shop._inspect_item_ref())
     assert ok and deleted == "run 5k with Sam"
     assert [r["text"] for r in mem.get_active_reminders()] == ["run"]
+
+
+def test_shop_flags_facts_learned_from_a_screenshot_until_reviewed(shop, mem):
+    mem.add_fact("likes tea")
+    mem.add_fact("uses a dark theme", source="visual")
+    items = shop._get_facts_menu_items()
+    assert "1. likes tea" in items and "2. (img) uses a dark theme" in items
+    assert shop._is_visual_fact("uses a dark theme") and not shop._is_visual_fact("likes tea")
+
+    assert shop._edit_fact_note("uses a dark theme", "uses a dark editor theme")   # the user reviewed it
+    assert not any("(img)" in i for i in shop._get_facts_menu_items())
+    mem.add_fact("owns a cat", source="visual")
+    shop.refresh_snapshot()                                   # the shop re-reads outside writes on its 2 s tick
+    assert shop._delete_fact_note("owns a cat")
+    assert shop._get_fact_sources() == {}
 
 
 # =====================================================================================
