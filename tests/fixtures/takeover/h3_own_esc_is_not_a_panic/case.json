@@ -1,0 +1,54 @@
+{
+  "note": "REVIEW H3: Pink pressing Esc herself (to close a menu) is a normal step, not an emergency abort.",
+  "goal": "close the popup menu",
+  "target_app": "Desktop",
+  "windows": [
+    {
+      "hwnd": 1001,
+      "title": "Untitled - Notepad",
+      "process_id": 4242,
+      "process_name": "notepad.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 1001,
+    "title": "Untitled - Notepad",
+    "process_id": 4242,
+    "process_name": "notepad.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "press_key",
+        "target": "close menu",
+        "key": "esc"
+      }
+    },
+    {
+      "decision": {
+        "self_check": "goal_confirmed_complete",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "done",
+        "target": "Menu closed",
+        "summary": "Menu closed"
+      }
+    }
+  ],
+  "expected": {
+    "calls": [
+      [
+        "press_key",
+        [
+          "esc"
+        ],
+        {}
+      ]
+    ],
+    "outcome_state": "success",
+    "success": true
+  }
+}

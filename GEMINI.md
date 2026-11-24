@@ -90,7 +90,7 @@
   - `[set_timer: <duration>, <label>]`
   - `[set_alarm: <time>, <label>]`
   - `[emotion: <state>]`
-- Do not alter or break this tag format without updating the parser in both `yellows_pixel_buddies.py` and `shop_window.py`.
+- The tag tables and grammar live in `pink/ai/protocol.py`, which both `yellows_pixel_buddies.py` and `shop_window.py` import: change tags there, in one place.
 
 ### 📦 Asset & PyInstaller Packaging Sync
 - **New animation folders**: If adding a new folder under `sprites/<new_state>`, register its name in `ALL_STATES` in `yellows_pixel_buddies.py`.

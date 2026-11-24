@@ -1,0 +1,47 @@
+{
+  "note": "REVIEW H8: Ctrl+A + Backspace is never sent without first clicking the field (it would wipe whatever has focus).",
+  "goal": "search for budget",
+  "target_app": "Desktop",
+  "windows": [
+    {
+      "hwnd": 1001,
+      "title": "Untitled - Notepad",
+      "process_id": 4242,
+      "process_name": "notepad.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 1001,
+    "title": "Untitled - Notepad",
+    "process_id": 4242,
+    "process_name": "notepad.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "type_text",
+        "target": "Find search box",
+        "text": "budget",
+        "select_all_first": true
+      }
+    },
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "fail",
+        "target": "Search box not found",
+        "summary": "Search box not found"
+      }
+    }
+  ],
+  "expected": {
+    "calls": [],
+    "outcome_state": "failed",
+    "success": false
+  }
+}

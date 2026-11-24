@@ -1,0 +1,92 @@
+{
+  "note": "REVIEW C2: a message that would be sent (Enter) needs the user's confirmation; approved, it is typed into the chat and sent.",
+  "goal": "reply to Mom saying on my way",
+  "target_app": "WhatsApp",
+  "windows": [
+    {
+      "hwnd": 77,
+      "title": "Mom - WhatsApp",
+      "process_id": 7700,
+      "process_name": "WhatsApp.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 77,
+    "title": "Mom - WhatsApp",
+    "process_id": 7700,
+    "process_name": "WhatsApp.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "click_and_type",
+        "target": "Type a message input box",
+        "box_2d": [
+          900,
+          400,
+          960,
+          880
+        ],
+        "text": "on my way",
+        "press_enter": true
+      },
+      "confirm": true
+    },
+    {
+      "decision": {
+        "self_check": "goal_confirmed_complete",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "done",
+        "target": "Replied to Mom",
+        "summary": "Replied to Mom"
+      }
+    }
+  ],
+  "expected": {
+    "calls": [
+      [
+        "move",
+        [
+          1229,
+          1004
+        ],
+        {}
+      ],
+      [
+        "click",
+        [
+          1229,
+          1004
+        ],
+        {
+          "button": "left",
+          "clicks": 1
+        }
+      ],
+      [
+        "type_text",
+        [
+          "on my way"
+        ],
+        {
+          "use_shift_enter": true,
+          "expected_hwnd": 77,
+          "enter_on_newline": true
+        }
+      ],
+      [
+        "press_key",
+        [
+          "enter"
+        ],
+        {}
+      ]
+    ],
+    "outcome_state": "success",
+    "success": true
+  }
+}

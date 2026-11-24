@@ -1,0 +1,45 @@
+{
+  "note": "REVIEW H5: WhatsApp isn't open and only Chrome is; 'open whatsapp' must not count as done because some window has focus.",
+  "goal": "open whatsapp",
+  "target_app": "WhatsApp",
+  "windows": [
+    {
+      "hwnd": 2,
+      "title": "GitHub - Google Chrome",
+      "process_id": 2200,
+      "process_name": "chrome.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 2,
+    "title": "GitHub - Google Chrome",
+    "process_id": 2200,
+    "process_name": "chrome.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "focus_window",
+        "target": "WhatsApp"
+      }
+    },
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "fail",
+        "target": "WhatsApp did not open",
+        "summary": "WhatsApp did not open"
+      }
+    }
+  ],
+  "expected": {
+    "calls": [],
+    "outcome_state": "failed",
+    "success": false
+  }
+}

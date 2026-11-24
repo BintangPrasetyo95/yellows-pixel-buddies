@@ -15,6 +15,7 @@ from PIL import Image
 
 import action_planner
 import os_interop
+import takeover_controller
 import takeover_overlay
 import yellows_pixel_buddies as ypb
 
@@ -397,22 +398,19 @@ def pet(qapp):
 
 
 @pytest.fixture
-def confirming(pet, qapp):
+def confirming(pet, qapp, monkeypatch):
+    monkeypatch.setattr(pet, "_begin_hang", lambda *a, **k: None)   # no physics in these UI tests
     worker = _FakeWorker()
-    pet._desktop_action_worker = worker
-    pet._is_taking_over_cursor = True
+    pet._takeover._open_session(worker, 10)   # the controller adopts a fake worker: state RUNNING
     yield worker
-    pet._is_taking_over_cursor = False
-    pet._desktop_action_worker = None
-    pet._confirm_pending, pet._confirm_token = False, 0
+    pet._takeover._teardown(None)
     pet._dialogue_overlay.dismiss(clear_queue=True)
-    pet._close_confirm_text_viewer()
     qapp.processEvents()
 
 
 @pytest.mark.slow
 def test_say_during_confirmation_is_queued_not_replacing(pet, confirming, qapp):
-    pet._show_takeover_confirmation(7, "type_text", "box", "on my way", "Mom - WhatsApp", "whatsapp.exe")
+    pet._takeover.show_confirmation(7, "type_text", "box", "on my way", "Mom - WhatsApp", "whatsapp.exe")
     ov = pet._dialogue_overlay
     assert ov.has_pending_fixed_decision()
     pet._say("* An alarm went off!", force=True, record_memory=False)
@@ -426,25 +424,25 @@ def test_say_during_confirmation_is_queued_not_replacing(pet, confirming, qapp):
 
 @pytest.mark.slow
 def test_dismissing_a_confirmation_cancels_it_immediately(pet, confirming, qapp):
-    pet._show_takeover_confirmation(8, "type_text", "box", "hi", "Chat", "discord.exe")
+    pet._takeover.show_confirmation(8, "type_text", "box", "hi", "Chat", "discord.exe")
     pet._dialogue_overlay.dismiss(clear_queue=True)                       # something else closed the prompt
     qapp.processEvents()
-    assert confirming.answers == [(8, False)] and not pet._confirm_pending
+    assert confirming.answers == [(8, False)] and not pet._takeover.awaiting_confirm
 
 
 @pytest.mark.slow
 def test_long_payload_has_show_all_and_banner_restores(pet, confirming, qapp):
     long_text = "x" * 600
-    pet._show_takeover_confirmation(9, "type_text", "box", long_text, "Notes", "notepad.exe")
+    pet._takeover.show_confirmation(9, "type_text", "box", long_text, "Notes", "notepad.exe")
     ov = pet._dialogue_overlay
     labels = [c[0] for c in ov._choices]
     assert labels == ["Proceed", "Cancel", "Show all"]
     ov.choose_option(2)                                                    # Show all: viewer + ask again
-    assert pet._confirm_text_viewer is not None
-    assert pet._confirm_text_viewer.findChild(ypb.QPlainTextEdit).toPlainText() == long_text
+    assert pet._takeover.text_viewer is not None
+    assert pet._takeover.text_viewer.findChild(ypb.QPlainTextEdit).toPlainText() == long_text
     assert ov.has_pending_fixed_decision() and confirming.answers == []
     ov.choose_option(0)                                                    # Proceed
-    assert confirming.answers == [(9, True)] and pet._confirm_text_viewer is None
+    assert confirming.answers == [(9, True)] and pet._takeover.text_viewer is None
     assert "CONFIRMATION" not in pet._takeover_banner._title
 
 
@@ -467,15 +465,15 @@ def test_choice_callback_typeerror_is_not_retried(pet, qapp):
 def test_voice_hud_returns_for_confirmation_and_after_takeover(pet, confirming, qapp):
     hud = _FakeHud()
     pet._voice_overlay, pet._voice_mode_enabled = hud, True
-    pet._voice_hud_hidden_for_takeover = True
+    pet._takeover.voice_hud_hidden = True
     hud.visible = False
     try:
-        pet._show_takeover_confirmation(10, "type_text", "box", "hi", "Chat", "discord.exe")
+        pet._takeover.show_confirmation(10, "type_text", "box", "hi", "Chat", "discord.exe")
         assert hud.visible                                  # back so the user can say yes/no
         pet._dialogue_overlay.choose_option(1)
         assert not hud.visible                              # hidden again while the plan runs
-        pet._end_takeover_ui(None)
-        assert hud.visible and not pet._voice_hud_hidden_for_takeover
+        pet._takeover._teardown(None)
+        assert hud.visible and not pet._takeover.voice_hud_hidden
     finally:
         pet._voice_overlay, pet._voice_mode_enabled = None, False
 
@@ -484,11 +482,11 @@ def test_voice_hud_returns_for_confirmation_and_after_takeover(pet, confirming, 
 def test_stale_question_is_dropped(pet):
     pet._question_token += 1
     assert pet._question_may_show(pet._question_token - 1) is False
-    pet._is_taking_over_cursor = True
+    pet._takeover._state = takeover_controller.TakeoverState.RUNNING   # bypass signals: no physics here
     try:
         assert pet._question_may_show(None) is False
     finally:
-        pet._is_taking_over_cursor = False
+        pet._takeover._state = takeover_controller.TakeoverState.IDLE
 
 
 def test_foreground_context_skips_pink_and_is_timestamped(monkeypatch):
@@ -502,5 +500,5 @@ def test_foreground_context_skips_pink_and_is_timestamped(monkeypatch):
 
 
 def test_second_launch_ignored_during_takeover():
-    ns = types.SimpleNamespace(_is_taking_over_cursor=True)   # no show()/raise_(): calling them would fail
+    ns = types.SimpleNamespace(_takeover=types.SimpleNamespace(is_active=True))   # no show()/raise_()
     ypb.YellowsPixelBuddies.handle_instance_activation(ns)

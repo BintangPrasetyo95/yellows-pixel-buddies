@@ -1,0 +1,67 @@
+{
+  "note": "REVIEW H6: the user switched to VS Code while the model decided on Ctrl+W for Chrome: the step is skipped, nothing is closed.",
+  "goal": "close this chrome tab",
+  "target_app": "Desktop",
+  "windows": [
+    {
+      "hwnd": 2,
+      "title": "GitHub - Google Chrome",
+      "process_id": 2200,
+      "process_name": "chrome.exe"
+    },
+    {
+      "hwnd": 55,
+      "title": "main.py - Visual Studio Code",
+      "process_id": 5500,
+      "process_name": "code.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 2,
+    "title": "GitHub - Google Chrome",
+    "process_id": 2200,
+    "process_name": "chrome.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "hotkey",
+        "target": "close tab",
+        "keys": [
+          "ctrl",
+          "w"
+        ]
+      },
+      "foreground_during_decision": {
+        "hwnd": 55,
+        "title": "main.py - Visual Studio Code",
+        "process_id": 5500,
+        "process_name": "code.exe"
+      }
+    },
+    {
+      "decision": {
+        "self_check": "initial",
+        "self_check_reason": "",
+        "thought": "",
+        "action": "fail",
+        "target": "The focused window changed",
+        "summary": "The focused window changed"
+      },
+      "foreground": {
+        "hwnd": 55,
+        "title": "main.py - Visual Studio Code",
+        "process_id": 5500,
+        "process_name": "code.exe"
+      }
+    }
+  ],
+  "expected": {
+    "calls": [],
+    "outcome_state": "failed",
+    "success": false
+  }
+}

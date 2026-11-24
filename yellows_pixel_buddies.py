@@ -108,29 +108,9 @@ from typing import Any
 import requests
 
 # Resolve PyTorch DLL directory and preload torch BEFORE PyQt5 to prevent Windows C-runtime DLL collision (WinError 1114)
-_PYTORCH_DLL_HANDLES = []
-if sys.platform == "win32":
-    try:
-        import site
-        _sp_candidates = []
-        try:
-            _sp_candidates.extend(site.getsitepackages())
-        except Exception:
-            pass
-        try:
-            _us = site.getusersitepackages()
-            if _us:
-                _sp_candidates.append(_us)
-        except Exception:
-            pass
-        for _p in _sp_candidates:
-            _t_lib = Path(_p) / "torch" / "lib"
-            if _t_lib.exists():
-                os.environ["PATH"] = str(_t_lib) + os.pathsep + os.environ.get("PATH", "")
-                if hasattr(os, "add_dll_directory"):
-                    _PYTORCH_DLL_HANDLES.append(os.add_dll_directory(str(_t_lib)))
-    except Exception:
-        pass
+from pink.torch_dll import register_torch_dll_dirs  # noqa: E402
+
+_PYTORCH_DLL_HANDLES = register_torch_dll_dirs()
 try:
     import torch
 except Exception:
@@ -153,9 +133,34 @@ from PyQt5.QtWidgets import (
 
 
 from sound_manager import get_sound_manager, play_sound
+from pink.text.intents import (  # noqa: E402,F401 - extracted in Phase 8, re-exported for callers/tests
+    _DURATION_UNITS,
+    _DURATION_PART,
+    _duration_unit_seconds,
+    parse_duration_string,
+    _MERIDIEM,
+    parse_clock_time,
+    nl_alarm_probe,
+    split_leading_value,
+    _looks_like_instruction,
+    check_is_departure_message,
+    check_is_return_message,
+    DEFAULT_FOCUS_ANNOYANCE_DURATION_S,
+    _NOT_PINK_FOCUS,
+    _QUESTION_OR_REQUEST,
+    check_is_focus_message,
+    check_is_unfocus_message,
+    evaluate_goal_value,
+    _MONTH_NAMES,
+    _WEEKDAY_NAMES,
+    parse_target_date,
+)
 import os_interop
 import action_planner
 import privacy
+import takeover_controller
+from pink.ai import prompt_builder, protocol
+from pink.chat import commands as chat_commands
 import takeover_gate
 import update_security
 import takeover_overlay
@@ -203,95 +208,18 @@ EYE_OFF_PATH = SPRITES_DIR / "eye" / "off.png"
 EYE_ON_PATH = SPRITES_DIR / "eye" / "on.png"
 
 
-_DURATION_UNITS = (
-    (r"hours?|hrs?|jam|h", 3600),
-    (r"minutes?|mins?|menit|m", 60),
-    (r"seconds?|secs?|detik|s", 1),
-)
-_DURATION_PART = re.compile(
-    r"(\d+(?:[.,]\d+)?)\s*(" + "|".join(u for u, _ in _DURATION_UNITS) + r")(?![a-z])"
-)
 
 
-def _duration_unit_seconds(unit: str) -> int:
-    for pattern, secs in _DURATION_UNITS:
-        if re.fullmatch(pattern, unit):
-            return secs
-    return 0
 
 
-def parse_duration_string(text: str) -> int | None:
-    """Parse a duration into seconds: '25m', '15min', '1h30m', '1m30s', '1.5m', '2 hours and 15 minutes',
-    '45s', '10' (bare number = minutes), Indonesian '15 menit', '1 jam', '30 detik' (REVIEW M14)."""
-    t = (text or "").strip().lower()
-    if not t:
-        return None
-    if t.isdigit():
-        return int(t) * 60
-    m_hm = re.fullmatch(r"(\d+)\s*h(?:ours?|rs?)?\s*(\d{1,2})", t)   # '1h30' = 1 h 30 min
-    if m_hm:
-        return int(m_hm.group(1)) * 3600 + int(m_hm.group(2)) * 60
-    t = re.sub(r"\b(?:and|dan)\b|,(?!\d)", " ", t)
-    parts = list(_DURATION_PART.finditer(t))
-    if not parts or _DURATION_PART.sub("", t).strip():
-        return None                     # unknown words left over -> not a duration
-    total = sum(float(m.group(1).replace(",", ".")) * _duration_unit_seconds(m.group(2)) for m in parts)
-    total_s = int(round(total))
-    return total_s if total_s > 0 else None
 
 
-_MERIDIEM = r"a\.?m\.?|p\.?m\.?|pagi|siang|sore|malam"
 
 
-def parse_clock_time(text: str) -> tuple[int, int] | None:
-    """Parse a clock time into (hour, minute): '14:30', '2:30pm', '7.30 pm', '7:30 a.m.', '8am', '08:00',
-    Indonesian '7 malam', '07.30 pagi', 'jam 3 sore' (REVIEW M14)."""
-    t = (text or "").strip().lower()
-    t = re.sub(r"^(?:at|jam|pukul|pkl\.?)\s+", "", t)
-    m12 = re.fullmatch(r"(\d{1,2})(?:[:.](\d{2}))?\s*(" + _MERIDIEM + r")", t)
-    if m12:
-        hour = int(m12.group(1))
-        minute = int(m12.group(2) or 0)
-        mer = m12.group(3).replace(".", "")
-        if not (1 <= hour <= 12 and 0 <= minute < 60):
-            return None
-        if mer in ("pm", "sore", "malam") or (mer == "siang" and hour < 10):
-            if hour < 12:
-                hour += 12
-            elif mer == "malam":        # '12 malam' = midnight
-                hour = 0
-        elif mer in ("am", "pagi") and hour == 12:
-            hour = 0
-        return (hour, minute)
-    m24 = re.fullmatch(r"(\d{1,2})[:.](\d{2})(?::\d{2})?", t)
-    if m24:
-        hour, minute = int(m24.group(1)), int(m24.group(2))
-        if 0 <= hour < 24 and 0 <= minute < 60:
-            return (hour, minute)
-    return None
 
 
-def nl_alarm_probe(text: str) -> bool:
-    """True if ``text`` is a plain-language alarm request ('set an alarm for 7:30 am ...')."""
-    return bool(re.match(
-        r"^(?:please\s+)?(?:set\s+(?:an?\s+)?)?alarm(?:\s+(?:for|at))?\s+\d{1,2}(?:[:.]\d{2})?",
-        (text or "").strip(), re.IGNORECASE,
-    ))
 
 
-def split_leading_value(text: str, parser, max_tokens: int = 4) -> tuple[str | None, str]:
-    """Split '<value> <label...>' where the value may span several words ('1 hour', '7:30 PM').
-
-    Tries the longest leading run of up to ``max_tokens`` words that ``parser`` accepts and returns
-    (value_text, rest). Used by /timer and /alarm, which used to split on the first space and so read
-    '/timer 1 hour' as 1 minute and '/alarm 7:30 PM' as 07:30 (REVIEW M14).
-    """
-    toks = (text or "").split()
-    for n in range(min(max_tokens, len(toks)), 0, -1):
-        head = " ".join(toks[:n])
-        if parser(head) is not None:
-            return head, " ".join(toks[n:])
-    return None, (text or "").strip()
 
 
 def _resolve_user_data_dir() -> Path:
@@ -2056,81 +1984,12 @@ WELCOME_BACK_RESPONSES: list[str] = [
 ]
 
 
-def _looks_like_instruction(clean: str) -> bool:
-    """A command or a request for Pink to do something: never an announcement about the user."""
-    if clean.startswith("/"):
-        return True
-    return takeover_gate.is_imperative_request(clean)
 
 
-def check_is_departure_message(text: str) -> bool:
-    """Return True if the text indicates the user is leaving / stepping away / going AFK.
-
-    Phrases must actually announce leaving (REVIEW H21): "I'm going to test the build", "I need to run the
-    tests" or "reply to Mom saying bye" are ordinary requests, not goodbyes.
-    """
-    clean = text.strip().lower().replace("’", "'")
-    if not clean:
-        return False
-    if clean in ("/afk", "/away", "/brb", "/bye", "/leave", "/gtg", "/g2g", "/gotta_go"):
-        return True
-    if clean.strip(" .!") in ("afk", "brb", "bbl", "gtg", "g2g", "bye", "goodbye", "bye bye", "cya", "farewell", "ttyl",
-                              "dadah", "pamit", "otw"):
-        return True
-    if _looks_like_instruction(clean):
-        return False
-    if re.search(r"\b(?:you|u|they|we|he|she)\s+(?:have|got|need|must|gotta)", clean):
-        return False
-    end = r"\s*(?:now|soon|asap|for\s+(?:a\s+bit|a\s+while|now|today|tonight))?\s*[.!,]*\s*(?:bye[!. ]*)?$"
-    patterns = [
-        r"\b(?:i\s+)?(?:have|got|need|must)\s+to\s+(?:go|leave|head\s+out|bounce|step\s+out)\b(?!\s+(?:and|through|over|back|with|for\s+it))",
-        r"\b(?:i\s+)?(?:have|got|need|must)\s+to\s+run" + end,          # '...need to run' only as a sign-off
-        r"\b(?:i\s+)?gotta\s+(?:go|leave|head\s+out|bounce|step\s+out)\b",
-        r"\b(?:i\s+)?gotta\s+run" + end,
-        r"\b(?:i'?m|i\s+am)\s+(?:leaving|heading\s+out|logging\s+off|signing\s+off|"
-        r"going\s+(?:out|away|offline|home|to\s+(?:sleep|bed|work|school|class|the\s+gym)))\b",
-        r"\b(?:i'?m|i\s+am)\s+(?:off|going|gonna\s+go)" + end,
-        r"\b(?:going\s+)?afk\b",
-        r"\b(?:brb|be\s+right\s+back|bbl)\b",
-        r"\b(?:gtg|g2g)\b",
-        r"\bstepping\s+(?:away|out)\b",
-        # goodbyes only when they close the message
-        r"(?:^|[.!,;]\s*|\b(?:ok(?:ay)?|alright|well)\s+)(?:good\s*bye|bye(?:\s*bye)?|farewell|see\s+ya|see\s+you(?:\s+(?:later|soon|tomorrow))?|"
-        r"cya|ttyl|talk\s+to\s+you\s+later|good\s*night)[!. ]*$",
-        # Indonesian
-        r"\b(?:aku|saya|gue|gw)\s+(?:pergi|cabut|pamit|tidur|off)\s+dulu\b",
-        r"\b(?:mau|harus)\s+(?:pergi|cabut|tidur|keluar)(?:\s+dulu)?" + end,
-        r"\b(?:sampai\s+jumpa|dadah|pamit\s+dulu)\b",
-    ]
-    return any(re.search(pat, clean) for pat in patterns)
 
 
-def check_is_return_message(text: str) -> bool:
-    """Return True if the text indicates the user has returned from being away.
-
-    Requires the user to be the one returning (REVIEW H21): "my API call returned 500" is not a return.
-    """
-    clean = text.strip().lower().replace("’", "'")
-    if not clean:
-        return False
-    if clean in ("/back", "/return", "/here", "/im_back"):
-        return True
-    if clean.strip(" .!") in ("back", "im back", "i'm back", "i am back", "i returned", "i have returned", "i'm here",
-                              "aku balik", "aku kembali", "udah balik", "sudah balik", "sudah kembali"):
-        return True
-    if clean.startswith("/"):
-        return False
-    patterns = [
-        r"\b(?:i'?m|i\s+am)\s+back\b",
-        r"\bi\s+(?:have\s+|'ve\s+)?returned\b(?!\s+(?:the|a|an|my|your|it|them|this|that)\b)",
-        r"\bi\s+(?:came|got)\s+back\b",
-        r"^back\s+(?:now|again|from)\b",
-        r"\b(?:aku|saya|gue|gw)\s+(?:udah\s+|sudah\s+)?(?:balik|kembali|pulang)\b",
-    ]
-    return any(re.search(pat, clean) for pat in patterns)
 
 
-DEFAULT_FOCUS_ANNOYANCE_DURATION_S: float = 8 * 60.0  # 8 minutes
 
 FOCUS_RESPONSES: list[str] = [
     "* Focusing, are you?! Royal decree grants you 8 minutes of peace and quiet, minion! Make it count, mew! [anim: peace_sign]",
@@ -2147,84 +2006,10 @@ UNFOCUS_RESPONSES: list[str] = [
 ]
 
 
-_NOT_PINK_FOCUS = re.compile(r"focus\s+assist|windows\s+focus|focus\s+session|focus\s+time\b|focus\s+on\s+(?:the|this|that|my)\s+\w+\s+(?:window|tab|app)")
-_QUESTION_OR_REQUEST = re.compile(
-    r"^(?:what|how|why|when|where|which|who|is|does|do|can|could|would|should|will|please|pls|pink[,!:]?|hey|help|tell\s+me|"
-    r"turn\s+(?:on|off)|enable|disable|open|set\s+up|show\s+me|explain)\b"
-)
 
 
-def check_is_focus_message(text: str) -> tuple[bool, float]:
-    """Return (True, duration_seconds) if the user says THEY are focusing now.
-
-    Defaults to 8 minutes (480.0 seconds). Questions, requests and Windows "Focus assist" talk don't count, and
-    the phrasing must be about the user ("I need to focus"), not "you need to focus" or "I'm locked in my
-    account" (REVIEW M13).
-    """
-    clean = text.strip().lower().replace("’", "'")
-    if not clean:
-        return False, 0.0
-
-    # Slash commands
-    if clean.startswith(("/focus", "/focusing", "/deepwork", "/lockin")):
-        m_dur = re.search(r"/(?:focus|focusing|deepwork|lockin)\s+(\d+)\s*(m|min|minutes)?\b", clean)
-        if m_dur:
-            mins = float(m_dur.group(1))
-            return True, max(1.0, mins) * 60.0
-        return True, DEFAULT_FOCUS_ANNOYANCE_DURATION_S
-    if clean.startswith("/"):
-        return False, 0.0
-
-    if _QUESTION_OR_REQUEST.search(clean) or _NOT_PINK_FOCUS.search(clean) or clean.endswith("?"):
-        return False, 0.0
-
-    patterns = [
-        r"\b(?:i'?m|i\s+am)\s+(?:trying\s+to\s+focus|focusing|in\s+focus\s+mode|entering\s+focus\s+mode|doing\s+deep\s+work)\b",
-        r"^(?:(?:i'?m\s+)?(?:try|trying)\s+to\s+focus)\b",
-        r"\bi\s+(?:really\s+)?(?:need|have|got|gotta|want)\s+to\s+focus\b",
-        r"^(?:need|gotta|have)\s+to\s+focus\b",
-        r"\bi'?m\s+(?:gonna|going\s+to)\s+focus\b",
-        r"^(?:gonna|going\s+to)\s+focus\b",
-        r"\blet\s+me\s+focus\b",
-        r"^focusing\s+(?:on|right\s+now|here|today|now)\b",
-        r"^(?:focus\s+mode|deep\s+work)(?:\s+(?:on|time|now))?[.!]*$",
-        r"\b(?:i'?m|i\s+am)\s+locked\s+in(?!\s+(?:my|the|a|an|this|that|your)\b)",
-        r"^(?:locking\s+in|locked\s+in)[.!]*$",
-        r"^(?:focusing|trying\s+to\s+focus)[.!]?$",
-        r"\b(?:aku|saya|gue|gw)\s+(?:mau|lagi|harus)\s+fokus\b",
-    ]
-    for pat in patterns:
-        if re.search(pat, clean):
-            # Check if custom minutes mentioned, e.g. "trying to focus for 15 minutes"
-            m_dur = re.search(r"\bfor\s+(\d+)\s*(?:m|min|minutes?|menit)\b", clean)
-            if m_dur:
-                mins = float(m_dur.group(1))
-                return True, max(1.0, mins) * 60.0
-            return True, DEFAULT_FOCUS_ANNOYANCE_DURATION_S
-
-    return False, 0.0
 
 
-def check_is_unfocus_message(text: str) -> bool:
-    """Return True if the user explicitly announces they are done focusing (not a question or a
-    Windows "Focus assist" request) (REVIEW M13)."""
-    clean = text.strip().lower().replace("’", "'")
-    if not clean:
-        return False
-    if clean in ("/unfocus", "/stopfocus", "/done_focus", "/end_focus"):
-        return True
-    if clean.startswith("/") or _NOT_PINK_FOCUS.search(clean) or clean.endswith("?"):
-        return False
-    if re.search(r"^(?:what|how|why|can|could|would|please|pink[,!:]?|help|tell\s+me|turn|enable|disable)\b", clean):
-        return False
-    patterns = [
-        r"\b(?:i'?m\s+|i\s+am\s+|i'?ve\s+)?(?:done|finished|stopped)\s+focusing\b",
-        r"^(?:stop|end|cancel)\s+focus(?:\s+mode)?[.!]*$",
-        r"\b(?:i'?m\s+|i\s+am\s+)out\s+of\s+focus\s+mode\b",
-        r"^(?:focus\s+mode\s+(?:off|over|done))[.!]*$",
-        r"\b(?:aku|saya|gue|gw)\s+(?:udah|sudah|selesai)\s+fokus\b",
-    ]
-    return any(re.search(pat, clean) for pat in patterns)
 
 
 # --- Windows Startup ---------------------------------------------------------
@@ -2594,43 +2379,10 @@ def any_mouse_button_down() -> bool:
 def set_window_input_transparent(widget: QWidget, enabled: bool) -> bool:
     """Make the mouse pass straight through `widget` (True) or catch it again (False).
 
-    Toggling WS_EX_TRANSPARENT on a layered window changes only the hit-testing ("treat me as not there"),
-    so the picture and the normal per-frame mask stay exactly as they are.
-
-    Returns True when the request took effect, False if it could not be done.
+    One implementation lives in os_interop (REVIEW L5). Pink's own window keeps its activation behaviour and
+    layering (noactivate/layered off): only the hit-testing changes, the picture and per-frame mask stay as they are.
     """
-    dll = _user32()
-    if dll is None:
-        return False
-    try:
-        import ctypes
-        get_style = getattr(dll, "GetWindowLongPtrW", None) or dll.GetWindowLongW   # 32-bit Python fallback
-        set_style = getattr(dll, "SetWindowLongPtrW", None) or dll.SetWindowLongW
-        get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        get_style.restype = ctypes.c_ssize_t
-        set_style.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
-        set_style.restype = ctypes.c_ssize_t
-
-        hwnd = int(widget.winId())
-        style = get_style(hwnd, GWL_EXSTYLE)
-        if style == 0:                  # a Qt tool window always has style bits: 0 = the call failed
-            return False
-        wanted = (style | WS_EX_TRANSPARENT) if enabled else (style & ~WS_EX_TRANSPARENT)
-        if wanted != style:
-            set_style(hwnd, GWL_EXSTYLE, wanted)
-            # Reassert topmost z-order and notify Windows DWM of the style frame change
-            SWP_FRAMECHANGED = 0x0020
-            SWP_NOMOVE = 0x0002
-            SWP_NOSIZE = 0x0001
-            SWP_NOACTIVATE = 0x0010
-            HWND_TOPMOST = -1
-            dll.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-        return (not enabled) or bool(wanted & WS_EX_LAYERED)
-    except Exception as exc:
-        log.warning("Could not change the window's click-through style (%s)", exc)
-        return False
-
+    return os_interop.set_window_input_transparent(widget, enabled, noactivate=False, layered=False)
 
 def ensure_window_topmost(widget: QWidget | None) -> None:
     """Ensure widget stays at the very top of the window z-order index (HWND_TOPMOST)."""
@@ -3280,14 +3032,7 @@ class DialogueOverlay(QWidget):
     def _display_text(self, text: str, pet_x: float, pet_y: float) -> None:
         """Render and begin typing a single dialogue bubble."""
         # Sanitize metadata tags so [anim: ...] or [mode: ...] never display in typewriter bubble
-        text = re.sub(
-            r"\[(?:anim|mode|ghost|seen|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
-            r"add_reminder|delete_reminder|edit_reminder|set_timer|set_alarm|emotion|think|thought|"
-            r"desktop_action|quick_reply|click_ui|click_target|click|type_input|type_text):\s*[^\]]+\]",
-            "",
-            text,
-            flags=re.IGNORECASE,
-        ).strip()
+        text = protocol.strip_tags(text, protocol.ALL_TAGS).strip()
         if not text or text in ("*", "* ...", ""):
             self._type_timer.stop()
             self._hold_timer.stop()
@@ -3647,11 +3392,11 @@ class DialogueOverlay(QWidget):
                 next_text = str(next_item)
                 anim_m = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", next_text, re.IGNORECASE)
                 next_anim = anim_m.group(1).lower() if anim_m else None
-                next_ghost = bool(re.search(r"\[(?:mode|ghost):\s*(?:ghost|true|spectral|yes|takeover)", next_text, re.IGNORECASE))
+                next_ghost = protocol.ghost_mode(next_text) is True
                 if anim_m:
                     next_text = re.sub(r"\[anim:\s*[^\\\]]+\]", "", next_text).strip()
                 if next_ghost:
-                    next_text = re.sub(r"\[(?:mode|ghost):\s*[^\\\]]+\]", "", next_text, flags=re.IGNORECASE).strip()
+                    next_text = protocol.strip_tags(next_text, protocol.MODE_TAGS).strip()
 
             self.step_started.emit(next_text, next_anim, next_ghost)
             self._display_text(next_text, self._last_pet_x, self._last_pet_y)
@@ -5193,134 +4938,10 @@ def capture_screen_base64() -> str:
     return b64
 
 
-def evaluate_goal_value(text: str) -> int:
-    """Pink decides what a personal goal/milestone is worth (awarding between P$ 03 and P$ 08)."""
-    clean = (text or "").lower()
-    score = 4
-    major_kws = [
-        "finish", "complete", "publish", "ship", "launch", "exam", "thesis",
-        "marathon", "project", "degree", "clean", "build", "develop", "refactor",
-        "gym", "workout", "fitness", "run", "exercise", "learn", "study",
-        "write", "chapter", "release", "portfolio", "presentation", "assignment",
-        "win", "champion", "nationals", "#1", "first"
-    ]
-    score += sum(1 for kw in major_kws if kw in clean)
-    if len(clean.split()) >= 6:
-        score += 1
-    if len(clean) >= 35:
-        score += 1
-    trivial_kws = ["water", "drink", "check", "eat", "snack", "stretch", "breathe", "nap"]
-    if any(kw in clean for kw in trivial_kws):
-        score -= 1
-    return max(3, min(8, score))
 
 
-_MONTH_NAMES = {
-    "jan": 1, "january": 1, "januari": 1, "feb": 2, "february": 2, "februari": 2, "mar": 3, "march": 3, "maret": 3,
-    "apr": 4, "april": 4, "may": 5, "mei": 5, "jun": 6, "june": 6, "juni": 6, "jul": 7, "july": 7, "juli": 7,
-    "aug": 8, "august": 8, "agu": 8, "agt": 8, "agustus": 8, "sep": 9, "sept": 9, "september": 9,
-    "oct": 10, "october": 10, "okt": 10, "oktober": 10, "nov": 11, "november": 11,
-    "dec": 12, "december": 12, "des": 12, "desember": 12,
-}
-_WEEKDAY_NAMES = (
-    ("monday", "senin"), ("tuesday", "selasa"), ("wednesday", "rabu"), ("thursday", "kamis"),
-    ("friday", "jumat"), ("saturday", "sabtu"), ("sunday", "minggu"),
-)
 
 
-def parse_target_date(text: str | None, day_first: bool | None = None) -> str | None:
-    """Parse a date string or relative duration into ISO YYYY-MM-DD format.
-
-    Numeric dates: if one part can only be a day (> 12) the order is unambiguous; otherwise ``day_first``
-    decides (pass True for Indonesian users, who write 05/12/2026 for 5 December). Indonesian month names and
-    'besok' / 'lusa' / 'minggu depan' / 'bulan depan' are understood, and a date whose year was written
-    explicitly is never pushed into next year (REVIEW L8).
-    """
-    clean = (text or "").strip().lower()
-    if not clean or clean in ("none", "null", "clear", "cancel", "remove", "no", "off"):
-        return None
-
-    clean = re.sub(r"^(?:by|on|deadline|target|until|sebelum|tanggal|tgl\.?)[:\s]*", "", clean).strip()
-    today = datetime.date.today()
-
-    m_iso = re.match(r"^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})$", clean)
-    if m_iso:
-        y, m, d = int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3))
-        try:
-            return datetime.date(y, m, d).isoformat()
-        except ValueError:
-            return None
-
-    m_num = re.match(r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$", clean)
-    if m_num:
-        a, b, y = int(m_num.group(1)), int(m_num.group(2)), int(m_num.group(3))
-        if a > 12 and b <= 12:
-            d, m = a, b
-        elif b > 12 and a <= 12:
-            m, d = a, b
-        elif day_first:
-            d, m = a, b
-        else:
-            m, d = a, b
-        try:
-            return datetime.date(y, m, d).isoformat()
-        except ValueError:
-            return None
-
-    m_rel = re.match(r"^(?:in\s+|dalam\s+)?(\d+)\s*(days?|d|hari)$", clean)
-    if m_rel:
-        return (today + datetime.timedelta(days=int(m_rel.group(1)))).isoformat()
-
-    m_rel_w = re.match(r"^(?:in\s+|dalam\s+)?(\d+)\s*(weeks?|w|minggu|pekan)$", clean)
-    if m_rel_w:
-        return (today + datetime.timedelta(weeks=int(m_rel_w.group(1)))).isoformat()
-
-    m_rel_m = re.match(r"^(?:in\s+|dalam\s+)?(\d+)\s*(months?|m|bulan)$", clean)
-    if m_rel_m:
-        return (today + datetime.timedelta(days=int(m_rel_m.group(1)) * 30)).isoformat()
-
-    if clean in ("tomorrow", "tmrw", "besok"):
-        return (today + datetime.timedelta(days=1)).isoformat()
-    if clean in ("lusa",):
-        return (today + datetime.timedelta(days=2)).isoformat()
-    if clean in ("next week", "minggu depan", "pekan depan"):
-        return (today + datetime.timedelta(days=7)).isoformat()
-    if clean in ("next month", "bulan depan"):
-        return (today + datetime.timedelta(days=30)).isoformat()
-
-    tokens = re.findall(r"[a-zA-Z]+|\d+", clean)
-    month_val = None
-    day_val = None
-    year_val = today.year
-    year_explicit = False
-    for tok in tokens:
-        if tok in _MONTH_NAMES:
-            month_val = _MONTH_NAMES[tok]
-        elif tok.isdigit():
-            v = int(tok)
-            if v > 1000:
-                year_val = v
-                year_explicit = True
-            elif day_val is None and 1 <= v <= 31:
-                day_val = v
-    if month_val and day_val:
-        try:
-            d_res = datetime.date(year_val, month_val, day_val)
-            if d_res < today and not year_explicit:
-                d_res = datetime.date(year_val + 1, month_val, day_val)
-            return d_res.isoformat()
-        except ValueError:
-            return None
-
-    words = set(tokens)
-    for idx, names in enumerate(_WEEKDAY_NAMES):
-        if words & set(names):
-            days_ahead = (idx - today.weekday()) % 7
-            if days_ahead <= 0 or "next" in words or "depan" in words:
-                days_ahead += 7
-            return (today + datetime.timedelta(days=days_ahead)).isoformat()
-
-    return None
 
 
 def verify_goal_progress_affirmation(user_prompt: str, note: str, was_responding_to_goal: bool = False) -> bool:
@@ -5412,8 +5033,8 @@ class MemoryManager:
                 log.debug("Could not scrub %s: %s", f.name, err)
         try:
             marker.write_text("1", encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as err:
+            log.debug("_scrub_saved_secrets_once: ignored %s: %s", type(err).__name__, err)
         if fixed:
             log.info("Redacted a leaked API key from %d old session file(s) (REVIEW M9).", fixed)
 
@@ -5505,8 +5126,8 @@ class MemoryManager:
                         if not data.get("messages"):
                             f.unlink(missing_ok=True)
                             pruned_count += 1
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("prune_empty_sessions: ignored %s: %s", type(err).__name__, err)
         except Exception as err:
             log.warning("Could not prune empty sessions: %s", err)
         if pruned_count > 0:
@@ -5540,8 +5161,8 @@ class MemoryManager:
                         val = line.split("=", 1)[1].strip().strip('"').strip("'")
                         if val:
                             return val
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("get_api_key: ignored %s: %s", type(err).__name__, err)
 
         # Fallback check in local exe dir .env if running from installed/portable location
         if _exe_dir.resolve() != self.data_dir.resolve():
@@ -5554,8 +5175,8 @@ class MemoryManager:
                             val = line.split("=", 1)[1].strip().strip('"').strip("'")
                             if val:
                                 return val
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_api_key: ignored %s: %s", type(err).__name__, err)
 
         if self.config_path.exists():
             try:
@@ -5563,8 +5184,8 @@ class MemoryManager:
                 val = cfg.get("gemini_api_key", "").strip()
                 if val:
                     return val
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("get_api_key: ignored %s: %s", type(err).__name__, err)
 
         # Fallback check in local exe dir memory/config.json
         if _exe_dir.resolve() != self.data_dir.resolve():
@@ -5575,8 +5196,8 @@ class MemoryManager:
                     val = cfg.get("gemini_api_key", "").strip()
                     if val:
                         return val
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_api_key: ignored %s: %s", type(err).__name__, err)
 
         return ""
 
@@ -5606,8 +5227,8 @@ class MemoryManager:
         if self.config_path.exists():
             try:
                 cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("save_api_key: ignored %s: %s", type(err).__name__, err)
         cfg["gemini_api_key"] = api_key
         try:
             self.memory_dir.mkdir(parents=True, exist_ok=True)
@@ -5623,8 +5244,8 @@ class MemoryManager:
                 name = facts.get("user_name", "").strip()
                 if name:
                     return name
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("get_user_name: ignored %s: %s", type(err).__name__, err)
         return "Minion"
 
     def set_user_name(self, name: str) -> bool:
@@ -5636,8 +5257,8 @@ class MemoryManager:
         if self.facts_path.exists():
             try:
                 data = json.loads(self.facts_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("set_user_name: ignored %s: %s", type(err).__name__, err)
         if data.get("user_name") == clean_name:
             return False
         data["user_name"] = clean_name
@@ -5660,8 +5281,8 @@ class MemoryManager:
                 try:
                     self.facts_path.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(str(local_facts), str(self.facts_path))
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_long_term_facts: ignored %s: %s", type(err).__name__, err)
         if self.facts_path.exists():
             try:
                 facts = json.loads(self.facts_path.read_text(encoding="utf-8"))
@@ -5688,8 +5309,8 @@ class MemoryManager:
                     for n in notes:
                         lines.append(f"  * {n}")
                 return "\n".join(lines)
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("get_long_term_facts: ignored %s: %s", type(err).__name__, err)
         return ""
 
     def add_fact(self, fact_text: str) -> bool:
@@ -5701,8 +5322,8 @@ class MemoryManager:
         if self.facts_path.exists():
             try:
                 data = json.loads(self.facts_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("add_fact: ignored %s: %s", type(err).__name__, err)
         notes = data.setdefault("notes", [])
         if not isinstance(notes, list):
             notes = []
@@ -5782,8 +5403,8 @@ class MemoryManager:
                     else:
                         day_str = dt.strftime("%b %d, %I:%M %p")
                     time_label = f" (Added {day_str} | expires in ~{remaining_hours}h)"
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_temporary_facts_prompt: ignored %s: %s", type(err).__name__, err)
             prefix = f"{idx}. " if numbered else "- "
             lines.append(f"{prefix}{text}{time_label}")
         return "\n".join(lines)
@@ -6078,8 +5699,8 @@ class MemoryManager:
                 try:
                     dt = datetime.datetime.fromisoformat(created_str)
                     date_label = f" (Added {dt.strftime('%b %d, %Y')})"
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_reminders_prompt: ignored %s: %s", type(err).__name__, err)
             prefix = f"{idx}. " if numbered else "- "
             lines.append(f"{prefix}{text}{date_label}")
         return "\n".join(lines)
@@ -6314,8 +5935,8 @@ class MemoryManager:
                         meta_parts.append("Set: Yesterday")
                     elif days_ago > 1:
                         meta_parts.append(f"Set: {days_ago} days ago")
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_goals_prompt: ignored %s: %s", type(err).__name__, err)
 
             target_d = g.get("target_date")
             if target_d:
@@ -6342,8 +5963,8 @@ class MemoryManager:
                         meta_parts.append("Last Check-in: Yesterday")
                     else:
                         meta_parts.append(f"Last Check-in: {chk_days}d ago")
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_goals_prompt: ignored %s: %s", type(err).__name__, err)
             else:
                 meta_parts.append("Last Check-in: Not yet")
 
@@ -6586,8 +6207,8 @@ class MemoryManager:
                     else:
                         threshold_hours = 48.0
                         urgency_weight = 1.2
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_stale_goal_candidate: ignored %s: %s", type(err).__name__, err)
             
             ign = int(g.get("ignored_count", 0))
             if ign > 0:
@@ -6611,8 +6232,8 @@ class MemoryManager:
                     min_ask_gap = 6.0 if ign == 0 else min(48.0, 12.0 * ign)
                     if asked_elapsed < min_ask_gap:
                         continue
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("get_stale_goal_candidate: ignored %s: %s", type(err).__name__, err)
 
             if elapsed_hours >= threshold_hours:
                 stale_candidates.append((urgency_weight * (elapsed_hours / threshold_hours), g))
@@ -6647,8 +6268,8 @@ class MemoryManager:
         if self.config_path.exists():
             try:
                 data = json.loads(self.config_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("set_goal_coaching_config: ignored %s: %s", type(err).__name__, err)
         curr = data.get("goal_coaching", {})
         if not isinstance(curr, dict):
             curr = {}
@@ -6666,8 +6287,8 @@ class MemoryManager:
                     dt = datetime.datetime.fromisoformat(snooze_until)
                     if datetime.datetime.now() < dt:
                         return True
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("is_goal_coaching_snoozed: ignored %s: %s", type(err).__name__, err)
             else:
                 return True
         elif cfg.get("snooze_until"):
@@ -6675,8 +6296,8 @@ class MemoryManager:
                 dt = datetime.datetime.fromisoformat(cfg["snooze_until"])
                 if datetime.datetime.now() < dt:
                     return True
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("is_goal_coaching_snoozed: ignored %s: %s", type(err).__name__, err)
         return False
 
     def snooze_goals(self, hours: float = 24.0) -> datetime.datetime:
@@ -6694,8 +6315,8 @@ class MemoryManager:
         if self.config_path.exists():
             try:
                 cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("get_hardware_coaching_config: ignored %s: %s", type(err).__name__, err)
         return cfg.get("hardware_coaching", {
             "snooze_until": None,
         })
@@ -6706,8 +6327,8 @@ class MemoryManager:
         if self.config_path.exists():
             try:
                 cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("set_hardware_coaching_config: ignored %s: %s", type(err).__name__, err)
         hw_cfg = cfg.setdefault("hardware_coaching", {})
         hw_cfg.update(updates)
         self._atomic_write_json(self.config_path, cfg)
@@ -6740,8 +6361,8 @@ class MemoryManager:
         if wallet_p.exists():
             try:
                 data = json.loads(wallet_p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("award_pink_dollars: ignored %s: %s", type(err).__name__, err)
         curr = int(data.get("pink_dollars", 15))
         new_bal = max(0, curr + amount)
         data["pink_dollars"] = new_bal
@@ -6761,8 +6382,8 @@ class MemoryManager:
             try:
                 data = json.loads(wallet_p.read_text(encoding="utf-8"))
                 return int(data.get("pink_dollars", 15))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("get_wallet_balance: ignored %s: %s", type(err).__name__, err)
         return 15
 
     def get_long_term_facts_count(self) -> int:
@@ -6978,8 +6599,8 @@ class MemoryManager:
         if self.config_path.exists():
             try:
                 data = json.loads(self.config_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("save_settings: ignored %s: %s", type(err).__name__, err)
         data["settings"] = settings
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -7113,8 +6734,8 @@ class MemoryManager:
                 data = json.loads(self.session_file.read_text(encoding="utf-8"))
                 if not data.get("messages"):
                     self.session_file.unlink(missing_ok=True)
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("clear_current_session: ignored %s: %s", type(err).__name__, err)
         self._generate_new_session_file()
 
     def record_ambient_dialogue(
@@ -7261,8 +6882,8 @@ class MemoryManager:
                         if details:
                             last["details"] = details
                         return
-                except Exception:
-                    pass
+                except Exception as err:
+                    log.debug("record_physical_action: ignored %s: %s", type(err).__name__, err)
 
         entry = {
             "timestamp": now.isoformat(),
@@ -7385,7 +7006,7 @@ class MemoryManager:
                         u = u[:72] + "..."
                     p = m.get("pink", "").strip().replace("\n", " ")
                     p = re.sub(r"\[anim:\s*[^\]]+\]", "", p).strip()
-                    p = re.sub(r"\[(?:mode|ghost):\s*[^\]]+\]", "", p).strip()
+                    p = protocol.strip_tags(p, protocol.MODE_TAGS).strip()
                     if len(p) > 80:
                         p = p[:77] + "..."
                     if u.startswith("[Pink peeks"):
@@ -7471,7 +7092,7 @@ class MemoryManager:
                         except Exception:
                             date_str = ts
                         u_clean = u.replace("\n", " ").strip()
-                        p_clean = re.sub(r"\[(?:anim|mode|ghost):\s*[^\]]+\]", "", p).replace("\n", " ").strip()
+                        p_clean = protocol.strip_tags(p, ("anim", "mode", "ghost")).replace("\n", " ").strip()
                         if len(u_clean) > 80:
                             u_clean = u_clean[:77] + "..."
                         if len(p_clean) > 90:
@@ -7576,8 +7197,8 @@ class MemoryManager:
                     today_queries = t_info.get("queries", 0)
                 lifetime_total = data.get("lifetime_total_tokens", lifetime_total)
                 lifetime_queries = data.get("lifetime_queries", lifetime_queries)
-            except Exception:
-                pass
+            except Exception as err:
+                log.debug("get_token_summary: ignored %s: %s", type(err).__name__, err)
 
         if today_total == 0 and self.session_total_tokens > 0:
             today_total = self.session_total_tokens
@@ -8331,12 +7952,7 @@ def split_dual_dialogue(
 
     parsed_lines: list[dict[str, any]] = []
     for l in raw_lines:
-        mode_match = re.search(r"\[(?:mode|ghost):\s*([a-zA-Z0-9_]+)\]", l, re.IGNORECASE)
-        line_ghost = None
-        if mode_match:
-            m_val = mode_match.group(1).lower()
-            line_ghost = m_val in ("ghost", "true", "yes", "spectral", "takeover")
-            l = l[:mode_match.start()] + l[mode_match.end():]
+        line_ghost, l = protocol.split_mode(l)   # the ONE ghost-mode grammar (plan 8.2)
 
         anim_match = re.search(r"\[anim:\s*([a-zA-Z0-9_]+)\]", l, re.IGNORECASE)
         line_anim = None
@@ -8367,20 +7983,7 @@ def split_dual_dialogue(
                 line_anim = "angry"
             l = l[ghost_prefix.end():]
 
-        l = re.sub(
-            r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
-            r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
-            r"add_task|add_reminder|add_todo|task|todo|delete_task|del_task|rm_task|delete_reminder|del_reminder|rm_reminder|delete_todo|del_todo|rm_todo|"
-            r"edit_task|update_task|edit_reminder|update_reminder|edit_todo|update_todo|"
-            r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
-            r"set_timer|timer|set_alarm|alarm|cancel_timer|del_timer|cancel_alarm|del_alarm|"
-            # Same metadata tags _display_text strips: a line holding only one of these must vanish here, not
-            # become an empty step that stalls the dialogue queue (REVIEW H19).
-            r"emotion|think|thought):\s*[^\]]+\]",
-            "",
-            l,
-            flags=re.IGNORECASE,
-        )
+        l = protocol.strip_tags(l, protocol.MEMORY_ACTION_TAGS + ('emotion', 'think', 'thought'))
         l = re.sub(r"\*\*\*(.*?)\*\*\*", r"\1", l)
         l = re.sub(r"\*\*(.*?)\*\*", r"\1", l)
         l = re.sub(r"(?<!\*)\*([a-zA-Z0-9_\-\'\!]+)\*(?!\*)", r"\1", l).strip()
@@ -8591,11 +8194,8 @@ def format_candidate_for_output(
     raw = candidate_text
 
     is_ghost = default_ghost
-    mode_match = re.search(r"\[(?:mode|ghost):\s*([a-zA-Z0-9_]+)\]", raw, re.IGNORECASE)
-    if mode_match:
-        mode_val = mode_match.group(1).lower()
-        if mode_val in ("ghost", "true", "yes", "spectral", "takeover"):
-            is_ghost = True
+    if protocol.ghost_mode(raw):
+        is_ghost = True
 
     seen_summary = fallback_seen
     seen_match = re.search(r"\[seen:\s*([^\]]+)\]", raw, re.IGNORECASE)
@@ -8984,17 +8584,7 @@ class GeminiWorkerThread(QThread):
                             c_val = m.group(1).strip()
                             if c_val:
                                 memory.cancel_alarm_or_timer(c_val)
-                    chosen_cand = re.sub(
-                        r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
-                        r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
-                        r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
-                        r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
-                        r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
-                        r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
-                        "",
-                        chosen_cand,
-                        flags=re.IGNORECASE,
-                    )
+                    chosen_cand = protocol.strip_tags(chosen_cand, protocol.MEMORY_ACTION_TAGS)
 
                     return format_candidate_for_output(chosen_cand, fallback_seen=fallback_seen)
 
@@ -9143,17 +8733,7 @@ class GeminiWorkerThread(QThread):
                 c_val = m.group(1).strip()
                 if c_val:
                     memory.cancel_alarm_or_timer(c_val)
-        raw_text = re.sub(
-            r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
-            r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
-            r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
-            r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
-            r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
-            r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
-            "",
-            raw_text,
-            flags=re.IGNORECASE,
-        )
+        raw_text = protocol.strip_tags(raw_text, protocol.MEMORY_ACTION_TAGS)
 
         return format_candidate_for_output(raw_text)
 
@@ -11422,6 +11002,9 @@ class YellowsPixelBuddies(QWidget):
         # Qt.WindowDoesNotAcceptFocus -> clicking the pet won't steal focus from your app
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint
                          | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
+        self._takeover = takeover_controller.TakeoverController(
+            self, abort_reaction=SHAKEN_REACTION, stall_timeout_s=TAKEOVER_STALL_TIMEOUT_S)
+        self._takeover_prev_state = takeover_controller.TakeoverState.IDLE
         self.setAttribute(Qt.WA_TranslucentBackground, True)   # per-pixel transparency
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)   # don't grab focus when shown
         self._scale_modifier: float = DEFAULT_SCALE_MODIFIER
@@ -11474,20 +11057,14 @@ class YellowsPixelBuddies(QWidget):
         if hasattr(self, "_font_family"):
             self._takeover_banner.set_font_family(self._font_family)
         self._target_reticle = takeover_overlay.TargetReticleOverlay()
-        self._desktop_action_worker: action_planner.DesktopActionWorkerThread | None = None
-        # Takeover state is declared here (not via getattr defaults) so typos fail loudly (REVIEW M8/H4).
+        # The ONE owner of takeover state (REVIEW M8): worker, confirmation, voice HUD, teardown.
         self._takeover_mode: str = takeover_gate.DEFAULT_TAKEOVER_MODE
-        self._is_taking_over_cursor: bool = False
+        self._takeover.state_changed.connect(self._on_takeover_state_changed)
+        self._takeover.pink_action.connect(self._on_takeover_pink_action)
         self._autonomous_vision_enabled: bool = False   # Pink may screenshot on her own (REVIEW H12)
         self._tray_vision_enabled: bool = False         # ...even while hidden in the tray
         self._last_screen_capture: tuple[datetime.datetime, str] | None = None   # shown in the tray tooltip
-        self._confirm_pending: bool = False
-        self._confirm_token: int = 0
-        self._confirm_text_viewer: QDialog | None = None     # "Show all" view of a long confirmation payload
-        self._voice_hud_hidden_for_takeover: bool = False   # Voice HUD hidden while a takeover runs (REVIEW M5)
         self._sequence_area_rect: QRect | None = None   # monitor captured for hide/exit/summon sequences (REVIEW L7)
-        self._takeover_last_progress: float = 0.0
-        self._voice_was_visible_before_takeover: bool = False
         self._voice_manager: voice_service.VoiceManager | None = None
         self._voice_overlay: takeover_overlay.VoiceModeOverlay | None = None
         self._voice_mode_enabled: bool = False
@@ -12566,17 +12143,7 @@ class YellowsPixelBuddies(QWidget):
                 n_val = m.group(2).strip()
                 if t_val and n_val:
                     self._memory.update_goal_progress(t_val, n_val)
-            reaction_text = re.sub(
-                r"\[(?:seen|set_user_name|add_fact|add_temp_fact|temp_fact|delete_temp_fact|del_temp_fact|rm_temp_fact|"
-                r"add_curiosity|curiosity|resolve_curiosity|done_curiosity|del_curiosity|"
-                r"add_reminder|add_task|add_todo|task|todo|delete_reminder|del_reminder|rm_reminder|delete_task|del_task|rm_task|delete_todo|del_todo|rm_todo|"
-                r"edit_reminder|update_reminder|edit_task|update_task|edit_todo|update_todo|"
-                r"add_goal|complete_goal|finish_goal|done_goal|delete_goal|del_goal|rm_goal|update_goal|set_goal_deadline|snooze_goals|set_coaching_mode|"
-                r"set_timer|set_alarm|cancel_timer|cancel_alarm|timer|alarm):\s*[^\]]+\]",
-                "",
-                reaction_text,
-                flags=re.IGNORECASE,
-            ).strip()
+            reaction_text = protocol.strip_tags(reaction_text, protocol.MEMORY_ACTION_TAGS).strip()
             self._memory.record_ambient_dialogue(
                 reaction_text,
                 category="question_answered",
@@ -12984,6 +12551,31 @@ class YellowsPixelBuddies(QWidget):
                                              "title": title, "exe": exe_name, "ts": time.time()}
         return self._current_app_context
 
+    def _prompt_header(self, now_str: str | None = None) -> str:
+        """Persona, time, language rules and the codebase line: the start of every system instruction (plan 8.1)."""
+        compact_cb = ""
+        if self._codebase_provider is not None:
+            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self) or ""
+        return prompt_builder.system_header(PINK_SYSTEM_INSTRUCTION, now_str or prompt_builder.format_now(),
+                                            self._get_language_prompt_block() or "", compact_cb)
+
+    def _memory_prompt_sections(self) -> str:
+        return prompt_builder.memory_sections(prompt_builder.MemoryContext.from_memory(self._memory))
+
+    def _hardware_prompt_section(self, inquiry: bool = False) -> str:
+        """Hardware vitals: always when the user asked about the machine, otherwise only under sustained stress."""
+        hm = getattr(self, "_hardware_monitor", None)
+        if not hm:
+            return ""
+        if inquiry:
+            return prompt_builder.section(hm.get_prompt_block(force=True))
+        if self._memory.is_hardware_coaching_snoozed() or hm.thermal_state not in ("warm", "furnace"):
+            return ""
+        return prompt_builder.section(hm.get_prompt_block(force=False))
+
+    def _active_app_section(self) -> str:
+        return prompt_builder.section(self.get_active_app_prompt_block())
+
     def get_active_app_prompt_block(self) -> str:
         """Return formatted context about user's currently focused application / tab (native OS tracking)."""
         ctx = self._refresh_foreground_context()
@@ -13021,55 +12613,14 @@ class YellowsPixelBuddies(QWidget):
         """Construct the system instruction and user prompt for generating an interactive question."""
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
-        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
-        lang_block = self._get_language_prompt_block()
-        if lang_block:
-            system_inst += f"\n{lang_block}"
-        if hasattr(self, "_codebase_provider") and self._codebase_provider:
-            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
-            if compact_cb:
-                system_inst += f"\n{compact_cb}"
+        system_inst = self._prompt_header(now_str)
 
-        facts = self._memory.get_long_term_facts()
-        if facts:
-            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+        system_inst += self._memory_prompt_sections()
 
-        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
-        if temp_facts:
-            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
 
-        reminders = self._memory.get_reminders_prompt()
-        if reminders:
-            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
+        system_inst += self._hardware_prompt_section()   # vitals only under sustained stress
 
-        active_alarms = self._memory.get_alarms_prompt()
-        if active_alarms:
-            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
-
-        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
-        if curiosities:
-            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
-
-        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
-        if goals:
-            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
-
-        active_app_block = self.get_active_app_prompt_block()
-        if active_app_block:
-            system_inst += f"\n\n{active_app_block}"
-
-        # Conditional hardware vitals injection (on sustained stress only)
-        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
-                hw_block = self._hardware_monitor.get_prompt_block(force=False)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
-
-        # Current active desktop app & activity context (native Win32 tracking without AI)
-        active_app_block = self.get_active_app_prompt_block()
-        if active_app_block:
-            system_inst += f"\n\n{active_app_block}"
+        system_inst += self._active_app_section()   # the app the user is in (exactly once per prompt)
 
         # Feed ongoing conversation history from the active session so Pink has situational awareness
         active_session_turns = []
@@ -13336,7 +12887,7 @@ RULES:
         """A question that arrives late must not pop over chat, a choice or a takeover (REVIEW M2)."""
         if token is not None and token != self._question_token:
             return False   # superseded: chat opened or a takeover started after it was requested
-        if self._is_taking_over_cursor or self._is_user_chat_or_choice_active():
+        if self._takeover.is_active or self._is_user_chat_or_choice_active():
             return False
         ov = getattr(self, "_dialogue_overlay", None)
         return not (ov is not None and ov.has_pending_fixed_decision())
@@ -13355,7 +12906,7 @@ RULES:
 
     def _on_ai_question_ready(self, q_item: QuestionItem, source_type: str, token: int | None = None) -> None:
         """Display AI-generated interactive question dialogue with choices."""
-        if token is not None and token != self._question_token or self._is_taking_over_cursor:
+        if token is not None and token != self._question_token or self._takeover.is_active:
             self._abandon_question_loader()
             return
         if not getattr(self, "_dialogue_enabled", True) or getattr(self, "_hidden_in_tray", False) or is_workstation_locked():
@@ -13483,7 +13034,7 @@ RULES:
 
     def _apply_dialogue_step(self, anim: str | None = None, is_ghost: bool = False) -> None:
         """Apply visual animation and ghost mode state for the active dialogue step."""
-        if getattr(self, "_is_taking_over_cursor", False):
+        if self._takeover.is_active:
             return
         if is_ghost:
             self._start_ghost_speech()
@@ -13789,6 +13340,54 @@ RULES:
             self._brain_timer.start(AFTER_SPECIAL_REST_MS)
         self._check_and_play_pending_song()
 
+    # Ordered: the first matching command is the only one considered, exactly like the old if/elif chain.
+    _SLASH_COMMANDS = chat_commands.CommandRouter([
+        chat_commands.Command("name", lambda clean_input, lower_input: lower_input.startswith(("/name", "/nickname")), "_cmd_name"),
+        chat_commands.Command("fact", lambda clean_input, lower_input: lower_input.startswith(("/fact ", "/remember ")), "_cmd_fact"),
+        chat_commands.Command("tempfact", lambda clean_input, lower_input: lower_input.startswith(("/tempfact ", "/temp_fact ", "/situational ")), "_cmd_tempfact"),
+        chat_commands.Command("del_tempfact", lambda clean_input, lower_input: lower_input.startswith(("/del_tempfact ", "/delete_tempfact ", "/del_temp_fact ", "/delete_temp_fact ", "/rm_tempfact ", "/rm_temp_fact ")), "_cmd_del_tempfact"),
+        chat_commands.Command("tempfacts", lambda clean_input, lower_input: lower_input in ("/tempfacts", "/temp_facts"), "_cmd_tempfacts"),
+        chat_commands.Command("clear_tempfacts", lambda clean_input, lower_input: lower_input in ("/clear_tempfacts", "/clear_temp_facts"), "_cmd_clear_tempfacts"),
+        chat_commands.Command("remind", lambda clean_input, lower_input: lower_input.startswith(("/remind ", "/todo ", "/task ", "/add_task ", "/add_reminder ", "/add_todo ")), "_cmd_remind"),
+        chat_commands.Command("del_reminder", lambda clean_input, lower_input: lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ", "/del_task ", "/delete_task ", "/rm_task ")), "_cmd_del_reminder"),
+        chat_commands.Command("edit_reminder", lambda clean_input, lower_input: lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ", "/edit_task ", "/update_task ")), "_cmd_edit_reminder"),
+        chat_commands.Command("hide_tray", lambda clean_input, lower_input: lower_input in ("/hide_tray", "/tray", "/hide_to_tray", "/minimize_tray"), "_cmd_hide_tray"),
+        chat_commands.Command("restart", lambda clean_input, lower_input: lower_input in ("/restart", "/reboot", "restart"), "_cmd_restart"),
+        chat_commands.Command("jump", lambda clean_input, lower_input: lower_input in ("/jump", "/toggle_jump", "/jump_mode"), "_cmd_jump"),
+        chat_commands.Command("bomb", lambda clean_input, lower_input: lower_input in ("/bomb", "/toggle_bomb", "/bomb_mode"), "_cmd_bomb"),
+        chat_commands.Command("bomb_count", lambda clean_input, lower_input: lower_input.startswith(("/bomb_count", "/bombs", "/bomb count", "/bombs_count")), "_cmd_bomb_count"),
+        chat_commands.Command("shop", lambda clean_input, lower_input: lower_input in ("/shop", "shop", "/store", "store"), "_cmd_shop"),
+        chat_commands.Command("clear_reminders", lambda clean_input, lower_input: lower_input in ("/clear_reminders", "/clear_todos"), "_cmd_clear_reminders"),
+        chat_commands.Command("reminders_ui", lambda clean_input, lower_input: lower_input in ("/reminders_ui", "/manage_reminders"), "_cmd_reminders_ui"),
+        chat_commands.Command("reminders", lambda clean_input, lower_input: lower_input in ("/reminders", "/reminder", "/todos", "/todo", "/tasks", "/task"), "_cmd_reminders"),
+        chat_commands.Command("vitals", lambda clean_input, lower_input: lower_input in ("/vitals", "/specs", "/hardware", "/temp"), "_cmd_vitals"),
+        chat_commands.Command("vitals_snooze", lambda clean_input, lower_input: lower_input.startswith(("/vitals snooze", "/hardware snooze")), "_cmd_vitals_snooze"),
+        chat_commands.Command("vitals_on", lambda clean_input, lower_input: lower_input in ("/vitals on", "/hardware on", "/vitals resume", "/hardware resume"), "_cmd_vitals_on"),
+        chat_commands.Command("codebase", lambda clean_input, lower_input: lower_input in ("/codebase", "/status", "/version", "/git", "/engine"), "_cmd_codebase"),
+        chat_commands.Command("features", lambda clean_input, lower_input: lower_input in ("/features", "/feature", "/abilities", "/ability"), "_cmd_features"),
+        chat_commands.Command("help", lambda clean_input, lower_input: lower_input in ("/help", "/commands", "/command", "/cmd"), "_cmd_help"),
+        chat_commands.Command("goals_debug", lambda clean_input, lower_input: lower_input in ("/goals debug", "/goal debug", "/goals_debug"), "_cmd_goals_debug"),
+        chat_commands.Command("goal_deadline", lambda clean_input, lower_input: lower_input.startswith(("/goal_deadline ", "/deadline ", "/set_deadline ")), "_cmd_goal_deadline"),
+        chat_commands.Command("goal_progress", lambda clean_input, lower_input: lower_input.startswith(("/goal_progress ", "/update_goal ", "/log_progress ")), "_cmd_goal_progress"),
+        chat_commands.Command("coach", lambda clean_input, lower_input: lower_input.startswith(("/coach ", "/goal_coach ")), "_cmd_coach"),
+        chat_commands.Command("goal", lambda clean_input, lower_input: lower_input.startswith(("/goal ", "/add_goal ")), "_cmd_goal"),
+        chat_commands.Command("del_goal", lambda clean_input, lower_input: lower_input.startswith(("/del_goal ", "/delete_goal ", "/rm_goal ")), "_cmd_del_goal"),
+        chat_commands.Command("complete_goal", lambda clean_input, lower_input: lower_input.startswith(("/complete_goal ", "/finish_goal ", "/done_goal ")), "_cmd_complete_goal"),
+        chat_commands.Command("goals", lambda clean_input, lower_input: lower_input in ("/goals", "/goal", "/milestones", "/milestone"), "_cmd_goals"),
+        chat_commands.Command("timer", lambda clean_input, lower_input: lower_input.startswith(("/timer ", "/countdown ", "/alarm ", "/clock ")) and not ALARMS_ENABLED, "_cmd_timer"),
+        chat_commands.Command("timer_2", lambda clean_input, lower_input: lower_input.startswith(("/timer ", "/countdown ")), "_cmd_timer_2"),
+        chat_commands.Command("alarm", lambda clean_input, lower_input: lower_input.startswith(("/alarm ", "/clock ")), "_cmd_alarm"),
+        chat_commands.Command("timers", lambda clean_input, lower_input: lower_input in ("/timers", "/alarms", "/timer", "/alarm"), "_cmd_timers"),
+        chat_commands.Command("del_timer", lambda clean_input, lower_input: lower_input.startswith(("/del_timer ", "/cancel_timer ", "/rm_timer ", "/del_alarm ", "/cancel_alarm ", "/rm_alarm ")), "_cmd_del_timer"),
+        chat_commands.Command("snooze", lambda clean_input, lower_input: lower_input.startswith(("/snooze ", "/snooze")), "_cmd_snooze"),
+        chat_commands.Command("clear_timers", lambda clean_input, lower_input: lower_input in ("/clear_timers", "/clear_alarms"), "_cmd_clear_timers"),
+        chat_commands.Command("alarms_ui", lambda clean_input, lower_input: lower_input in ("/alarms_ui", "/timers_ui", "/manage_alarms", "/manage_timers"), "_cmd_alarms_ui"),
+        chat_commands.Command("facts", lambda clean_input, lower_input: lower_input in ("/facts", "/fact"), "_cmd_facts"),
+        chat_commands.Command("question", lambda clean_input, lower_input: lower_input in ("/question", "/ask", "/ask_question") or lower_input.startswith(("/question ", "/ask ")) or lower_input in ("ask me a question", "ask me something", "ask a question"), "_cmd_question"),
+        chat_commands.Command("token_query", lambda clean_input, lower_input: is_token_query(clean_input), "_cmd_token_query"),
+        chat_commands.Command("do", lambda clean_input, lower_input: lower_input.startswith(("/do ", "/takeover ", "/act ", "/cursor ")), "_cmd_do"),
+    ])
+
     def _on_chat_submitted(
         self,
         text: str,
@@ -13962,428 +13561,8 @@ RULES:
             return
 
         # Direct memory and nickname commands
-        if lower_input.startswith(("/name", "/nickname")):
-            parts = clean_input.split(" ", 1)
-            if len(parts) > 1 and parts[1].strip():
-                new_name = parts[1].strip()
-                ok = self._memory.set_user_name(new_name)
-                reply = (
-                    f'* Hmph! So your true mortal designation is "{new_name}"?! Fine, I shall address my minion properly from now on! [anim: tongue]'
-                    if ok else f'* You are already "{new_name}", minion! Stop trying to confuse my cotton head! [anim: idle]'
-                )
-                self._say(reply, force=True, record_memory=True)
-            else:
-                current_name = self._memory.get_user_name()
-                reply = f'* Format: /name <nickname>, minion! (Current: "{current_name}")'
-                self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/fact ", "/remember ")):
-            fact_content = clean_input.split(" ", 1)[1].strip()
-            if fact_content:
-                # If the fact sets or introduces the user's name/nickname, sync primary user_name as well
-                name_match = re.match(r"^(?:my\s+name\s+is|my\s+nickname\s+is|call\s+me)\s+([A-Za-z0-9_\-\. ]+)$", fact_content, re.IGNORECASE)
-                if name_match:
-                    detected_name = name_match.group(1).strip()
-                    if detected_name:
-                        self._memory.set_user_name(detected_name)
-                ok = self._memory.add_fact(fact_content)
-                reply = f"* Hmph! Stored in my permanent memory core, minion:\n* \"{fact_content}\"" if ok else "* I already knew that, dummy!"
-                self._say(reply, force=True, record_memory=True)
-                return
-        elif lower_input.startswith(("/tempfact ", "/temp_fact ", "/situational ")):
-            tf_content = clean_input.split(" ", 1)[1].strip()
-            if tf_content:
-                ok = self._memory.add_temporary_fact(tf_content, source="user")
-                reply = f"* Noted in my temporary 2-day logs, minion:\n* \"{tf_content}\"" if ok else "* I already have that temporary note logged, silly!"
-                self._say(reply, force=True, record_memory=True)
-                return
-        elif lower_input.startswith(("/del_tempfact ", "/delete_tempfact ", "/del_temp_fact ", "/delete_temp_fact ", "/rm_tempfact ", "/rm_temp_fact ")):
-            target = clean_input.split(" ", 1)[1].strip()
-            if target:
-                ok, deleted_text = self._memory.delete_temporary_fact(target)
-                if ok:
-                    reply = f"* Deleted temporary fact, mew:\n* \"{deleted_text}\""
-                else:
-                    reply = f"* Couldn't find temporary fact '{target}', dummy! Use /facts or /tempfacts to check active items."
-                self._say(reply, force=True, record_memory=False)
-                return
-        elif lower_input in ("/tempfacts", "/temp_facts"):
-            temp_text = self._memory.get_temporary_facts_prompt(numbered=True)
-            reply = f"* Active temporary facts (valid for 2 days):\n{temp_text}" if temp_text else "* No active temporary facts right now, mew!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/clear_tempfacts", "/clear_temp_facts"):
-            cleared = self._memory.clear_all_temporary_facts()
-            reply = f"* Swept away {cleared} temporary fact{'s' if cleared != 1 else ''}, mew!" if cleared else "* No temporary facts to clear, silly!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/remind ", "/todo ", "/task ", "/add_task ", "/add_reminder ", "/add_todo ")):
-            remind_content = clean_input.split(" ", 1)[1].strip()
-            if remind_content:
-                ok = self._memory.add_reminder(remind_content)
-                reply = f"* Mew! Task saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That task is already active, silly!"
-                self._say(reply, force=True, record_memory=True)
-                return
-        elif lower_input.startswith(("/del_reminder ", "/delete_reminder ", "/rm_reminder ", "/del_todo ", "/delete_todo ", "/rm_todo ", "/del_task ", "/delete_task ", "/rm_task ")):
-            target = clean_input.split(" ", 1)[1].strip()
-            if target:
-                ok, deleted_text = self._memory.delete_reminder(target)
-                if ok:
-                    reply = f"* Deleted task, mew:\n* \"{deleted_text}\""
-                else:
-                    reply = f"* Couldn't find task '{target}', dummy! Use /reminders or /tasks to check the list."
-                self._say(reply, force=True, record_memory=False)
-                return
-        elif lower_input.startswith(("/edit_reminder ", "/update_reminder ", "/edit_todo ", "/update_todo ", "/edit_task ", "/update_task ")):
-            rest = clean_input.split(" ", 1)[1].strip()
-            if "|" in rest:
-                parts = rest.split("|", 1)
-                target = parts[0].strip()
-                new_text = parts[1].strip()
-            else:
-                parts = rest.split(" ", 1)
-                target = parts[0].strip()
-                new_text = parts[1].strip() if len(parts) > 1 else ""
-            if target and new_text:
-                ok, old_text = self._memory.edit_reminder(target, new_text)
-                if ok:
-                    reply = f"* Reminder updated, mew!\n* New: \"{new_text}\""
-                else:
-                    reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
-            else:
-                reply = "* Format: /edit_reminder <number> <new text>, minion!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/hide_tray", "/tray", "/hide_to_tray", "/minimize_tray"):
-            self._hide_to_tray()
-            return
-        elif lower_input in ("/restart", "/reboot", "restart"):
-            self._handle_restart_command()
-            return
-        elif lower_input in ("/jump", "/toggle_jump", "/jump_mode"):
-            if not getattr(self, "_jump_sprites_ready", False):
-                self._say("* My jumping sprites aren't loaded, silly!", force=True, record_memory=False)
-            else:
-                new_state = not self._jump_enabled
-                self._toggle_jump_mode(new_state)
-                msg = "* Jump to Cursor Mode: ENABLED, mew! Prepare for lift-off!" if new_state else "* Jump to Cursor Mode: DISABLED, mew! Staying grounded!"
-                self._say(msg, force=True, record_memory=False)
-            return
-        elif lower_input in ("/bomb", "/toggle_bomb", "/bomb_mode"):
-            new_state = not self._bomb_attack_enabled
-            self._toggle_bomb_attack(new_state)
-            msg = "* Bomb Attack Mode: ENABLED, minion! Cat ordnance primed!" if new_state else "* Bomb Attack Mode: DISABLED, mew! Explosives safely disarmed!"
-            self._say(msg, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/bomb_count", "/bombs", "/bomb count", "/bombs_count")):
-            parts = lower_input.split()
-            if len(parts) > 1 and parts[-1].isdigit():
-                num = max(1, min(8, int(parts[-1])))
-                self._set_bomb_count(num)
-                msg = f"* Bomb Barrage Count set to {num} bombs (max 8), mew! Explosive intensity adjusted!"
-                self._say(msg, force=True, record_memory=False)
-                return
-            else:
-                msg = f"* Current Bomb Barrage Count: {self.bomb_count} bombs (max 8). Type /bombs <1-8> to adjust!"
-                self._say(msg, force=True, record_memory=False)
-                return
-        elif lower_input in ("/shop", "shop", "/store", "store"):
-            self._open_shop_window()
-            return
-        elif lower_input in ("/clear_reminders", "/clear_todos"):
-            count = self._memory.clear_all_reminders()
-            reply = f"* Cleared {count} reminder{'s' if count != 1 else ''}, mew! Clean slate!" if count else "* No active reminders to clear, silly!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/reminders_ui", "/manage_reminders"):
-            self._open_reminders_dialog()
-            self._say("* Opened the reminder manager for you, mew!", force=True, record_memory=False)
-            return
-        elif lower_input in ("/reminders", "/reminder", "/todos", "/todo", "/tasks", "/task"):
-            reminders_text = self._memory.get_reminders_prompt()
-            reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/vitals", "/specs", "/hardware", "/temp"):
-            reply = self._hardware_monitor.format_vitals_report()
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/vitals snooze", "/hardware snooze")):
-            parts = clean_input.split()
-            hours = 24.0
-            if len(parts) > 2:
-                try:
-                    hours = float(re.findall(r"[\d.]+", parts[2])[0])
-                except Exception:
-                    hours = 24.0
-            until = self._memory.snooze_hardware(hours)
-            reply = f"* Hardware vitals chatter snoozed for {int(hours) if hours.is_integer() else hours}h (until {until.strftime('%b %d %I:%M %p')})! [anim: wistful]"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/vitals on", "/hardware on", "/vitals resume", "/hardware resume"):
-            self._memory.set_hardware_coaching_config({"snooze_until": None})
-            reply = "* Hardware monitoring alert chatter re-enabled, mew! [anim: peace_sign]"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/codebase", "/status", "/version", "/git", "/engine"):
-            reply = self._codebase_provider.format_status_report(self)
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/features", "/feature", "/abilities", "/ability"):
-            reply = self._codebase_provider.format_features_report()
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/help", "/commands", "/command", "/cmd"):
-            reply = self._codebase_provider.format_help_report()
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/goals debug", "/goal debug", "/goals_debug"):
-            active = self._memory.get_active_goals()
-            cfg = self._memory.get_goal_coaching_config()
-            mode = cfg.get("mode", "royal")
-            snoozed = self._memory.is_goal_coaching_snoozed()
-            snooze_info = f"Snoozed until {cfg.get('snooze_until')}" if snoozed else "Active"
-            diag_lines = [
-                f"* Goal Diagnostics (Mode: {mode.capitalize()} | Coaching: {snooze_info}):",
-            ]
-            if not active:
-                diag_lines.append("* No active goals on the board.")
-            else:
-                stale_cand = self._memory.get_stale_goal_candidate()
-                for idx, g in enumerate(active, 1):
-                    gid = g.get("id")
-                    is_stale = (stale_cand and stale_cand.get("id") == gid)
-                    stats = g.get("stats", {})
-                    notes_cnt = len(g.get("progress_notes", []))
-                    diag_lines.append(
-                        f"{idx}. [{gid}] \"{g.get('text')}\"\n"
-                        f"   DL: {g.get('target_date') or 'None'} | Stale: {'YES' if is_stale else 'No'} | "
-                        f"Ignored: {g.get('ignored_count', 0)} | Mentions: {stats.get('mentions_count', 0)} | "
-                        f"Engaged: {stats.get('engagements_count', 0)} | Notes: {notes_cnt}"
-                    )
-            self._say("\n".join(diag_lines), force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/goal_deadline ", "/deadline ", "/set_deadline ")):
-            rest = clean_input.split(" ", 1)[1].strip()
-            parts = rest.split(" ", 1)
-            target = parts[0].strip()
-            d_val = parts[1].strip() if len(parts) > 1 else ""
-            if target:
-                ok, g_text, parsed_d = self._memory.set_goal_deadline(target, d_val)
-                if ok:
-                    reply = f"* Updated deadline for \"{g_text}\": {parsed_d or 'Cleared'}! [anim: peace_sign]"
-                else:
-                    reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check IDs or numbers."
-                self._say(reply, force=True, record_memory=True)
-                return
-        elif lower_input.startswith(("/goal_progress ", "/update_goal ", "/log_progress ")):
-            rest = clean_input.split(" ", 1)[1].strip()
-            parts = rest.split(" ", 1)
-            target = parts[0].strip()
-            n_val = parts[1].strip() if len(parts) > 1 else ""
-            if target and n_val:
-                ok, g_text, g_obj = self._memory.update_goal_progress(target, n_val)
-                if ok:
-                    reply = f"* Recorded progress on \"{g_text}\": \"{n_val}\"! Keep pushing forward, minion! [anim: laughing]"
-                else:
-                    reply = f"* Couldn't find goal '{target}', dummy!"
-                self._say(reply, force=True, record_memory=True)
-                return
-        elif lower_input.startswith(("/coach ", "/goal_coach ")):
-            rest = lower_input.split(" ", 1)[1].strip()
-            parts = rest.split(" ", 1)
-            subcmd = parts[0].strip()
-            if subcmd in ("royal", "overlord", "tough"):
-                self._memory.set_goal_coaching_config({"mode": "royal", "snooze_until": None})
-                reply = "* Royal Coach mode active! I expect nothing less than total victory from my minion! [anim: laughing]"
-            elif subcmd in ("gentle", "soft", "kind", "cheerleader"):
-                self._memory.set_goal_coaching_config({"mode": "gentle", "snooze_until": None})
-                reply = "* Gentle companion mode active, mew! I'll cheer you on warmly without the fiery drills! [anim: peace_sign]"
-            elif subcmd in ("snooze", "pause", "rest", "break"):
-                hours = 24.0
-                if len(parts) > 1:
-                    try:
-                        hours = float(re.findall(r"[\d.]+", parts[1])[0])
-                    except Exception:
-                        hours = 24.0
-                until = self._memory.snooze_goals(hours)
-                reply = f"* Goal coaching snoozed for {int(hours) if hours.is_integer() else hours}h (until {until.strftime('%b %d %I:%M %p')})! Rest your plush cotton, minion! [anim: wistful]"
-            else:
-                cfg = self._memory.get_goal_coaching_config()
-                reply = f"* Goal Coaching: mode={cfg.get('mode', 'royal')}. Options: /coach royal, /coach gentle, /coach snooze [hours]."
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/goal ", "/add_goal ")):
-            goal_content = clean_input.split(" ", 1)[1].strip()
-            target_date = None
-            if "|" in goal_content:
-                parts = goal_content.split("|", 1)
-                goal_content = parts[0].strip()
-                target_date = parts[1].strip()
-            if goal_content:
-                ok = self._memory.add_goal(goal_content, target_date=target_date)
-                val = evaluate_goal_value(goal_content)
-                parsed_dl = parse_target_date(target_date, day_first=self._language == "id") if target_date else None
-                dl_msg = f" (Deadline: {parsed_dl})" if parsed_dl else ""
-                reply = (
-                    f"* Target milestone registered, minion!\n* \"{goal_content}\"{dl_msg}\n* Valuation: +P$ {val:02d} upon completion! Don't you dare slack off, mew! [anim: laughing]"
-                    if ok else "* That goal is already on our board, dummy!"
-                )
-                self._say(reply, force=True, record_memory=True)
-                return
-        elif lower_input.startswith(("/del_goal ", "/delete_goal ", "/rm_goal ")):
-            target = clean_input.split(" ", 1)[1].strip()
-            if target:
-                ok, deleted_text = self._memory.delete_goal(target)
-                if ok:
-                    reply = f"* Dropped goal from our board, mew:\n* \"{deleted_text}\" [anim: wistful]"
-                else:
-                    reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check our milestones."
-                self._say(reply, force=True, record_memory=False)
-                return
-        elif lower_input.startswith(("/complete_goal ", "/finish_goal ", "/done_goal ")):
-            target = clean_input.split(" ", 1)[1].strip()
-            if target:
-                ok, goal_text, val = self._memory.complete_goal(target)
-                if ok:
-                    reply = (
-                        f"* TARGET MILESTONE CONQUERED!! Mew!!\n"
-                        f"* Finished: \"{goal_text}\"\n"
-                        f"* Pink evaluated your achievement at +P$ {val:02d}! Added to your wallet! [anim: laughing]"
-                    )
-                else:
-                    reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check our milestones."
-                self._say(reply, force=True, record_memory=True)
-                return
-        elif lower_input in ("/goals", "/goal", "/milestones", "/milestone"):
-            goals_text = self._memory.get_goals_prompt()
-            reply = (
-                f"* Target Milestones & Long-term Goals board, mew:\n{goals_text}\n* (Complete goals for P$ or type /goal <text> to add!)"
-                if goals_text else "* No active goals logged yet, minion! Add one with /goal <milestone> or check the Shop!"
-            )
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/timer ", "/countdown ", "/alarm ", "/clock ")) and not ALARMS_ENABLED:
-            self._say(ALARMS_UNAVAILABLE_LINE_ID if self._language == "id" else ALARMS_UNAVAILABLE_LINE_EN,
-                      force=True, record_memory=True)   # REVIEW H15
-            return
-        elif lower_input.startswith(("/timer ", "/countdown ")):
-            rest = clean_input.split(" ", 1)[1].strip()
-            dur_str, label = split_leading_value(rest, parse_duration_string)   # REVIEW M14
-            label = label or "Focus Timer"
-            secs = parse_duration_string(dur_str) if dur_str else None
-            if secs and secs > 0:
-                item = self._memory.add_timer(secs, label)
-                mins, s = divmod(secs, 60)
-                time_desc = f"{mins}m {s}s" if s else f"{mins}m"
-                reply = f"* Timer set for {time_desc} (\"{label}\"), minion! I'll alert you when time's up!"
-            else:
-                reply = "* Format: /timer <duration> [label], dummy! (e.g. /timer 25m Pomodoro, /timer 10s stretch)"
-            self._say(reply, force=True, record_memory=True)
-            return
-        elif lower_input.startswith(("/alarm ", "/clock ")):
-            rest = clean_input.split(" ", 1)[1].strip()
-            time_str, label = split_leading_value(rest, parse_clock_time)   # REVIEW M14
-            label = label or "Alarm"
-            item = self._memory.add_alarm(time_str, label) if time_str else None
-            if item:
-                reply = f"* Alarm set for {item.get('clock_time')} (\"{label}\"), mew! Don't oversleep, minion!"
-            else:
-                reply = "* Format: /alarm <time> [label], dummy! (e.g. /alarm 14:30 Team sync, /alarm 08:00 AM Wake up)"
-            self._say(reply, force=True, record_memory=True)
-            return
-        elif lower_input in ("/timers", "/alarms", "/timer", "/alarm"):
-            alarms_text = self._memory.get_alarms_prompt()
-            reply = f"* Here are our active timers & alarms, mew:\n{alarms_text}" if alarms_text else "* No active timers or alarms right now, minion! Use /timer or /alarm to set one!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/del_timer ", "/cancel_timer ", "/rm_timer ", "/del_alarm ", "/cancel_alarm ", "/rm_alarm ")):
-            target = clean_input.split(" ", 1)[1].strip()
-            if target:
-                ok, label = self._memory.cancel_alarm_or_timer(target)
-                reply = f"* Cancelled timer/alarm (\"{label}\"), mew!" if ok else f"* Couldn't find timer/alarm '{target}', dummy! Use /timers to check active ones."
-                self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input.startswith(("/snooze ", "/snooze")):
-            parts = clean_input.split(" ")
-            target = parts[1].strip() if len(parts) > 1 else "1"
-            mins = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 5
-            ok, label = self._memory.snooze_alarm_or_timer(target, minutes=mins)
-            reply = f"* Snoozed \"{label}\" for {mins} minutes, mew!" if ok else f"* Couldn't find timer/alarm '{target}' to snooze, dummy!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/clear_timers", "/clear_alarms"):
-            count = self._memory.clear_all_alarms()
-            reply = f"* Cleared {count} timer{'s' if count != 1 else ''}/alarm{'s' if count != 1 else ''}, mew!" if count else "* No active timers or alarms to clear, silly!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/alarms_ui", "/timers_ui", "/manage_alarms", "/manage_timers"):
-            self._open_alarms_dialog()
-            self._say("* Opened Pink's Alarms & Timers for you, mew!", force=True, record_memory=False)
-            return
-        elif lower_input in ("/facts", "/fact"):
-            facts_text = self._memory.get_long_term_facts()
-            temp_text = self._memory.get_temporary_facts_prompt(numbered=True) if hasattr(self._memory, "get_temporary_facts_prompt") else ""
-            sections = []
-            if facts_text:
-                sections.append(f"* PERMANENT MEMORY CORE:\n{facts_text}")
-            if temp_text:
-                sections.append(f"* TEMPORARY SITUATIONAL NOTES (Active for 2 days):\n{temp_text}")
-            if sections:
-                reply = "\n\n".join(sections)
-            else:
-                reply = "* My memory logs and temporary fact sheets are empty, darling!"
-            self._say(reply, force=True, record_memory=False)
-            return
-        elif lower_input in ("/question", "/ask", "/ask_question") or lower_input.startswith(("/question ", "/ask ")) or lower_input in ("ask me a question", "ask me something", "ask a question"):
-            forced_source = None
-            parts = clean_input.split(" ", 1)
-            if len(parts) > 1:
-                arg = parts[1].strip().lower()
-                if arg in ("screen", "desktop"):
-                    forced_source = "screen"
-                elif arg in ("memory", "memories", "music", "song", "reminder", "todo", "fact"):
-                    forced_source = "memory"
-                elif arg in ("persona", "personality", "doll", "ghost"):
-                    forced_source = "personality"
-            ok = self._trigger_ai_question(forced_source=forced_source)
-            if not ok:
-                self._say("* I couldn't think of a question right now, dummy! Try again in a second!", force=True, record_memory=False)
-            return
-        elif is_token_query(clean_input):
-            lines = self._memory.format_token_dialogue_lines()
-            first_line = lines[0]
-            extra = lines[1:] if len(lines) > 1 else None
-            if self._can_play("peace_sign"):
-                self._play("peace_sign")
-            self._say(first_line, force=True, extra_queue=extra, record_memory=True)
-            return
-        elif lower_input.startswith(("/do ", "/takeover ", "/act ", "/cursor ")):
-            task_str = clean_input.split(" ", 1)[1].strip()
-            if task_str:
-                started = self.execute_desktop_action(
-                    {"type": "desktop_action", "app": "Desktop", "intent": task_str},
-                    user_request=task_str,
-                )
-                if started:
-                    self._say(
-                        f"* Step aside, clumsy fingers! Taking over your cursor for: \"{task_str}\"! [anim: peace_sign]",
-                        force=True,
-                        auto_dismiss=True,
-                        record_memory=True,
-                    )
-                elif self._takeover_mode == takeover_gate.TAKEOVER_MODE_OFF:
-                    self._say(
-                        "* Hmph! Desktop Cursor Control is switched OFF in my tray menu, minion! [anim: angry]",
-                        force=True, auto_dismiss=True, record_memory=False,
-                    )
-                else:
-                    self._say(
-                        "* Hold on, minion! I'm still letting go of the last task! Try again in a moment. [anim: shocked]",
-                        force=True, auto_dismiss=True, record_memory=False,
-                    )
-            else:
-                self._say("* Format: /do <task>, dummy! (e.g. /do open youtube music in chrome)", force=True, record_memory=False)
+        # Slash commands: an ordered table, first match wins, handler False = continue to chat (plan 8.3)
+        if self._SLASH_COMMANDS.dispatch(self, clean_input, lower_input):
             return
 
         if text.strip().lower() in ("/error", "test error", "/test-error"):
@@ -14483,14 +13662,7 @@ RULES:
         # Build prompt & system instruction
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
-        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
-        lang_block = self._get_language_prompt_block()
-        if lang_block:
-            system_inst += f"\n{lang_block}"
-        if hasattr(self, "_codebase_provider") and self._codebase_provider:
-            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
-            if compact_cb:
-                system_inst += f"\n{compact_cb}"
+        system_inst = self._prompt_header(now_str)
 
         if is_focus:
             focus_mins = int(round(focus_dur_s / 60.0))
@@ -14639,43 +13811,10 @@ RULES:
                 "- ANTI-NAG: Do NOT nag the user about being productive, working, or sleeping! React directly to what they are actually showing you.\n"
                 "- Memory Tag: At the end of your response, append [seen: 3-8 words describing key visible apps/activity] so you remember what was on their screen later in the session!"
             )
-        facts = self._memory.get_long_term_facts()
-        if facts:
-            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+        system_inst += self._memory_prompt_sections()
 
-        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
-        if temp_facts:
-            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
-
-        reminders = self._memory.get_reminders_prompt()
-        if reminders:
-            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
-
-        active_alarms = self._memory.get_alarms_prompt()
-        if active_alarms:
-            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
-
-        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
-        if curiosities:
-            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
-
-        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
-        if goals:
-            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
-
-        # Conditional hardware vitals injection (on inquiry or sustained stress only)
-        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            hw_kws = ("laptop", "computer", "pc", "cpu", "ram", "memory", "storage", "disk", "gpu", "temp", "temperature", "heat", "hot", "fan", "lag", "slow", "overheat", "freez")
-            is_hw_inquiry = any(kw in clean_input.lower() for kw in hw_kws)
-            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if is_hw_inquiry:
-                hw_block = self._hardware_monitor.get_prompt_block(force=True)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
-            elif not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
-                hw_block = self._hardware_monitor.get_prompt_block(force=False)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
+        # Hardware vitals: when asked about the machine, or under sustained stress
+        system_inst += self._hardware_prompt_section(inquiry=prompt_builder.hardware_inquiry(clean_input))
 
         # Conditional codebase and feature knowledge injection (on inquiry or deep self-awareness)
         if hasattr(self, "_codebase_provider") and self._codebase_provider:
@@ -14683,10 +13822,7 @@ RULES:
             if codebase_block:
                 system_inst += f"\n\n{codebase_block}"
 
-        # Current active desktop app & activity context (native Win32 tracking without AI)
-        active_app_block = self.get_active_app_prompt_block()
-        if active_app_block:
-            system_inst += f"\n\n{active_app_block}"
+        system_inst += self._active_app_section()   # the app the user is in (exactly once per prompt)
 
         system_inst += f"\n\n{self._desktop_control_prompt_note()}"
         if persona_hint:
@@ -14721,6 +13857,485 @@ RULES:
         )
         self._is_handling_user_chat = True
         self._gemini_thread.start()
+
+    # ---------------------------------------------------- slash-command handlers (plan 8.3)
+    def _cmd_name(self, clean_input: str, lower_input: str) -> bool:
+        parts = clean_input.split(" ", 1)
+        if len(parts) > 1 and parts[1].strip():
+            new_name = parts[1].strip()
+            ok = self._memory.set_user_name(new_name)
+            reply = (
+                f'* Hmph! So your true mortal designation is "{new_name}"?! Fine, I shall address my minion properly from now on! [anim: tongue]'
+                if ok else f'* You are already "{new_name}", minion! Stop trying to confuse my cotton head! [anim: idle]'
+            )
+            self._say(reply, force=True, record_memory=True)
+        else:
+            current_name = self._memory.get_user_name()
+            reply = f'* Format: /name <nickname>, minion! (Current: "{current_name}")'
+            self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_fact(self, clean_input: str, lower_input: str) -> bool:
+        fact_content = clean_input.split(" ", 1)[1].strip()
+        if fact_content:
+            # If the fact sets or introduces the user's name/nickname, sync primary user_name as well
+            name_match = re.match(r"^(?:my\s+name\s+is|my\s+nickname\s+is|call\s+me)\s+([A-Za-z0-9_\-\. ]+)$", fact_content, re.IGNORECASE)
+            if name_match:
+                detected_name = name_match.group(1).strip()
+                if detected_name:
+                    self._memory.set_user_name(detected_name)
+            ok = self._memory.add_fact(fact_content)
+            reply = f"* Hmph! Stored in my permanent memory core, minion:\n* \"{fact_content}\"" if ok else "* I already knew that, dummy!"
+            self._say(reply, force=True, record_memory=True)
+            return True
+        return False
+
+    def _cmd_tempfact(self, clean_input: str, lower_input: str) -> bool:
+        tf_content = clean_input.split(" ", 1)[1].strip()
+        if tf_content:
+            ok = self._memory.add_temporary_fact(tf_content, source="user")
+            reply = f"* Noted in my temporary 2-day logs, minion:\n* \"{tf_content}\"" if ok else "* I already have that temporary note logged, silly!"
+            self._say(reply, force=True, record_memory=True)
+            return True
+        return False
+
+    def _cmd_del_tempfact(self, clean_input: str, lower_input: str) -> bool:
+        target = clean_input.split(" ", 1)[1].strip()
+        if target:
+            ok, deleted_text = self._memory.delete_temporary_fact(target)
+            if ok:
+                reply = f"* Deleted temporary fact, mew:\n* \"{deleted_text}\""
+            else:
+                reply = f"* Couldn't find temporary fact '{target}', dummy! Use /facts or /tempfacts to check active items."
+            self._say(reply, force=True, record_memory=False)
+            return True
+        return False
+
+    def _cmd_tempfacts(self, clean_input: str, lower_input: str) -> bool:
+        temp_text = self._memory.get_temporary_facts_prompt(numbered=True)
+        reply = f"* Active temporary facts (valid for 2 days):\n{temp_text}" if temp_text else "* No active temporary facts right now, mew!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_clear_tempfacts(self, clean_input: str, lower_input: str) -> bool:
+        cleared = self._memory.clear_all_temporary_facts()
+        reply = f"* Swept away {cleared} temporary fact{'s' if cleared != 1 else ''}, mew!" if cleared else "* No temporary facts to clear, silly!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_remind(self, clean_input: str, lower_input: str) -> bool:
+        remind_content = clean_input.split(" ", 1)[1].strip()
+        if remind_content:
+            ok = self._memory.add_reminder(remind_content)
+            reply = f"* Mew! Task saved (valid for 30 days):\n* \"{remind_content}\"" if ok else "* That task is already active, silly!"
+            self._say(reply, force=True, record_memory=True)
+            return True
+        return False
+
+    def _cmd_del_reminder(self, clean_input: str, lower_input: str) -> bool:
+        target = clean_input.split(" ", 1)[1].strip()
+        if target:
+            ok, deleted_text = self._memory.delete_reminder(target)
+            if ok:
+                reply = f"* Deleted task, mew:\n* \"{deleted_text}\""
+            else:
+                reply = f"* Couldn't find task '{target}', dummy! Use /reminders or /tasks to check the list."
+            self._say(reply, force=True, record_memory=False)
+            return True
+        return False
+
+    def _cmd_edit_reminder(self, clean_input: str, lower_input: str) -> bool:
+        rest = clean_input.split(" ", 1)[1].strip()
+        if "|" in rest:
+            parts = rest.split("|", 1)
+            target = parts[0].strip()
+            new_text = parts[1].strip()
+        else:
+            parts = rest.split(" ", 1)
+            target = parts[0].strip()
+            new_text = parts[1].strip() if len(parts) > 1 else ""
+        if target and new_text:
+            ok, old_text = self._memory.edit_reminder(target, new_text)
+            if ok:
+                reply = f"* Reminder updated, mew!\n* New: \"{new_text}\""
+            else:
+                reply = f"* Couldn't find reminder '{target}', dummy! Use /reminders to check the numbered list."
+        else:
+            reply = "* Format: /edit_reminder <number> <new text>, minion!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_hide_tray(self, clean_input: str, lower_input: str) -> bool:
+        self._hide_to_tray()
+        return True
+
+    def _cmd_restart(self, clean_input: str, lower_input: str) -> bool:
+        self._handle_restart_command()
+        return True
+
+    def _cmd_jump(self, clean_input: str, lower_input: str) -> bool:
+        if not getattr(self, "_jump_sprites_ready", False):
+            self._say("* My jumping sprites aren't loaded, silly!", force=True, record_memory=False)
+        else:
+            new_state = not self._jump_enabled
+            self._toggle_jump_mode(new_state)
+            msg = "* Jump to Cursor Mode: ENABLED, mew! Prepare for lift-off!" if new_state else "* Jump to Cursor Mode: DISABLED, mew! Staying grounded!"
+            self._say(msg, force=True, record_memory=False)
+        return True
+
+    def _cmd_bomb(self, clean_input: str, lower_input: str) -> bool:
+        new_state = not self._bomb_attack_enabled
+        self._toggle_bomb_attack(new_state)
+        msg = "* Bomb Attack Mode: ENABLED, minion! Cat ordnance primed!" if new_state else "* Bomb Attack Mode: DISABLED, mew! Explosives safely disarmed!"
+        self._say(msg, force=True, record_memory=False)
+        return True
+
+    def _cmd_bomb_count(self, clean_input: str, lower_input: str) -> bool:
+        parts = lower_input.split()
+        if len(parts) > 1 and parts[-1].isdigit():
+            num = max(1, min(8, int(parts[-1])))
+            self._set_bomb_count(num)
+            msg = f"* Bomb Barrage Count set to {num} bombs (max 8), mew! Explosive intensity adjusted!"
+            self._say(msg, force=True, record_memory=False)
+            return True
+        else:
+            msg = f"* Current Bomb Barrage Count: {self.bomb_count} bombs (max 8). Type /bombs <1-8> to adjust!"
+            self._say(msg, force=True, record_memory=False)
+            return True
+        return False
+
+    def _cmd_shop(self, clean_input: str, lower_input: str) -> bool:
+        self._open_shop_window()
+        return True
+
+    def _cmd_clear_reminders(self, clean_input: str, lower_input: str) -> bool:
+        count = self._memory.clear_all_reminders()
+        reply = f"* Cleared {count} reminder{'s' if count != 1 else ''}, mew! Clean slate!" if count else "* No active reminders to clear, silly!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_reminders_ui(self, clean_input: str, lower_input: str) -> bool:
+        self._open_reminders_dialog()
+        self._say("* Opened the reminder manager for you, mew!", force=True, record_memory=False)
+        return True
+
+    def _cmd_reminders(self, clean_input: str, lower_input: str) -> bool:
+        reminders_text = self._memory.get_reminders_prompt()
+        reply = f"* Here are our active 30-day reminders, mew:\n{reminders_text}" if reminders_text else "* No active reminders right now, minion!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_vitals(self, clean_input: str, lower_input: str) -> bool:
+        reply = self._hardware_monitor.format_vitals_report()
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_vitals_snooze(self, clean_input: str, lower_input: str) -> bool:
+        parts = clean_input.split()
+        hours = 24.0
+        if len(parts) > 2:
+            try:
+                hours = float(re.findall(r"[\d.]+", parts[2])[0])
+            except Exception:
+                hours = 24.0
+        until = self._memory.snooze_hardware(hours)
+        reply = f"* Hardware vitals chatter snoozed for {int(hours) if hours.is_integer() else hours}h (until {until.strftime('%b %d %I:%M %p')})! [anim: wistful]"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_vitals_on(self, clean_input: str, lower_input: str) -> bool:
+        self._memory.set_hardware_coaching_config({"snooze_until": None})
+        reply = "* Hardware monitoring alert chatter re-enabled, mew! [anim: peace_sign]"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_codebase(self, clean_input: str, lower_input: str) -> bool:
+        reply = self._codebase_provider.format_status_report(self)
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_features(self, clean_input: str, lower_input: str) -> bool:
+        reply = self._codebase_provider.format_features_report()
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_help(self, clean_input: str, lower_input: str) -> bool:
+        reply = self._codebase_provider.format_help_report()
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_goals_debug(self, clean_input: str, lower_input: str) -> bool:
+        active = self._memory.get_active_goals()
+        cfg = self._memory.get_goal_coaching_config()
+        mode = cfg.get("mode", "royal")
+        snoozed = self._memory.is_goal_coaching_snoozed()
+        snooze_info = f"Snoozed until {cfg.get('snooze_until')}" if snoozed else "Active"
+        diag_lines = [
+            f"* Goal Diagnostics (Mode: {mode.capitalize()} | Coaching: {snooze_info}):",
+        ]
+        if not active:
+            diag_lines.append("* No active goals on the board.")
+        else:
+            stale_cand = self._memory.get_stale_goal_candidate()
+            for idx, g in enumerate(active, 1):
+                gid = g.get("id")
+                is_stale = (stale_cand and stale_cand.get("id") == gid)
+                stats = g.get("stats", {})
+                notes_cnt = len(g.get("progress_notes", []))
+                diag_lines.append(
+                    f"{idx}. [{gid}] \"{g.get('text')}\"\n"
+                    f"   DL: {g.get('target_date') or 'None'} | Stale: {'YES' if is_stale else 'No'} | "
+                    f"Ignored: {g.get('ignored_count', 0)} | Mentions: {stats.get('mentions_count', 0)} | "
+                    f"Engaged: {stats.get('engagements_count', 0)} | Notes: {notes_cnt}"
+                )
+        self._say("\n".join(diag_lines), force=True, record_memory=False)
+        return True
+
+    def _cmd_goal_deadline(self, clean_input: str, lower_input: str) -> bool:
+        rest = clean_input.split(" ", 1)[1].strip()
+        parts = rest.split(" ", 1)
+        target = parts[0].strip()
+        d_val = parts[1].strip() if len(parts) > 1 else ""
+        if target:
+            ok, g_text, parsed_d = self._memory.set_goal_deadline(target, d_val)
+            if ok:
+                reply = f"* Updated deadline for \"{g_text}\": {parsed_d or 'Cleared'}! [anim: peace_sign]"
+            else:
+                reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check IDs or numbers."
+            self._say(reply, force=True, record_memory=True)
+            return True
+        return False
+
+    def _cmd_goal_progress(self, clean_input: str, lower_input: str) -> bool:
+        rest = clean_input.split(" ", 1)[1].strip()
+        parts = rest.split(" ", 1)
+        target = parts[0].strip()
+        n_val = parts[1].strip() if len(parts) > 1 else ""
+        if target and n_val:
+            ok, g_text, g_obj = self._memory.update_goal_progress(target, n_val)
+            if ok:
+                reply = f"* Recorded progress on \"{g_text}\": \"{n_val}\"! Keep pushing forward, minion! [anim: laughing]"
+            else:
+                reply = f"* Couldn't find goal '{target}', dummy!"
+            self._say(reply, force=True, record_memory=True)
+            return True
+        return False
+
+    def _cmd_coach(self, clean_input: str, lower_input: str) -> bool:
+        rest = lower_input.split(" ", 1)[1].strip()
+        parts = rest.split(" ", 1)
+        subcmd = parts[0].strip()
+        if subcmd in ("royal", "overlord", "tough"):
+            self._memory.set_goal_coaching_config({"mode": "royal", "snooze_until": None})
+            reply = "* Royal Coach mode active! I expect nothing less than total victory from my minion! [anim: laughing]"
+        elif subcmd in ("gentle", "soft", "kind", "cheerleader"):
+            self._memory.set_goal_coaching_config({"mode": "gentle", "snooze_until": None})
+            reply = "* Gentle companion mode active, mew! I'll cheer you on warmly without the fiery drills! [anim: peace_sign]"
+        elif subcmd in ("snooze", "pause", "rest", "break"):
+            hours = 24.0
+            if len(parts) > 1:
+                try:
+                    hours = float(re.findall(r"[\d.]+", parts[1])[0])
+                except Exception:
+                    hours = 24.0
+            until = self._memory.snooze_goals(hours)
+            reply = f"* Goal coaching snoozed for {int(hours) if hours.is_integer() else hours}h (until {until.strftime('%b %d %I:%M %p')})! Rest your plush cotton, minion! [anim: wistful]"
+        else:
+            cfg = self._memory.get_goal_coaching_config()
+            reply = f"* Goal Coaching: mode={cfg.get('mode', 'royal')}. Options: /coach royal, /coach gentle, /coach snooze [hours]."
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_goal(self, clean_input: str, lower_input: str) -> bool:
+        goal_content = clean_input.split(" ", 1)[1].strip()
+        target_date = None
+        if "|" in goal_content:
+            parts = goal_content.split("|", 1)
+            goal_content = parts[0].strip()
+            target_date = parts[1].strip()
+        if goal_content:
+            ok = self._memory.add_goal(goal_content, target_date=target_date)
+            val = evaluate_goal_value(goal_content)
+            parsed_dl = parse_target_date(target_date, day_first=self._language == "id") if target_date else None
+            dl_msg = f" (Deadline: {parsed_dl})" if parsed_dl else ""
+            reply = (
+                f"* Target milestone registered, minion!\n* \"{goal_content}\"{dl_msg}\n* Valuation: +P$ {val:02d} upon completion! Don't you dare slack off, mew! [anim: laughing]"
+                if ok else "* That goal is already on our board, dummy!"
+            )
+            self._say(reply, force=True, record_memory=True)
+            return True
+        return False
+
+    def _cmd_del_goal(self, clean_input: str, lower_input: str) -> bool:
+        target = clean_input.split(" ", 1)[1].strip()
+        if target:
+            ok, deleted_text = self._memory.delete_goal(target)
+            if ok:
+                reply = f"* Dropped goal from our board, mew:\n* \"{deleted_text}\" [anim: wistful]"
+            else:
+                reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check our milestones."
+            self._say(reply, force=True, record_memory=False)
+            return True
+        return False
+
+    def _cmd_complete_goal(self, clean_input: str, lower_input: str) -> bool:
+        target = clean_input.split(" ", 1)[1].strip()
+        if target:
+            ok, goal_text, val = self._memory.complete_goal(target)
+            if ok:
+                reply = (
+                    f"* TARGET MILESTONE CONQUERED!! Mew!!\n"
+                    f"* Finished: \"{goal_text}\"\n"
+                    f"* Pink evaluated your achievement at +P$ {val:02d}! Added to your wallet! [anim: laughing]"
+                )
+            else:
+                reply = f"* Couldn't find goal '{target}', dummy! Use /goals to check our milestones."
+            self._say(reply, force=True, record_memory=True)
+            return True
+        return False
+
+    def _cmd_goals(self, clean_input: str, lower_input: str) -> bool:
+        goals_text = self._memory.get_goals_prompt()
+        reply = (
+            f"* Target Milestones & Long-term Goals board, mew:\n{goals_text}\n* (Complete goals for P$ or type /goal <text> to add!)"
+            if goals_text else "* No active goals logged yet, minion! Add one with /goal <milestone> or check the Shop!"
+        )
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_timer(self, clean_input: str, lower_input: str) -> bool:
+        self._say(ALARMS_UNAVAILABLE_LINE_ID if self._language == "id" else ALARMS_UNAVAILABLE_LINE_EN,
+                  force=True, record_memory=True)   # REVIEW H15
+        return True
+
+    def _cmd_timer_2(self, clean_input: str, lower_input: str) -> bool:
+        rest = clean_input.split(" ", 1)[1].strip()
+        dur_str, label = split_leading_value(rest, parse_duration_string)   # REVIEW M14
+        label = label or "Focus Timer"
+        secs = parse_duration_string(dur_str) if dur_str else None
+        if secs and secs > 0:
+            item = self._memory.add_timer(secs, label)
+            mins, s = divmod(secs, 60)
+            time_desc = f"{mins}m {s}s" if s else f"{mins}m"
+            reply = f"* Timer set for {time_desc} (\"{label}\"), minion! I'll alert you when time's up!"
+        else:
+            reply = "* Format: /timer <duration> [label], dummy! (e.g. /timer 25m Pomodoro, /timer 10s stretch)"
+        self._say(reply, force=True, record_memory=True)
+        return True
+
+    def _cmd_alarm(self, clean_input: str, lower_input: str) -> bool:
+        rest = clean_input.split(" ", 1)[1].strip()
+        time_str, label = split_leading_value(rest, parse_clock_time)   # REVIEW M14
+        label = label or "Alarm"
+        item = self._memory.add_alarm(time_str, label) if time_str else None
+        if item:
+            reply = f"* Alarm set for {item.get('clock_time')} (\"{label}\"), mew! Don't oversleep, minion!"
+        else:
+            reply = "* Format: /alarm <time> [label], dummy! (e.g. /alarm 14:30 Team sync, /alarm 08:00 AM Wake up)"
+        self._say(reply, force=True, record_memory=True)
+        return True
+
+    def _cmd_timers(self, clean_input: str, lower_input: str) -> bool:
+        alarms_text = self._memory.get_alarms_prompt()
+        reply = f"* Here are our active timers & alarms, mew:\n{alarms_text}" if alarms_text else "* No active timers or alarms right now, minion! Use /timer or /alarm to set one!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_del_timer(self, clean_input: str, lower_input: str) -> bool:
+        target = clean_input.split(" ", 1)[1].strip()
+        if target:
+            ok, label = self._memory.cancel_alarm_or_timer(target)
+            reply = f"* Cancelled timer/alarm (\"{label}\"), mew!" if ok else f"* Couldn't find timer/alarm '{target}', dummy! Use /timers to check active ones."
+            self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_snooze(self, clean_input: str, lower_input: str) -> bool:
+        parts = clean_input.split(" ")
+        target = parts[1].strip() if len(parts) > 1 else "1"
+        mins = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 5
+        ok, label = self._memory.snooze_alarm_or_timer(target, minutes=mins)
+        reply = f"* Snoozed \"{label}\" for {mins} minutes, mew!" if ok else f"* Couldn't find timer/alarm '{target}' to snooze, dummy!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_clear_timers(self, clean_input: str, lower_input: str) -> bool:
+        count = self._memory.clear_all_alarms()
+        reply = f"* Cleared {count} timer{'s' if count != 1 else ''}/alarm{'s' if count != 1 else ''}, mew!" if count else "* No active timers or alarms to clear, silly!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_alarms_ui(self, clean_input: str, lower_input: str) -> bool:
+        self._open_alarms_dialog()
+        self._say("* Opened Pink's Alarms & Timers for you, mew!", force=True, record_memory=False)
+        return True
+
+    def _cmd_facts(self, clean_input: str, lower_input: str) -> bool:
+        facts_text = self._memory.get_long_term_facts()
+        temp_text = self._memory.get_temporary_facts_prompt(numbered=True) if hasattr(self._memory, "get_temporary_facts_prompt") else ""
+        sections = []
+        if facts_text:
+            sections.append(f"* PERMANENT MEMORY CORE:\n{facts_text}")
+        if temp_text:
+            sections.append(f"* TEMPORARY SITUATIONAL NOTES (Active for 2 days):\n{temp_text}")
+        if sections:
+            reply = "\n\n".join(sections)
+        else:
+            reply = "* My memory logs and temporary fact sheets are empty, darling!"
+        self._say(reply, force=True, record_memory=False)
+        return True
+
+    def _cmd_question(self, clean_input: str, lower_input: str) -> bool:
+        forced_source = None
+        parts = clean_input.split(" ", 1)
+        if len(parts) > 1:
+            arg = parts[1].strip().lower()
+            if arg in ("screen", "desktop"):
+                forced_source = "screen"
+            elif arg in ("memory", "memories", "music", "song", "reminder", "todo", "fact"):
+                forced_source = "memory"
+            elif arg in ("persona", "personality", "doll", "ghost"):
+                forced_source = "personality"
+        ok = self._trigger_ai_question(forced_source=forced_source)
+        if not ok:
+            self._say("* I couldn't think of a question right now, dummy! Try again in a second!", force=True, record_memory=False)
+        return True
+
+    def _cmd_token_query(self, clean_input: str, lower_input: str) -> bool:
+        lines = self._memory.format_token_dialogue_lines()
+        first_line = lines[0]
+        extra = lines[1:] if len(lines) > 1 else None
+        if self._can_play("peace_sign"):
+            self._play("peace_sign")
+        self._say(first_line, force=True, extra_queue=extra, record_memory=True)
+        return True
+
+    def _cmd_do(self, clean_input: str, lower_input: str) -> bool:
+        task_str = clean_input.split(" ", 1)[1].strip()
+        if task_str:
+            started = self.execute_desktop_action(
+                {"type": "desktop_action", "app": "Desktop", "intent": task_str},
+                user_request=task_str,
+            )
+            if started:
+                self._say(
+                    f"* Step aside, clumsy fingers! Taking over your cursor for: \"{task_str}\"! [anim: peace_sign]",
+                    force=True,
+                    auto_dismiss=True,
+                    record_memory=True,
+                )
+            elif self._takeover_mode == takeover_gate.TAKEOVER_MODE_OFF:
+                self._say(
+                    "* Hmph! Desktop Cursor Control is switched OFF in my tray menu, minion! [anim: angry]",
+                    force=True, auto_dismiss=True, record_memory=False,
+                )
+            else:
+                self._say(
+                    "* Hold on, minion! I'm still letting go of the last task! Try again in a moment. [anim: shocked]",
+                    force=True, auto_dismiss=True, record_memory=False,
+                )
+        else:
+            self._say("* Format: /do <task>, dummy! (e.g. /do open youtube music in chrome)", force=True, record_memory=False)
+        return True
 
     def _trigger_error_burnt(self, spoken_error: str | None = None) -> None:
         """Trigger the burnt state with foreground explosion VFX upon detecting an error."""
@@ -14877,145 +14492,35 @@ RULES:
                 "so say you're ready to take over once they confirm rather than claiming it's already done.")
 
     # ------------------------------------------------------------- desktop takeover (Pink Takeover)
-    # Phases in which Pink cannot host a takeover; worker signals arriving then are ignored (REVIEW H9).
-    _NO_TAKEOVER_PHASES = ("EXIT_OUTRO", "HIDE_OUTRO", "HIDE_PEEK")
-
     def execute_desktop_action(self, action_data: dict, user_request: str = "") -> bool:
-        """Execute a closed-loop vision cursor takeover in a background thread with Pink animations and visual HUD.
+        """Start a desktop takeover. The TakeoverController owns the whole session (REVIEW M8)."""
+        return self._takeover.start(action_data, user_request)
 
-        Returns True only if a takeover actually started, so callers announce it only then (REVIEW L3).
-        """
-        if self._takeover_mode == takeover_gate.TAKEOVER_MODE_OFF:
-            log.info("Desktop takeover refused: Desktop Cursor Control is turned off.")
-            return False
-        if self._desktop_action_worker is not None and self._desktop_action_worker.isRunning():
-            log.warning("Another desktop action plan is already running.")
-            return False
-        if self._phase.name in self._NO_TAKEOVER_PHASES:
-            log.warning("Desktop takeover refused during %s.", self._phase.name)
-            return False
+    def _on_takeover_state_changed(self, state: "takeover_controller.TakeoverState") -> None:
+        """Pink's body follows the takeover: latch onto the cursor when it starts, let go when it ends (plan 5.1)."""
+        prev, self._takeover_prev_state = self._takeover_prev_state, state
+        TS = takeover_controller.TakeoverState
+        if state is TS.RUNNING and prev is TS.IDLE:
+            self._brain_timer.stop()
+            self._begin_hang(time.perf_counter())
+        elif state is TS.IDLE and prev is not TS.IDLE:
+            reaction = self._takeover.last_reaction
+            if reaction and self._phase is Phase.HANG:
+                self._fall_after_jump(reaction)
 
-        api_key = self._memory.get_api_key() if hasattr(self, "_memory") else ""
-        intent = (
-            action_data.get("intent")
-            or action_data.get("target")
-            or action_data.get("text")
-            or action_data.get("app")
-            or user_request
-            or ""
-        )
-        target_app = action_data.get("app") or ""
-        if not intent and not user_request:
-            return False
-
-        # Build recent conversation context so references like 'say the same thing I said to Arqan' work seamlessly
-        recent_ctx = ""
-        if hasattr(self, "_memory") and hasattr(self._memory, "history"):
-            try:
-                recent_turns = list(self._memory.history)[-5:]
-                ctx_lines = [
-                    f"- User: {t.get('user', '')[:140]} | Pink: {t.get('pink', '')[:140]}"
-                    for t in recent_turns
-                    if isinstance(t, dict) and t.get("user")
-                ]
-                recent_ctx = "\n".join(ctx_lines)
-            except Exception:
-                recent_ctx = ""
-
-        plan = action_planner.create_desktop_plan(
-            intent=intent,
-            api_key=api_key,
-            target_app=target_app,
-            user_request=user_request or intent,
-            context_notes=recent_ctx,
-        )
-        max_steps = plan.max_steps
-        os_interop.reset_panic_abort()
-        worker = action_planner.DesktopActionWorkerThread(plan, api_key=api_key, parent=self)
-        self._desktop_action_worker = worker
-
-        # Exclude Pink and her speech bubble from screenshots so she never blocks Gemini's vision
-        os_interop.set_window_exclude_from_capture(self, True)
-        if hasattr(self, "_dialogue_overlay"):
-            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, True)
-        if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
-            os_interop.set_window_exclude_from_capture(self._voice_overlay, True)
-
-        # The Voice HUD sits over browser tab strips and address bars: hide it (voice mode stays on) so Gemini's
-        # clicks can't land on it. It comes back for confirmations (voice yes/no) and when the takeover ends (REVIEW M5).
-        vo = getattr(self, "_voice_overlay", None)
-        self._voice_hud_hidden_for_takeover = bool(vo is not None and vo.isVisible())
-        if self._voice_hud_hidden_for_takeover:
-            vo.hide()
-        self._question_token += 1   # no question may pop up mid-takeover (REVIEW M2)
-
-        # Latch Pink onto the mouse cursor so she physically rides and steers it across the screen!
-        self._is_taking_over_cursor = True
-        self._confirm_pending = False
-        self._confirm_token = 0
-        self._takeover_last_progress = time.perf_counter()
-        self._brain_timer.stop()
-        self._begin_hang(time.perf_counter())
-
-        # Display Takeover HUD banner
-        if hasattr(self, "_takeover_banner"):
-            target_display = plan.target_app.upper() if plan.target_app else "DESKTOP"
-            self._takeover_banner.show_banner(
-                title=f"⚔️ PINK IN CONTROL — {target_display} (ESC OR SHAKE MOUSE TO ABORT)",
-                subtitle=f"Inspecting screen for: {(user_request or intent)[:55]}...",
-            )
-
-        def _on_step_start(idx: int, a_type: str, target: str) -> None:
-            if not self._is_taking_over_cursor:
-                return
-            self._takeover_last_progress = time.perf_counter()
-            log.info("Desktop Action Step %d/%d: %s on '%s'", idx + 1, max_steps, a_type, target)
-            if hasattr(self, "_takeover_banner"):
-                self._takeover_banner.update_step(idx, max_steps, a_type, target)
-
-        def _on_pink_act(anim: str, cx: int, cy: int) -> None:
-            if not self._is_taking_over_cursor or self._phase.name in self._NO_TAKEOVER_PHASES:
-                return
-            self._takeover_last_progress = time.perf_counter()
-            if anim in ("move_to", "jump_to") and cx > 0 and cy > 0:
-                # Flash retro target reticle at coordinates right before cursor moves/clicks
-                if hasattr(self, "_target_reticle"):
-                    self._target_reticle.flash_at(cx, cy, duration_ms=420)
-                cur_x = QCursor.pos().x()
-                if abs(cx - cur_x) > 10:
-                    self._facing = "right" if cx > cur_x else "left"
-                if self._phase is not Phase.HANG:
-                    self._begin_hang(time.perf_counter())
-                else:
-                    self._play(HANGING_STATE, mirrored=self._hang_mirrored())
-            elif anim == "typing":
-                if self._phase is not Phase.HANG and self._can_play("attack"):
-                    self._play("attack")
-
-        def _on_plan_finish(success: bool, msg: str) -> None:
-            if not self._is_taking_over_cursor:
-                return
-            log.info("Desktop Action Plan Finished: success=%s, msg='%s'", success, msg)
-            self._end_takeover_ui("peace_sign" if success else "angry")
-
-            if success:
-                play_sound("coin")
-                clean_msg = msg.strip() if msg else "Task finished"
-                if getattr(self, "_language", "en") == "id":
-                    self._say(f"* Beres semua, babu! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
-                else:
-                    self._say(f"* All done, minion! ({clean_msg[:65]}) [anim: peace_sign]", force=True, auto_dismiss=True)
+    def _on_takeover_pink_action(self, anim: str, cx: int, cy: int) -> None:
+        """The worker moved / typed: face the target and keep hanging from the cursor."""
+        if anim in ("move_to", "jump_to") and cx > 0 and cy > 0:
+            cur_x = QCursor.pos().x()
+            if abs(cx - cur_x) > 10:
+                self._facing = "right" if cx > cur_x else "left"
+            if self._phase is not Phase.HANG:
+                self._begin_hang(time.perf_counter())
             else:
-                clean_msg = msg.strip() if msg else "Something interrupted me"
-                self._say(f"* Hmph! {clean_msg[:75]} [anim: angry]", force=True, auto_dismiss=True)
-
-        worker.sig_step_started.connect(_on_step_start)
-        worker.sig_pink_action.connect(_on_pink_act)
-        worker.sig_confirm_action.connect(self._show_takeover_confirmation)
-        worker.sig_confirm_expired.connect(self._on_takeover_confirm_expired)
-        worker.sig_plan_finished.connect(_on_plan_finish)
-        worker.start()
-        return True
+                self._play(HANGING_STATE, mirrored=self._hang_mirrored())
+        elif anim == "typing":
+            if self._phase is not Phase.HANG and self._can_play("attack"):
+                self._play("attack")
 
     def _decision_box_pos(self) -> tuple[int, int]:
         """Top-centre of the screen under the cursor, just below the takeover banner."""
@@ -15025,164 +14530,11 @@ RULES:
             return int(geom.x() + (geom.width() - 380) // 2), int(geom.y() + 105)
         return int(self._x), int(self._y)
 
-    def _show_takeover_confirmation(self, token: int, a_type: str, target: str, text: str, win_title: str, proc_name: str) -> None:
-        """Ask the user to approve one sensitive takeover step (worker signal sig_confirm_action).
-
-        The prompt shows the FULL text that will be typed (newlines as ⏎, plus its length), defaults to Cancel,
-        ignores input until it has typed out, and answers with the request's token so a late click can never
-        approve a different step (REVIEW M1, C2).
-        """
-        worker = self._desktop_action_worker
-        if not self._is_taking_over_cursor:
-            if worker is not None:
-                worker.deliver_confirmation(token, False)
-            return
-        self._confirm_pending = True
-        self._confirm_token = token
-        self._takeover_last_progress = time.perf_counter()
-        log.info("Desktop Takeover confirmation #%d requested for '%s' on '%s' (text=%r, window='%s' [%s])",
-                 token, a_type, target, text, win_title, proc_name)
-
-        is_id = getattr(self, "_language", "en") == "id"
-        long_text = bool(text) and len(text) > 280
-        if text:
-            shown = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ⏎ ")
-            if len(shown) > 280:
-                more = len(shown) - 280
-                shown = shown[:280] + (f" …(+{more} karakter lagi!)" if is_id else f" …(+{more} more chars!)")
-            unit = "karakter" if is_id else "chars"
-            detail = f"\"{shown}\" ({len(text)} {unit})"
-        else:
-            detail = target or a_type
-        app_display = proc_name or win_title or ("jendela ini" if is_id else "this window")
-        action_clean = a_type.replace("_", " ")
-
-        if is_id:
-            question_text = f"* Babu! Aku bakal {action_clean}:\n* {detail}\n* di {app_display}. Lanjutkan?"
-            choices = [
-                ("Lanjut", "* Siap laksanakan, babu! [anim: peace_sign]", "peace_sign"),
-                ("Batal", "* Hmph! Dibatalkan! [anim: angry]", "angry"),
-            ]
-            banner_title = "⚠️ BUTUH KONFIRMASI — [Y: Lanjut]  [ENTER/ESC/N: Batal]"
-            banner_sub = f"Konfirmasi {action_clean} di {app_display} (atau klik opsi di bawah)..."
-        else:
-            question_text = f"* Minion! I'm about to {action_clean}:\n* {detail}\n* in {app_display}. Proceed?"
-            choices = [
-                ("Proceed", "* Right away, minion! [anim: peace_sign]", "peace_sign"),
-                ("Cancel", "* Hmph! Canceled! [anim: angry]", "angry"),
-            ]
-            banner_title = "⚠️ CONFIRMATION REQUIRED — [Y: Proceed]  [ENTER/ESC/N: Cancel]"
-            banner_sub = f"Confirm {a_type} in {app_display} (or click option below)..."
-        show_all_label = "Lihat semua" if is_id else "Show all"
-        if long_text:
-            # The bubble can only show 280 chars: offer the whole payload in a scrollable view (REVIEW M1).
-            choices.append((show_all_label, "", None))
-
-        if hasattr(self, "_takeover_banner"):
-            self._takeover_banner.show_banner(title=banner_title, subtitle=banner_sub, is_confirmation=True)
-
-        def _finish(approved: bool) -> None:
-            self._confirm_pending = False
-            self._confirm_token = 0
-            self._close_confirm_text_viewer()
-            self._hide_voice_hud_for_takeover()
-            if hasattr(self, "_takeover_banner"):
-                self._takeover_banner.restore_base_title()
-            self._takeover_last_progress = time.perf_counter()
-            w = self._desktop_action_worker
-            if w is not None:
-                w.deliver_confirmation(token, approved)
-
-        def _on_chosen(choice_label: str, _reaction_text: str, _reaction_anim: str) -> None:
-            if self._confirm_token != token:
-                return  # superseded or expired prompt
-            if choice_label == show_all_label:
-                self._show_confirm_text_viewer(text, app_display, is_id)
-                self._show_takeover_confirmation(token, a_type, target, text, win_title, proc_name)   # ask again
-                return
-            # Close the bubble before the worker resumes, so it doesn't keep focus or sit over the target (REVIEW H2).
-            self._dialogue_overlay.dismiss(clear_queue=True)
-            _finish(choice_label in ("Proceed", "Lanjut"))
-
-        def _on_cancel() -> None:
-            # The prompt was closed without an answer (e.g. something else dismissed it): that's a NO, said now
-            # instead of after the worker's timeout (REVIEW M2).
-            if self._confirm_token == token:
-                log.info("Takeover confirmation #%d closed without an answer: denying.", token)
-                _finish(False)
-
-        fixed_x, fixed_y = self._decision_box_pos()
-        self._dialogue_overlay.ask(
-            question_text,
-            choices,
-            fixed_x,
-            fixed_y,
-            on_chosen=_on_chosen,
-            track_ignore=False,
-            fixed=True,
-            fixed_pos=(fixed_x, fixed_y),
-            default_idx=1,          # Cancel is the default (REVIEW M1)
-            arm_delay_s=0.6,
-            on_cancel=_on_cancel,
-        )
-        # Voice mode: bring the HUD back only while the decision is pending, so the user can say yes/no (REVIEW M5).
-        vo = getattr(self, "_voice_overlay", None)
-        if self._voice_hud_hidden_for_takeover and self._voice_mode_enabled and vo is not None:
-            vo.show_overlay()
-
-    def _show_confirm_text_viewer(self, text: str, app_display: str, is_id: bool) -> None:
-        """Read-only, scrollable view of the full text Pink is asking to type (REVIEW M1)."""
-        self._close_confirm_text_viewer()
-        dlg = QDialog(None, Qt.Window | Qt.WindowStaysOnTopHint)
-        dlg.setWindowTitle(f"Teks lengkap untuk {app_display}" if is_id else f"Full text Pink will type into {app_display}")
-        lay = QVBoxLayout(dlg)
-        box = QPlainTextEdit(dlg)
-        box.setReadOnly(True)
-        box.setPlainText(text)
-        lay.addWidget(QLabel((f"{len(text)} karakter. Tutup ini, lalu pilih Lanjut atau Batal." if is_id
-                              else f"{len(text)} characters. Close this, then choose Proceed or Cancel."), dlg))
-        lay.addWidget(box)
-        close_btn = QPushButton("Tutup" if is_id else "Close", dlg)
-        close_btn.clicked.connect(dlg.close)
-        lay.addWidget(close_btn)
-        dlg.resize(560, 360)
-        dlg.show()
-        self._confirm_text_viewer = dlg
-
-    def _close_confirm_text_viewer(self) -> None:
-        dlg = getattr(self, "_confirm_text_viewer", None)
-        self._confirm_text_viewer = None
-        if dlg is not None:
-            try:
-                dlg.close()
-                dlg.deleteLater()
-            except RuntimeError:
-                pass
-
-    def _hide_voice_hud_for_takeover(self) -> None:
-        vo = getattr(self, "_voice_overlay", None)
-        if self._voice_hud_hidden_for_takeover and vo is not None and vo.isVisible():
-            vo.hide()
-
-    def _on_takeover_confirm_expired(self, token: int) -> None:
-        """The worker stopped waiting for confirmation ``token``: drop the stale prompt (REVIEW M1)."""
-        if token != self._confirm_token:
-            return
-        log.info("Takeover confirmation #%d expired without an answer.", token)
-        self._confirm_pending = False
-        self._confirm_token = 0
-        self._close_confirm_text_viewer()
-        self._hide_voice_hud_for_takeover()
-        if self._dialogue_overlay.has_pending_fixed_decision():
-            self._dialogue_overlay.dismiss(clear_queue=True)
-        if hasattr(self, "_takeover_banner"):
-            self._takeover_banner.restore_base_title()
-
     def _confirm_takeover_start(self, action: dict, user_text: str) -> None:
         """Assisted mode: Gemini proposed a takeover; ask before starting one (default Cancel) (REVIEW C1)."""
         if self._takeover_mode != takeover_gate.TAKEOVER_MODE_ASSISTED:
             return
-        if self._is_taking_over_cursor:
+        if self._takeover.is_active:
             log.info("Ignoring proposed takeover while one is already running.")
             return
         is_id = getattr(self, "_language", "en") == "id"
@@ -15216,56 +14568,6 @@ RULES:
             q, choices, fixed_x, fixed_y, on_chosen=_on_chosen, track_ignore=False,
             fixed=True, fixed_pos=(fixed_x, fixed_y), default_idx=1, arm_delay_s=0.6,
         )
-
-    def _end_takeover_ui(self, reaction: str | None) -> None:
-        """Single, idempotent UI cleanup for every way a takeover ends (finish, abort, watchdog, exit, hide, quit)."""
-        self._is_taking_over_cursor = False
-        if self._confirm_pending and self._dialogue_overlay.has_pending_fixed_decision():
-            self._dialogue_overlay.dismiss(clear_queue=True)
-        self._confirm_pending = False
-        self._confirm_token = 0
-        self._close_confirm_text_viewer()
-        if self._voice_hud_hidden_for_takeover:
-            self._voice_hud_hidden_for_takeover = False
-            vo = getattr(self, "_voice_overlay", None)
-            if vo is not None and self._voice_mode_enabled:
-                vo.show_overlay()
-        os_interop.set_window_exclude_from_capture(self, False)
-        if hasattr(self, "_dialogue_overlay"):
-            os_interop.set_window_exclude_from_capture(self._dialogue_overlay, False)
-        if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
-            os_interop.set_window_exclude_from_capture(self._voice_overlay, False)
-        if hasattr(self, "_takeover_banner"):
-            self._takeover_banner.dismiss()
-        if hasattr(self, "_target_reticle"):
-            self._target_reticle.dismiss()
-        if reaction and self._phase is Phase.HANG:
-            self._fall_after_jump(reaction)
-
-    def _abort_desktop_takeover(self, reason: str = "Aborted by user", announce: bool = True) -> None:
-        """Immediately abort an active cursor takeover on the UI thread and detach Pink from the cursor.
-
-        Every path that ends a takeover early (Esc/shake, watchdog, exit, hide, quit, update) calls this, so the
-        worker is always stopped and the UI always cleaned up the same way (REVIEW H4, H9).
-        """
-        worker = self._desktop_action_worker
-        if not self._is_taking_over_cursor and not (worker is not None and worker.isRunning()):
-            return
-        log.warning("Immediate UI-thread abort of desktop cursor takeover: %s", reason)
-        os_interop.trigger_panic_abort()
-
-        if worker is not None:
-            for sig in (worker.sig_step_started, worker.sig_pink_action, worker.sig_plan_finished,
-                        worker.sig_confirm_action, worker.sig_confirm_expired):
-                try:
-                    sig.disconnect()
-                except Exception:
-                    pass
-            worker.abort()
-
-        self._end_takeover_ui(SHAKEN_REACTION if announce else None)
-        if announce:
-            self._say("* W-wah?! Okay, okay! I let go of your mouse, minion! [anim: shocked]", force=True, auto_dismiss=True)
 
     def _init_voice_system(self) -> None:
         """Lazily initialize the background VoiceManager and VoiceModeOverlay."""
@@ -15548,14 +14850,7 @@ RULES:
         # Build prompt & system instruction
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
-        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
-        lang_block = self._get_language_prompt_block()
-        if lang_block:
-            system_inst += f"\n{lang_block}"
-        if hasattr(self, "_codebase_provider") and self._codebase_provider:
-            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
-            if compact_cb:
-                system_inst += f"\n{compact_cb}"
+        system_inst = self._prompt_header(now_str)
 
         last_turn = self._memory.history[-1] if self._memory.history else None
         if last_turn and "timestamp" in last_turn:
@@ -15669,37 +14964,10 @@ RULES:
             )
         system_inst += f"\n\n{candidate_directive}"
 
-        facts = self._memory.get_long_term_facts()
-        if facts:
-            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+        system_inst += self._memory_prompt_sections()
 
-        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
-        if temp_facts:
-            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
-
-        reminders = self._memory.get_reminders_prompt()
-        if reminders:
-            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
-
-        active_alarms = self._memory.get_alarms_prompt()
-        if active_alarms:
-            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
-
-        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
-        if curiosities:
-            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
-
-        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
-        if goals:
-            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
-
-        # Conditional hardware vitals injection (on sustained stress only)
-        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
-                hw_block = self._hardware_monitor.get_prompt_block(force=False)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
+        system_inst += self._hardware_prompt_section()   # vitals only under sustained stress
+        system_inst += self._active_app_section()   # the app the user is in (exactly once per prompt)
 
         if is_gaming:
             prompt_label = f"[Pink is watching your gameplay{game_label}]"
@@ -15914,7 +15182,7 @@ RULES:
             self._say(f"* Downloading update: {percent}%... mew!", force=True, record_memory=False)
 
     def _on_update_downloaded(self, file_path: str, sha256: str) -> None:
-        if self._is_taking_over_cursor:
+        if self._takeover.is_active:
             # Applying the update ends the process with os._exit; never do that mid-step (REVIEW H13/H9).
             log.info("Update downloaded during a desktop takeover; deferring apply until it ends.")
             QTimer.singleShot(5000, lambda fp=file_path, h=sha256: self._on_update_downloaded(fp, h))
@@ -16264,46 +15532,12 @@ RULES:
 
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
-        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
-        lang_block = self._get_language_prompt_block()
-        if lang_block:
-            system_inst += f"\n{lang_block}"
-        if hasattr(self, "_codebase_provider") and self._codebase_provider:
-            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
-            if compact_cb:
-                system_inst += f"\n{compact_cb}"
+        system_inst = self._prompt_header(now_str)
 
-        facts = self._memory.get_long_term_facts()
-        if facts:
-            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+        system_inst += self._memory_prompt_sections()
 
-        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
-        if temp_facts:
-            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
-
-        reminders = self._memory.get_reminders_prompt()
-        if reminders:
-            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
-
-        active_alarms = self._memory.get_alarms_prompt()
-        if active_alarms:
-            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
-
-        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
-        if curiosities:
-            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
-
-        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
-        if goals:
-            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
-
-        # Conditional hardware vitals injection (on sustained stress only)
-        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
-                hw_block = self._hardware_monitor.get_prompt_block(force=False)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
+        system_inst += self._hardware_prompt_section()   # vitals only under sustained stress
+        system_inst += self._active_app_section()   # the app the user is in (exactly once per prompt)
 
         check_str = f"{clean_artist} {clean_title}".lower()
         is_toby = ("toby fox" in check_str or "toby 'radiation' fox" in check_str)
@@ -16605,7 +15839,7 @@ RULES:
             reach = DEBUG_CROSSHAIR_PX + 2
             return mask.united(QRegion(round(hand_x) - reach, round(hand_y) - reach,
                                        2 * reach + 1, 2 * reach + 1))
-        if getattr(self, "_is_taking_over_cursor", False):
+        if self._takeover.is_active:
             hand_x, hand_y = self._hand_offset()
             hole_r = 16
             # Exclude pixels around the cursor hotspot during desktop takeover so automated clicks NEVER hit Pink's own window
@@ -17215,15 +16449,9 @@ RULES:
             return
 
         if self._phase is Phase.HANG:               # no walking and NO gravity while she hangs
-            if self._is_taking_over_cursor:
-                # Never just drop Pink while the worker keeps clicking (REVIEW H4): end the takeover through the
-                # full abort path, and only when the worker is gone or has made no progress for a long time.
-                worker = self._desktop_action_worker
-                worker_alive = worker is not None and worker.isRunning()
-                stalled = (now - self._takeover_last_progress) > TAKEOVER_STALL_TIMEOUT_S and not self._confirm_pending
-                if not worker_alive or stalled:
-                    log.warning("Phase.HANG watchdog: takeover %s. Aborting it.", "stalled" if worker_alive else "worker gone")
-                    self._abort_desktop_takeover("Takeover watchdog", announce=worker_alive)
+            if self._takeover.is_active:
+                # Never just drop Pink while the worker keeps clicking (REVIEW H4): the controller decides.
+                if self._takeover.check_watchdog(now):
                     return
             elif now - getattr(self, "_hang_started_at", now) > 15.0:
                 log.warning("Phase.HANG watchdog: hang timed out (>15.0s). Forcing release.")
@@ -17526,7 +16754,7 @@ RULES:
             self._stop_overlay()
         if hasattr(self, "_bomb_overlay"):
             self._bomb_overlay.close()
-        self._abort_desktop_takeover("Hidden to tray", announce=False)  # REVIEW H9
+        self._takeover.abort("Hidden to tray", announce=False)  # REVIEW H9
         if hasattr(self, "_window_timer"):
             self._window_timer.stop()
         if hasattr(self, "_screen_comment_timer"):
@@ -17822,51 +17050,13 @@ RULES:
 
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%A, %B %d, %Y at %I:%M:%S %p")
-        system_inst = f"{PINK_SYSTEM_INSTRUCTION}\n- Current Local Time: {now_str}."
-        lang_block = self._get_language_prompt_block()
-        if lang_block:
-            system_inst += f"\n{lang_block}"
-        if hasattr(self, "_codebase_provider") and self._codebase_provider:
-            compact_cb = self._codebase_provider.get_compact_system_prompt_line(self)
-            if compact_cb:
-                system_inst += f"\n{compact_cb}"
+        system_inst = self._prompt_header(now_str)
 
-        facts = self._memory.get_long_term_facts()
-        if facts:
-            system_inst += f"\n\nPERMANENT FACTS ABOUT USER ACROSS SESSIONS:\n{facts}"
+        system_inst += self._memory_prompt_sections()
 
-        temp_facts = self._memory.get_temporary_facts_prompt() if hasattr(self._memory, "get_temporary_facts_prompt") else ""
-        if temp_facts:
-            system_inst += f"\n\nACTIVE TEMPORARY FACTS (Situational context from the past 48 hours; auto-expires):\n{temp_facts}"
+        system_inst += self._hardware_prompt_section()   # vitals only under sustained stress
 
-        reminders = self._memory.get_reminders_prompt()
-        if reminders:
-            system_inst += f"\n\nACTIVE TEMPORARY REMINDERS & TO-DOS (Auto-expires after 30 days):\n{reminders}"
-
-        active_alarms = self._memory.get_alarms_prompt()
-        if active_alarms:
-            system_inst += f"\n\nACTIVE COUNTDOWN TIMERS & SCHEDULED ALARMS:\n{active_alarms}"
-
-        curiosities = self._memory.get_curiosity_prompt() if hasattr(self._memory, "get_curiosity_prompt") else ""
-        if curiosities:
-            system_inst += f"\n\nACTIVE CURIOSITIES & UNEXPLORED TOPICS (Things Pink is wondering or wants to investigate):\n{curiosities}"
-
-        goals = self._memory.get_goals_prompt() if hasattr(self._memory, "get_goals_prompt") else ""
-        if goals:
-            system_inst += f"\n\nUSER'S TARGET MILESTONES & LONG-TERM GOALS (Earns P$ upon completion):\n{goals}"
-
-        # Conditional hardware vitals injection (on sustained stress only)
-        if hasattr(self, "_hardware_monitor") and self._hardware_monitor:
-            snoozed_hw = hasattr(self, "_memory") and self._memory and self._memory.is_hardware_coaching_snoozed()
-            if not snoozed_hw and self._hardware_monitor.thermal_state in ("warm", "furnace"):
-                hw_block = self._hardware_monitor.get_prompt_block(force=False)
-                if hw_block:
-                    system_inst += f"\n\n{hw_block}"
-
-        # Current active desktop app & activity context (native Win32 tracking without AI)
-        active_app_block = self.get_active_app_prompt_block()
-        if active_app_block:
-            system_inst += f"\n\n{active_app_block}"
+        system_inst += self._active_app_section()   # the app the user is in (exactly once per prompt)
 
         candidate_directive = (
             "[STRUCTURAL DIRECTIVE: TRAY BACKGROUND SCREEN OBSERVATION]\n"
@@ -18028,7 +17218,7 @@ RULES:
     # ---------------------------------------------------- exit sequence (outro)
     def _start_exit_outro(self) -> None:
         """User chose 'Exit': Pink runs to the furthest screen edge offscreen, then the application quits."""
-        self._abort_desktop_takeover("Exit requested", announce=False)  # REVIEW H9: stop the worker first
+        self._takeover.abort("Exit requested", announce=False)  # REVIEW H9: stop the worker first
         if self._phase is Phase.EXIT_OUTRO:
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
@@ -18392,14 +17582,14 @@ RULES:
         while self._shake_trail and now - self._shake_trail[0][0] > SHAKE_WINDOW_S:
             self._shake_trail.popleft()
 
-        if getattr(self, "_is_taking_over_cursor", False):
+        if self._takeover.is_active:
             # Poll global ESC / mouse pull OR violent mouse shake at 60 FPS for instant abort!
             is_shaking_aborted = (now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking())
-            if getattr(self, "_confirm_pending", False):
+            if self._takeover.awaiting_confirm:
                 is_shaking_aborted = False  # Suppress shake abort during decision prompt so user can move mouse
 
             if os_interop.is_panic_key_pressed() or is_shaking_aborted:
-                self._abort_desktop_takeover("User pressed ESC or shook the mouse")
+                self._takeover.abort("User pressed ESC or shook the mouse")
                 return
         else:
             if now - self._hang_started_at >= SHAKE_GRACE_S and self._is_shaking():
@@ -18426,7 +17616,7 @@ RULES:
 
         min_x, max_x, min_y, ground_y = bounds
         hand_x, hand_y = self._hand_offset()
-        is_takeover = getattr(self, "_is_taking_over_cursor", False)
+        is_takeover = self._takeover.is_active
         y_clearance = 8.0 if is_takeover else 0.0
         goal_x = min(max(cursor.x() - hand_x, min_x), max_x)
         goal_y = min(max(cursor.y() - hand_y + y_clearance, min_y), ground_y)
@@ -20095,6 +19285,7 @@ RULES:
         lang_block = self._get_language_prompt_block()
         if lang_block:
             system_inst += f"\n{lang_block}"
+        system_inst += self._active_app_section()   # the app the user is in (exactly once per prompt)
 
         cinema_prompt = (
             f"[Pink is watching the maximized video '{clean_title}' with the user.]\n"
@@ -20275,8 +19466,8 @@ RULES:
             act.blockSignals(True)
             act.setChecked(key == mode)
             act.blockSignals(False)
-        if mode == takeover_gate.TAKEOVER_MODE_OFF and self._is_taking_over_cursor:
-            self._abort_desktop_takeover("Desktop Cursor Control switched off")
+        if mode == takeover_gate.TAKEOVER_MODE_OFF and self._takeover.is_active:
+            self._takeover.abort("Desktop Cursor Control switched off")
         self._save_live_settings()
         log.info("Desktop Cursor Control mode: %s", mode)
 
@@ -20322,7 +19513,7 @@ RULES:
         """
         widgets = [w for w in (self, getattr(self, "_dialogue_overlay", None), getattr(self, "_chat_input", None))
                    if w is not None and w.isVisible()]
-        keep_excluded = self._is_taking_over_cursor       # a takeover already excludes them; leave that alone
+        keep_excluded = self._takeover.is_active       # a takeover already excludes them; leave that alone
         results = [os_interop.set_window_exclude_from_capture(w, True) for w in widgets]
         hidden: list = []
         if not all(results):
@@ -20533,7 +19724,7 @@ RULES:
 
     def _reset_to_taskbar(self) -> None:
         """Emergency reset or manual summon: place the pet safely back on the primary taskbar."""
-        self._abort_desktop_takeover("Reset to taskbar", announce=False)  # REVIEW H9: stop the worker first
+        self._takeover.abort("Reset to taskbar", announce=False)  # REVIEW H9: stop the worker first
         if getattr(self, "_hidden_in_tray", False):
             self._restore_from_tray()
             return
@@ -20553,7 +19744,7 @@ RULES:
 
     def handle_instance_activation(self) -> None:
         """Handle activation signal when user tries to launch a second instance."""
-        if self._is_taking_over_cursor:
+        if self._takeover.is_active:
             # show()/raise_()/activateWindow() mid-plan would steal the foreground from the target (REVIEW L4).
             log.info("Ignoring duplicate launch request while a desktop takeover is running.")
             return
@@ -20605,7 +19796,7 @@ RULES:
 
     def _quit(self) -> None:
         """Stop everything and leave the application (or run offscreen first)."""
-        self._abort_desktop_takeover("Exit requested", announce=False)  # REVIEW H9: stop the worker first
+        self._takeover.abort("Exit requested", announce=False)  # REVIEW H9: stop the worker first
         if self._phase is Phase.EXIT_OUTRO:
             return
         if self._phase in (Phase.HIDE_PEEK, Phase.HIDE_OUTRO):
@@ -20651,9 +19842,9 @@ RULES:
         if hasattr(self, "_voice_overlay") and self._voice_overlay is not None:
             self._voice_overlay.dismiss()
             self._voice_overlay.close()
-        self._abort_desktop_takeover("Quitting", announce=False)
-        if self._desktop_action_worker is not None and self._desktop_action_worker.isRunning():
-            if not self._desktop_action_worker.wait(4000):   # don't destroy a running QThread (REVIEW H13)
+        self._takeover.abort("Quitting", announce=False)
+        if self._takeover.worker is not None and self._takeover.worker.isRunning():
+            if not self._takeover.worker.wait(4000):   # don't destroy a running QThread (REVIEW H13)
                 log.error("Desktop takeover worker did not stop within 4 s of quit.")
         if hasattr(self, "_dialogue_overlay"):
             self._dialogue_overlay.mark_user_interacted()
