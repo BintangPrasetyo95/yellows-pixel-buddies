@@ -34,7 +34,8 @@ except Exception:
     HAS_PYQT = False
 
 import os_interop
-from pink.ai import protocol
+import privacy
+from pink.ai import protocol, transport
 
 log = logging.getLogger("yellows_pixel_buddies.action_planner")
 
@@ -601,6 +602,8 @@ def _call_gemini_json(
     raw_response_text = ""
     truncated = False
     schema_dropped = False
+    network_retried_for: Optional[str] = None
+    connect_timeout_s = transport.connect_timeout(transport.payload_size(payload))
 
     i = 0
     while i < len(models_to_try):
@@ -612,7 +615,7 @@ def _call_gemini_json(
                 url,
                 headers=headers,
                 json=payload,
-                timeout=(GEMINI_CONNECT_TIMEOUT_S, GEMINI_READ_TIMEOUT_S),
+                timeout=(connect_timeout_s, GEMINI_READ_TIMEOUT_S),
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -655,9 +658,21 @@ def _call_gemini_json(
                 continue
             else:
                 log.warning("Vision model '%s' returned HTTP %s: %s", attempt_model, resp.status_code, resp.text[:120])
+        except requests.exceptions.ConnectionError as e:
+            # Network/upload errors hit every model alike: retry the same model once, then give up (no 6x re-upload).
+            # NEVER log raw URL to prevent credential leakage.
+            detail = privacy.redact_secrets(f"{type(e).__name__}: {e}")
+            if network_retried_for != attempt_model:
+                network_retried_for = attempt_model
+                log.warning("Vision model '%s' network error (%s); retrying once...", attempt_model, detail)
+                i -= 1
+                continue
+            log.warning("Vision model '%s' network error after retry (%s); giving up.", attempt_model, detail)
+            return None
         except Exception as e:
-            # Log only exception type name and message; NEVER log raw URL to prevent credential leakage
-            log.warning("Vision model '%s' request failed: %s", attempt_model, type(e).__name__)
+            # Slow model (ReadTimeout after upload finished) or malformed response: log cause and try fallback model.
+            detail = privacy.redact_secrets(f"{type(e).__name__}: {e}")
+            log.warning("Vision model '%s' request failed: %s", attempt_model, detail)
             continue
 
     if not raw_response_text:
@@ -1016,6 +1031,7 @@ AVAILABLE ACTIONS:
 11. "done": The user's goal is visibly complete on the screen!
    - Requires "summary": concise description of what was accomplished.
 12. "fail": The task is impossible or blocked (e.g. requires password/login or missing file).
+   - NEVER return "fail" just because the currently focused app cannot do the remaining part of a multi-part goal — switch to the right app in OPEN DESKTOP WINDOWS (e.g. "WhatsApp" or "Chrome" for replying/messaging) with "focus_window" instead!
    - Requires "summary": concise reason why it cannot be completed.
 
 CRITICAL RULES FOR RELIABLE CURSOR CONTROL & VISUAL SELF-CONFIRMATION:
@@ -1051,6 +1067,9 @@ CRITICAL RULES FOR RELIABLE CURSOR CONTROL & VISUAL SELF-CONFIRMATION:
     2. Locate the main chat input field / prompt textarea (e.g. "How can Claude help you today?", "Message Claude", "Ask anything").
     3. Use "click_and_type" on that input field with the message/prompt (e.g. "Say hi to me") and "press_enter": true!
     4. Wait for the response to begin appearing or stream, then return action="done" with self_check="goal_confirmed_complete".
+- MULTI-APP / COMPOUND GOALS (e.g. "open Spotify and reply to Mom", "open X then do Y in Z"):
+  * Complete each part in sequence across apps. Once the first app (e.g. Spotify) is open on screen, NEVER return "action": "fail" just because that app does not support messaging or the next part's feature!
+  * Check OPEN DESKTOP WINDOWS and use "focus_window" to switch to the app for the next part (e.g. "WhatsApp" or "Chrome"), and complete every requested part before returning "done".
 - VS CODE / TERMINAL: If the user asks to run a command in VS Code terminal:
   * Ensure VS Code is focused ("focus_window": "Visual Studio Code").
   * If the terminal panel is visible at the bottom, use "click_and_type" on the terminal area with the command and "press_enter": true.
@@ -1098,11 +1117,23 @@ _APP_INFERENCE_RULES: Tuple[Tuple[str, str], ...] = (
 
 
 def infer_target_app(text: str) -> str:
-    """Guess the app a request is about, by whole words ("password" is not Word). "" if unsure."""
+    """Guess the single app a request is about, by whole words ("password" is not Word). "" if unsure or multi-app."""
     t = (text or "").lower()
+    matched: List[str] = []
     for pattern, label in _APP_INFERENCE_RULES:
-        if re.search(pattern, t):
-            return label
+        if re.search(pattern, t) and label not in matched:
+            matched.append(label)
+    if len(matched) > 1:
+        return ""
+    if len(matched) == 1:
+        label = matched[0]
+        # A non-messaging app paired with a reply/dm clause ("open Spotify and reply to Mom") spans multiple apps.
+        if label not in ("WhatsApp", "Discord", "Chrome") and re.search(
+            r"\b(?:and|then)\b[^.!?\n]*\b(?:reply|dm|text\s+(?:back|to)|send\s+(?:a\s+)?(?:message|text|reply))\b",
+            t,
+        ):
+            return ""
+        return label
     return ""
 
 
@@ -1435,17 +1466,17 @@ class DesktopActionExecutor:
         os_interop.trigger_panic_abort()
 
     @staticmethod
-    def _is_simple_open_goal(goal_text: str) -> bool:
-        """Return True if the user's goal is strictly to open/focus/view a native desktop application.
+    def _simple_open_target(goal_text: str) -> Optional[str]:
+        """Return the requested native OS app name if ``goal_text`` is strictly a simple open/focus request.
 
-        Returns False if the goal involves:
-        - Web apps, websites, or URLs inside browsers (e.g. claude, chatgpt, youtube, github)
+        Returns None if the goal involves:
+        - Web apps, websites, or URLs inside browsers (e.g. claude, chatgpt, youtube, github, WhatsApp Web)
         - Compound or secondary actions (e.g. 'open X and do Y', 'open X then click Y', 'open X to run Y')
         - Interactive verbs (e.g. play, type, search, reply, send, run, click, tell, ask, poke)
         """
         g = (goal_text or "").strip().lower()
         if not g:
-            return False
+            return None
 
         # 1. Any interactive verbs or commands immediately disqualify simple open
         interactive_keywords = (
@@ -1458,7 +1489,7 @@ class DesktopActionExecutor:
         )
         for kw in interactive_keywords:
             if re.search(rf"\b{re.escape(kw)}\b", g):
-                return False
+                return None
 
         # 2. Compound clauses (' and ', ' then ', ' to <verb>', ' so that ', ' in <container>') disqualify
         compound_patterns = (
@@ -1468,19 +1499,23 @@ class DesktopActionExecutor:
         )
         for pat in compound_patterns:
             if re.search(pat, g):
-                return False
+                return None
 
         # 3. Known web apps, web services, or URLs inside browsers require vision navigation, not just window focus!
+        if re.search(r"\bweb\b", g):
+            return None
         web_apps_and_domains = (
             "claude", "chatgpt", "youtube", "yt", "github", "gmail", "reddit",
             "twitter", "x.com", "notion", "figma", "gemini", "huggingface",
             "stackoverflow", "google docs", "google drive", "sheets", "slides",
+            "whatsapp web", "web whatsapp", "telegram web", "discord web", "spotify web",
+            "instagram", "facebook", "tiktok", "netflix", "twitch",
             "localhost", "http:", "https:", ".com", ".org", ".ai", ".io",
             ".net", ".app", "web.whatsapp", "music.youtube",
         )
         for web_kw in web_apps_and_domains:
             if web_kw in g:
-                return False
+                return None
 
         # 4. Must strictly match an open/focus pattern targeting an OS app
         simple_open_patterns = (
@@ -1491,9 +1526,14 @@ class DesktopActionExecutor:
             if m:
                 target = m.group(1).strip()
                 if len(target.split()) <= 4:
-                    return True
+                    return target
 
-        return False
+        return None
+
+    @classmethod
+    def _is_simple_open_goal(cls, goal_text: str) -> bool:
+        """Return True if the user's goal is strictly to open/focus/view a native desktop application."""
+        return cls._simple_open_target(goal_text) is not None
 
     @staticmethod
     def _requires_text_submission(goal_text: str, intent_text: str = "") -> bool:
@@ -1617,16 +1657,16 @@ class DesktopActionExecutor:
                         focused_existing_app = True
                         time.sleep(0.45)
 
+                simple_target = self._simple_open_target(goal_text)
+                fg_now = self.input.foreground_window()
                 if (
                     focused_existing_app
-                    and self._is_simple_open_goal(goal_text)
-                    and os_interop.window_matches_app(self.input.foreground_window(), plan.target_app)
+                    and simple_target is not None
+                    and os_interop.window_matches_app(fg_now, plan.target_app)
+                    and os_interop.window_matches_app(fg_now, simple_target)
                 ):
                     log.info("Simple open goal satisfied by focusing '%s' — finishing immediately.", plan.target_app)
-                    plan.is_finished = True
-                    plan.success = True
-                    plan.summary_message = f"Opened and focused {plan.target_app}."
-                    return True
+                    return _finish(True, "success", f"Opened and focused {plan.target_app}.")
 
             history_lines: List[str] = []
             max_steps = max(2, min(12, plan.max_steps or MAX_VISION_STEPS))
@@ -1760,10 +1800,13 @@ class DesktopActionExecutor:
                 )
 
                 # Simple open goal ("open whatsapp"): done only if the focused window really is that app (REVIEW H5)
+                simple_target = self._simple_open_target(goal_text)
+                fg_after = self.input.foreground_window()
                 if (
                     step.action_type == "focus_window"
-                    and self._is_simple_open_goal(goal_text)
-                    and os_interop.window_matches_app(self.input.foreground_window(), step.target)
+                    and simple_target is not None
+                    and os_interop.window_matches_app(fg_after, step.target)
+                    and os_interop.window_matches_app(fg_after, simple_target)
                 ):
                     log.info("Simple open goal satisfied at step %d — finishing immediately!", step_no)
                     return _finish(True, "success", f"Opened {step.target}.")
@@ -1895,7 +1938,7 @@ class DesktopActionExecutor:
             "Look at the attached desktop screenshot (using the x=100..900, y=100..900 coordinate grid lines):\n"
             "1. First fill in 'self_check' and 'self_check_reason' to confirm whether your previous step actually succeeded on screen.\n"
             "2. If you can visually confirm the user's entire goal is now complete on screen (and no 'Save / Don't Save' dialog or unsent message remains), return action='done'.\n"
-            "3. Otherwise, decide the SINGLE NEXT PHYSICAL ACTION to take right now.\n"
+            "3. Otherwise, decide the SINGLE NEXT PHYSICAL ACTION to take right now. If the current app only handles part of the goal (e.g. Spotify is open and you still need to reply/message someone), switch to the next app in OPEN DESKTOP WINDOWS (e.g. focus_window 'WhatsApp' or 'Chrome') — never return 'fail' just because the current app lacks that feature.\n"
             "Respond ONLY with the JSON object."
         )
 

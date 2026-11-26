@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageOps
 
 import action_planner
 import os_interop
@@ -70,6 +70,10 @@ def replay(case_dir: Path, fake, monkeypatch):
         step = steps[cursor["dec"]]
         if step.get("foreground_during_decision"):
             fake.foreground = _window(step["foreground_during_decision"])
+        if step.get("target_shifted"):
+            obs_img = action_planner._LAST_RAW_SCREENSHOT or Image.new("RGB", (1920, 1200), "white")
+            shifted = ImageOps.invert(obs_img.convert("RGB"))
+            fake.screen_patches.extend([shifted, shifted.copy()])
         return step["decision"]
 
     def on_call(name, args, kwargs):

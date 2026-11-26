@@ -22,6 +22,11 @@ class TestTakeoverBrowserIntent(unittest.TestCase):
             "open claude in chrome",
             "open youtube in chrome",
             "open youtube music in chrome",
+            "open WhatsApp Web",
+            "open whatsapp web in chrome",
+            "open web whatsapp",
+            "open telegram web",
+            "open discord web",
             "open claude",
             "open chatgpt",
             "tell claude to say hi to me",
@@ -107,6 +112,12 @@ class TestTakeoverBrowserIntent(unittest.TestCase):
         self.assertIn("claude", os_interop.APP_SEARCH_ALIASES)
         self.assertIn("chatgpt", os_interop.APP_SEARCH_ALIASES)
         self.assertIn("chrome.exe", os_interop.APP_SEARCH_ALIASES["claude"].hosts)  # a host, not the identity (REVIEW H5)
+
+    def test_vision_prompt_covers_multi_app_compound_goals(self):
+        prompt = action_planner.VISION_AGENT_SYSTEM_PROMPT
+        self.assertIn("MULTI-APP / COMPOUND GOALS", prompt)
+        self.assertIn("focus_window", prompt)
+        self.assertIn("NEVER return \"fail\"", prompt)
 
 
 if __name__ == "__main__":

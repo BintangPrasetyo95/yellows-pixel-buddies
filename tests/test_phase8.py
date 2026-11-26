@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_pure_modules_do_not_load_qt_or_torch():
     code = ("import sys; import pink.text.intents, pink.ai.protocol, pink.ai.prompt_builder, pink.chat.commands, "
-            "pink.shop.menus, pink.storage.manager, pink.storage.actions, pink.storage.sessions, pink.storage.json_store; heavy = [m for m in sys.modules if m.split('.')[0] in ('PyQt5', 'torch', 'whisper')]; "
+            "pink.shop.menus, pink.storage.manager, pink.storage.actions, pink.storage.sessions, pink.storage.json_store, pink.ai.transport; heavy = [m for m in sys.modules if m.split('.')[0] in ('PyQt5', 'torch', 'whisper')]; "
             "print(heavy); sys.exit(1 if heavy else 0)")
     r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr

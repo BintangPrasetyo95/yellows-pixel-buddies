@@ -131,6 +131,33 @@ def test_simple_open_reports_success_only_for_the_right_window(monkeypatch, fake
     assert not plan.success
 
 
+def test_simple_open_prefocus_sets_success_outcome_and_ignores_unrelated_chrome_tab(monkeypatch, fake_os_interop, no_sleep):
+    chrome_gemini = _win(2, "Google Gemini - Google Chrome", "chrome.exe")
+    fake_os_interop.windows = [chrome_gemini]
+    fake_os_interop.foreground = chrome_gemini
+
+    # 1. "open chrome" really IS satisfied by focusing Chrome -> immediate success with outcome_state='success'
+    plan_chrome = action_planner.create_desktop_plan(intent="open chrome", target_app="Chrome", user_request="open chrome")
+    assert action_planner.DesktopActionExecutor(api_key="test").execute_plan(plan_chrome) is True
+    assert plan_chrome.outcome_state == "success"
+
+    # 2. "open WhatsApp Web" or "open whatsapp" with app_hint='Chrome' must NOT finish on Google Gemini tab
+    for goal in ("open WhatsApp Web", "open whatsapp"):
+        decided = []
+        image = Image.new("RGB", (64, 64), "white")
+        monkeypatch.setattr(action_planner, "capture_screen_region",
+                            lambda *_a, **_k: (setattr(action_planner, "_LAST_RAW_SCREENSHOT", image) or "ZmFrZQ==", 64, 64, (0, 0)))
+
+        def fake_decide(*_a, **_k):
+            decided.append(goal)
+            return ActionStep(action_type="done", target="WhatsApp Web opened")
+
+        monkeypatch.setattr(action_planner.DesktopActionExecutor, "_decide_next_step", fake_decide)
+        plan = action_planner.create_desktop_plan(intent=goal, target_app="Chrome", user_request=goal)
+        assert action_planner.DesktopActionExecutor(api_key="test").execute_plan(plan) is True
+        assert decided == [goal]
+
+
 # =====================================================================================
 # H6 - never act on a stale screenshot
 # =====================================================================================
@@ -289,6 +316,8 @@ def test_truncated_reply_is_reasked_with_more_tokens(monkeypatch):
     ("open the budget in excel", "Excel"),
     ("open file explorer", "File Explorer"),
     ("tell claude to say hi", "Chrome"),
+    ("open Spotify and reply to Mom saying test", ""),
+    ("open Spotify and reply to Mom on WhatsApp", ""),
 ])
 def test_app_inference_whole_words(text, app):
     assert action_planner.infer_target_app(text) == app

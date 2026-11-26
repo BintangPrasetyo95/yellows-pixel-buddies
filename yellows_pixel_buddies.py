@@ -158,7 +158,7 @@ import os_interop
 import action_planner
 import privacy
 import takeover_controller
-from pink.ai import prompt_builder, protocol
+from pink.ai import prompt_builder, protocol, transport
 from pink.storage import actions as memory_actions
 from pink.storage import sessions
 from pink.storage import manager as memory_manager
@@ -769,7 +769,7 @@ GEMINI_TIMEOUT_S = 35
 memory_manager.configure(gemini_model=GEMINI_MODEL, alarms_enabled=ALARMS_ENABLED)
 # One deadline for a whole request across all fallback models (REVIEW M19): offline used to mean 4 x 35 s.
 GEMINI_TOTAL_DEADLINE_S = 40.0
-GEMINI_CONNECT_TIMEOUT_S = 5.0
+GEMINI_CONNECT_TIMEOUT_S = transport.CONNECT_TIMEOUT_S
 GEMINI_MIN_ATTEMPT_S = 3.0          # don't start another model with less time than this left
 GEMINI_RATE_LIMIT_BACKOFF_S = 60.0  # after HTTP 429, unprompted calls pause instead of hopping models
 CHAT_HISTORY_TURNS = 16             # dialogue turns sent with a chat
@@ -5982,12 +5982,14 @@ def note_gemini_rate_limited(now: float | None = None) -> None:
     _gemini_backoff_until = (time.monotonic() if now is None else now) + GEMINI_RATE_LIMIT_BACKOFF_S
 
 
-def request_timeout(deadline: float | None, now: float | None = None) -> tuple[float, float]:
+def request_timeout(deadline: float | None, now: float | None = None, body_bytes: int = 0) -> tuple[float, float]:
     """(connect, read) timeout for one HTTP call that must finish before ``deadline``."""
+    connect = transport.connect_timeout(body_bytes)
     if deadline is None:
-        return GEMINI_CONNECT_TIMEOUT_S, float(GEMINI_TIMEOUT_S)
+        return connect, float(GEMINI_TIMEOUT_S)
     remaining = deadline - (time.monotonic() if now is None else now)
-    return GEMINI_CONNECT_TIMEOUT_S, max(1.0, min(float(GEMINI_TIMEOUT_S), remaining))
+    bounded = max(1.0, remaining)
+    return min(connect, bounded), min(float(GEMINI_TIMEOUT_S), bounded)
 
 
 def run_model_fallback(models: list[str], attempt, deadline: float, clock=time.monotonic):
@@ -6015,12 +6017,12 @@ def run_model_fallback(models: list[str], attempt, deadline: float, clock=time.m
                 log.warning("Model %s returned HTTP %s, trying fallback...", model, status)
                 continue
             return None, last_error
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as err:
             last_error = "Request timed out. Google Gemini servers might be busy!"
-            log.warning("Model %s timed out, trying fallback...", model)
+            log.warning("Model %s timed out (%s), trying fallback...", model, privacy.redact_secrets(err))
         except Exception as err:
             last_error = privacy.redact_secrets(f"Network error: {err}")
-            log.warning("Model %s failed (%s), trying fallback...", model, type(err).__name__)
+            log.warning("Model %s failed (%s: %s), trying fallback...", model, type(err).__name__, privacy.redact_secrets(err))
     return None, f"All models failed. Last error: {last_error[:120]}"
 
 
@@ -6076,8 +6078,9 @@ class GeminiWorkerThread(QThread):
         self.is_auto_peek = is_auto_peek
         self._deadline: float | None = None
 
-    def _post_timeout(self) -> tuple[float, float]:
-        return request_timeout(self._deadline)
+    def _post_timeout(self, payload: object | None = None) -> tuple[float, float]:
+        body_bytes = transport.payload_size(payload) if payload is not None else 0
+        return request_timeout(self._deadline, body_bytes=body_bytes)
 
     def run(self) -> None:
         try:
@@ -6212,7 +6215,7 @@ class GeminiWorkerThread(QThread):
                 }
 
                 _log_gemini_payload("auto-peek", model, system_inst, attempt_contents, self.screenshot_b64)
-                resp = requests.post(url, headers=headers, json=payload, timeout=self._post_timeout())
+                resp = requests.post(url, headers=headers, json=payload, timeout=self._post_timeout(payload))
                 resp.raise_for_status()
 
                 data = resp.json()
@@ -6293,7 +6296,7 @@ class GeminiWorkerThread(QThread):
         }
 
         _log_gemini_payload("chat", model, system_inst, contents, self.screenshot_b64)
-        resp = requests.post(url, headers=headers, json=payload, timeout=self._post_timeout())
+        resp = requests.post(url, headers=headers, json=payload, timeout=self._post_timeout(payload))
         resp.raise_for_status()
 
         data = resp.json()
@@ -6406,8 +6409,10 @@ class GeminiQuestionWorkerThread(QThread):
         }
 
         _log_gemini_payload("question", model, self.system_instruction, payload["contents"], self.screenshot_b64)
-        resp = requests.post(url, headers=headers, json=payload,
-                             timeout=request_timeout(getattr(self, "_deadline", None)))
+        resp = requests.post(
+            url, headers=headers, json=payload,
+            timeout=request_timeout(getattr(self, "_deadline", None), body_bytes=transport.payload_size(payload)),
+        )
         resp.raise_for_status()
 
         data = resp.json()
