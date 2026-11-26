@@ -1,0 +1,139 @@
+{
+  "goal": "open WhatsApp Web",
+  "target_app": "Chrome",
+  "windows": [
+    {
+      "hwnd": 263006,
+      "title": "QA OSD",
+      "process_id": 54864,
+      "process_name": "AQAUserPS.exe"
+    },
+    {
+      "hwnd": 2426668,
+      "title": "Yellow's Pixel Buddies",
+      "process_id": 46944,
+      "process_name": "pythonw3.13.exe"
+    },
+    {
+      "hwnd": 132604,
+      "title": "step1.jpg - pink-here - Visual Studio Code",
+      "process_id": 21344,
+      "process_name": "Code.exe"
+    },
+    {
+      "hwnd": 198082,
+      "title": "Google Scholar - Google Chrome",
+      "process_id": 30936,
+      "process_name": "chrome.exe"
+    },
+    {
+      "hwnd": 132404,
+      "title": "Roblox",
+      "process_id": 14984,
+      "process_name": "RobloxPlayerBeta.exe"
+    },
+    {
+      "hwnd": 657360,
+      "title": "Spotify Free",
+      "process_id": 14568,
+      "process_name": "Spotify.exe"
+    },
+    {
+      "hwnd": 131696,
+      "title": "NVIDIA GeForce Overlay",
+      "process_id": 24396,
+      "process_name": "NVIDIA Share.exe"
+    },
+    {
+      "hwnd": 65938,
+      "title": "Program Manager",
+      "process_id": 48520,
+      "process_name": "explorer.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 132604,
+    "title": "step1.jpg - pink-here - Visual Studio Code",
+    "process_id": 21344,
+    "process_name": "Code.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "action": "click",
+        "target": "WhatsApp Web tab",
+        "box_2d": [
+          85,
+          383,
+          93,
+          410
+        ],
+        "done_after_this": false,
+        "key": null,
+        "keys": null,
+        "press_enter": false,
+        "scroll_clicks": 0,
+        "select_all_first": false,
+        "self_check_reason": "This is step 1, initial state. I see WhatsApp Web in the open tab bar in Chrome, so I will click it directly.",
+        "summary": "Opening WhatsApp Web tab in Chrome",
+        "text": null,
+        "thought": "I see an existing WhatsApp Web tab in the Chrome tab bar around x=383, y=85. I will click it to open WhatsApp Web."
+      },
+      "foreground": {
+        "hwnd": 198082,
+        "title": "Google Scholar - Google Chrome",
+        "process_id": 30936,
+        "process_name": "chrome.exe"
+      },
+      "confirm": null
+    },
+    {
+      "decision": {
+        "self_check": "goal_confirmed_complete",
+        "action": "done",
+        "target": "WhatsApp Web tab",
+        "box_2d": null,
+        "text": null,
+        "thought": "WhatsApp Web is now open on the screen as requested by the user, so the task is successfully complete. I am returning done with goal_confirmed_complete."
+      },
+      "foreground": {
+        "hwnd": 198082,
+        "title": "WhatsApp - Google Chrome",
+        "process_id": 30936,
+        "process_name": "chrome.exe"
+      },
+      "confirm": null
+    }
+  ],
+  "expected": {
+    "calls": [
+      [
+        "move",
+        [
+          761,
+          107
+        ],
+        {}
+      ],
+      [
+        "click",
+        [
+          761,
+          107
+        ],
+        {
+          "button": "left",
+          "clicks": 1
+        }
+      ]
+    ],
+    "outcome_state": "success",
+    "success": true
+  },
+  "summary": "WhatsApp Web tab",
+  "screen_size": [
+    1920,
+    1200
+  ]
+}

@@ -1,0 +1,230 @@
+{
+  "goal": "reply to TestContact saying test",
+  "target_app": "Chrome",
+  "windows": [
+    {
+      "hwnd": 263006,
+      "title": "QA OSD",
+      "process_id": 54864,
+      "process_name": "AQAUserPS.exe"
+    },
+    {
+      "hwnd": 2426668,
+      "title": "Yellow's Pixel Buddies",
+      "process_id": 46944,
+      "process_name": "pythonw3.13.exe"
+    },
+    {
+      "hwnd": 132604,
+      "title": "POST_MERGE_PLAN.md - pink-here - Visual Studio Code",
+      "process_id": 21344,
+      "process_name": "Code.exe"
+    },
+    {
+      "hwnd": 132404,
+      "title": "Roblox",
+      "process_id": 14984,
+      "process_name": "RobloxPlayerBeta.exe"
+    },
+    {
+      "hwnd": 198082,
+      "title": "WhatsApp - Google Chrome",
+      "process_id": 30936,
+      "process_name": "chrome.exe"
+    },
+    {
+      "hwnd": 131696,
+      "title": "NVIDIA GeForce Overlay",
+      "process_id": 24396,
+      "process_name": "NVIDIA Share.exe"
+    },
+    {
+      "hwnd": 65938,
+      "title": "Program Manager",
+      "process_id": 48520,
+      "process_name": "explorer.exe"
+    }
+  ],
+  "foreground": {
+    "hwnd": 132604,
+    "title": "POST_MERGE_PLAN.md - pink-here - Visual Studio Code",
+    "process_id": 21344,
+    "process_name": "Code.exe"
+  },
+  "steps": [
+    {
+      "decision": {
+        "self_check": "initial",
+        "action": "click",
+        "target": "TestContact chat",
+        "box_2d": [
+          601,
+          107,
+          630,
+          230
+        ],
+        "thought": "WhatsApp is open in Chrome. I see the chat with 'TestContact' in the left sidebar list. I need to click on it to open the conversation before sending the message 'test'. Coordinates for 'TestContact' chat row are approximately y=580 to y=640, x=50 to x=320. Let's click it at [601, 107, 630, 230]. Clicking TestContact chat row now."
+      },
+      "foreground": {
+        "hwnd": 198082,
+        "title": "WhatsApp - Google Chrome",
+        "process_id": 30936,
+        "process_name": "chrome.exe"
+      },
+      "confirm": null
+    },
+    {
+      "decision": {
+        "self_check": "step_succeeded",
+        "action": "click_and_type",
+        "target": "Type a message input box",
+        "box_2d": [
+          955,
+          439,
+          968,
+          480
+        ],
+        "done_after_this": true,
+        "key": null,
+        "keys": null,
+        "press_enter": true,
+        "scroll_clicks": 0,
+        "select_all_first": false,
+        "self_check_reason": "I successfully clicked the chat for TestContact, and the chat conversation is now open in the right pane.",
+        "summary": "Replied 'test' to TestContact on WhatsApp",
+        "text": "test",
+        "thought": "The chat with TestContact is now open. I need to click the message input box at the bottom, type 'test', and press Enter."
+      },
+      "foreground": {
+        "hwnd": 198082,
+        "title": "WhatsApp - Google Chrome",
+        "process_id": 30936,
+        "process_name": "chrome.exe"
+      },
+      "target_shifted": true,
+      "confirm": null
+    },
+    {
+      "decision": {
+        "self_check": "step_succeeded",
+        "action": "click_and_type",
+        "target": "Type a message",
+        "box_2d": [
+          953,
+          440,
+          972,
+          497
+        ],
+        "done_after_this": true,
+        "key": null,
+        "keys": null,
+        "press_enter": true,
+        "scroll_clicks": 0,
+        "select_all_first": false,
+        "self_check_reason": "I confirmed that clicking the TestContact chat successfully opened the conversation in the right pane. Now I will type 'test' into the message input box and press Enter to send it.",
+        "summary": "Replied 'test' to TestContact on WhatsApp",
+        "text": "test",
+        "thought": "The chat with TestContact is now open in the right pane. I will click the message input box at the bottom, type 'test', and press Enter."
+      },
+      "foreground": {
+        "hwnd": 198082,
+        "title": "WhatsApp - Google Chrome",
+        "process_id": 30936,
+        "process_name": "chrome.exe"
+      },
+      "confirm": true
+    },
+    {
+      "decision": {
+        "self_check": "goal_confirmed_complete",
+        "action": "done",
+        "target": "WhatsApp",
+        "box_2d": null,
+        "done_after_this": true,
+        "key": null,
+        "keys": null,
+        "press_enter": false,
+        "scroll_clicks": 0,
+        "select_all_first": false,
+        "self_check_reason": "I can see the message 'test' has been sent and appears in the chat history with TestContact.",
+        "summary": "Replied to TestContact with 'test' on WhatsApp.",
+        "text": null,
+        "thought": "The message 'test' is visible in the chat history, confirming the task is complete."
+      },
+      "foreground": {
+        "hwnd": 198082,
+        "title": "WhatsApp - Google Chrome",
+        "process_id": 30936,
+        "process_name": "chrome.exe"
+      },
+      "confirm": null
+    }
+  ],
+  "expected": {
+    "calls": [
+      [
+        "move",
+        [
+          323,
+          738
+        ],
+        {}
+      ],
+      [
+        "click",
+        [
+          323,
+          738
+        ],
+        {
+          "button": "left",
+          "clicks": 1
+        }
+      ],
+      [
+        "move",
+        [
+          899,
+          1155
+        ],
+        {}
+      ],
+      [
+        "click",
+        [
+          899,
+          1155
+        ],
+        {
+          "button": "left",
+          "clicks": 1
+        }
+      ],
+      [
+        "type_text",
+        [
+          "test"
+        ],
+        {
+          "use_shift_enter": false,
+          "expected_hwnd": 198082,
+          "enter_on_newline": true
+        }
+      ],
+      [
+        "press_key",
+        [
+          "enter"
+        ],
+        {}
+      ]
+    ],
+    "outcome_state": "success",
+    "success": true
+  },
+  "summary": "Replied to TestContact with 'test' on WhatsApp.",
+  "screen_size": [
+    1920,
+    1200
+  ]
+}

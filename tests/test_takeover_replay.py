@@ -37,16 +37,17 @@ def _window(d):
                                  is_minimized=False, is_cloaked=False)
 
 
-def _image(case_dir: Path, step: dict) -> Image.Image:
+def _image(case_dir: Path, step: dict, default_size: tuple[int, int] = (1920, 1080)) -> Image.Image:
     name = step.get("screenshot")
     if name and (case_dir / name).is_file():
         return Image.open(case_dir / name).convert("RGB")
-    return Image.new("RGB", (1920, 1080), "white")
+    return Image.new("RGB", tuple(default_size), "white")
 
 
 def replay(case_dir: Path, fake, monkeypatch):
     case = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
     steps = case["steps"]
+    default_size = tuple(case.get("screen_size", (1920, 1080)))
     fake.windows = [_window(w) for w in case.get("windows", [])]
     fake.foreground = _window(case.get("foreground"))
     rec = os_interop.RecordingInput(foreground=lambda: fake.foreground)
@@ -57,7 +58,7 @@ def replay(case_dir: Path, fake, monkeypatch):
         step = steps[min(cursor["obs"], len(steps) - 1)]
         if step.get("foreground"):
             fake.foreground = _window(step["foreground"])
-        img = _image(case_dir, step)
+        img = _image(case_dir, step, default_size=default_size)
         action_planner._LAST_RAW_SCREENSHOT = img
         buf = io.BytesIO()
         img.save(buf, format="JPEG")
